@@ -1,0 +1,6 @@
+outputs
+data
+*.egg*
+*.pt
+*.pyc
+*__pycache__*

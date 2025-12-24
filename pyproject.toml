@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jugglecount"
+version = "0.1.0"
+description = "A tool for counting juggling throws from video"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "pydantic",
+    "ultralytics",
+    "streamlit",
+    "loguru",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "black",
+    "pytest",
+]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I"]
+
+[tool.black]
+line-length = 100
