@@ -14,9 +14,8 @@ def compute_features(tracks: List[Track], frame_count: int, fps: float) -> List[
             p2 = track.points[i]
             dt = p2.timestamp - p1.timestamp
             if dt > 0:
-                # Use midpoint of bounding box for y-coordinate
-                y1 = (p1.bbox[1] + p1.bbox[3]) / 2
-                y2 = (p2.bbox[1] + p2.bbox[3]) / 2
+                y1 = p1.pos[1]
+                y2 = p2.pos[1]
                 vy = (y2 - y1) / dt
                 track_velocities[track.id][p2.frame_idx] = vy
 

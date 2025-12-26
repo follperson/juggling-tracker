@@ -14,15 +14,16 @@ class BallDetector(ABC):
         pass
 
 class YOLOBallDetector(BallDetector):
-    def __init__(self, model_name: str = "yolov8n.pt", confidence_threshold: float = 0.25):
+    def __init__(self, model_name: str = "yolov8s.pt", confidence_threshold: float = 0.1, imgsz: int = 640):
         from ultralytics import YOLO
         self.model = YOLO(model_name)
         self.confidence_threshold = confidence_threshold
+        self.imgsz = imgsz
         # Juggling balls are typically 'sports ball' in COCO which is class ID 32
         self.target_class_ids = [32] 
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
-        results = self.model(frame, conf=self.confidence_threshold, verbose=False)
+        results = self.model(frame, conf=self.confidence_threshold, imgsz=self.imgsz, verbose=False)
         detections = []
         for result in results:
             for box in result.boxes:

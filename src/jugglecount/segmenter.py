@@ -37,8 +37,8 @@ def segment_video(features: List[FrameFeatures], min_on_duration: float = 1.0, m
             
             if duration >= min_on_duration:
                 segments.append(Segment(
-                    start_time=features[start_idx].timestamp,
-                    end_time=features[end_idx-1].timestamp,
+                    start_time=round(features[start_idx].timestamp, 4),
+                    end_time=round(features[end_idx-1].timestamp, 4),
                     confidence=0.8 # Placeholder
                 ))
         else:

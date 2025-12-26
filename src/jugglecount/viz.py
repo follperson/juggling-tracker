@@ -1,9 +1,7 @@
 import cv2
 import numpy as np
 from typing import List
-from .tracker import Track
-from .events import ThrowEvent
-from .segmenter import Segment
+from .schema import Track, ThrowEvent, Segment, EventType
 
 def create_debug_overlay(video_path: str, output_path: str, tracks: List[Track], events: List[ThrowEvent], segments: List[Segment], max_frames: int = None):
     from .ingest import VideoReader
@@ -32,23 +30,32 @@ def create_debug_overlay(video_path: str, output_path: str, tracks: List[Track],
             tail = points[-20:] # Last 20 frames
             if len(tail) > 1:
                 for j in range(len(tail) - 1):
-                    p1 = tail[j].bbox
-                    p2 = tail[j+1].bbox
-                    c1 = (int((p1[0]+p1[2])/2), int((p1[1]+p1[3])/2))
-                    c2 = (int((p2[0]+p2[2])/2), int((p2[1]+p2[3])/2))
+                    p1 = tail[j].pos
+                    p2 = tail[j+1].pos
+                    c1 = (int(p1[0] * reader.width), int(p1[1] * reader.height))
+                    c2 = (int(p2[0] * reader.width), int(p2[1] * reader.height))
                     cv2.line(frame, c1, c2, (0, 255, 0), 2)
             
-            # Draw current bbox if active
+            # Draw current centroid if active
             last_p = points[-1]
             if last_p.frame_idx == i:
-                bbox = last_p.bbox
-                cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (255, 0, 0), 2)
-                cv2.putText(frame, f"ID:{track.id}", (int(bbox[0]), int(bbox[1])-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+                cx = int(last_p.pos[0] * reader.width)
+                cy = int(last_p.pos[1] * reader.height)
+                cv2.circle(frame, (cx, cy), 5, (255, 0, 0), -1)
+                cv2.putText(frame, f"ID:{track.id}", (cx, cy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
 
-        # Draw events (flash)
-        if i in event_frames:
-            cv2.circle(frame, (50, 50), 20, (0, 0, 255), -1)
-            cv2.putText(frame, "THROW!", (80, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        # Draw throw/peak events
+        for event in events: # Changed from all_events to events
+            # Display event label for a short duration after the event timestamp
+            if event.timestamp <= timestamp <= event.timestamp + 0.5:
+                # Map position if we want to draw it at the event location
+                # For now just draw markers at the top/bottom
+                color = (0, 255, 0) if event.event_type == EventType.THROW else (255, 0, 255) # Green for THROW, Magenta for PEAK
+                label = "THROW" if event.event_type == EventType.THROW else "PEAK"
+                y_pos = reader.height - 50 if event.event_type == EventType.THROW else 50 # THROW at bottom, PEAK at top
+                
+                cv2.putText(frame, f"{label} ID:{event.track_id}", (50, y_pos), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
         # Draw info
         cv2.putText(frame, f"Frame: {i}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
