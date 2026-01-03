@@ -1,6 +1,6 @@
 import cv2
 import os
-from .ingest import VideoReader
+from jugglecount.core.ingest import VideoReader
 from loguru import logger
 
 def extract_clip(video_path: str, t_start: float, t_end: float, output_path: str):

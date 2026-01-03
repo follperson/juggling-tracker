@@ -1,5 +1,5 @@
 from typing import List
-from .schema import Run, ThrowEvent
+from jugglecount.db.schema import Run, ThrowEvent
 
 def compute_runs(events: List[ThrowEvent], max_gap: float = 1.0) -> List[Run]:
     if not events:

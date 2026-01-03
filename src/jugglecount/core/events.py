@@ -1,7 +1,7 @@
 from typing import List, Tuple
 import numpy as np
 from scipy.signal import find_peaks
-from .schema import Track, Segment, ThrowEvent, EventType
+from jugglecount.db.schema import Track, Segment, ThrowEvent, EventType
 
 def extract_throw_events(tracks: List[Track], segment: Segment) -> List[ThrowEvent]:
     """
@@ -17,7 +17,7 @@ def extract_throw_events(tracks: List[Track], segment: Segment) -> List[ThrowEve
             continue
             
         timestamps = np.array([p.timestamp for p in segment_points])
-        y_coords = np.array([p.pos[1] for p in segment_points])
+        y_coords = np.array([p.pos_y for p in segment_points])
         
         # 1. Detect THROWS (local maxima in y - bottom of arc)
         # Prominence ensures we don't catch tiny jitters
@@ -32,7 +32,8 @@ def extract_throw_events(tracks: List[Track], segment: Segment) -> List[ThrowEve
             
         # 2. Detect PEAKS (local minima in y - top of arc)
         # We invert y to find minima as peaks
-        peak_indices, _ = find_peaks(-y_coords, prominence=0.01)
+        # Prominence 0.02 to avoid noise. Added width constraint.
+        peak_indices, _ = find_peaks(-y_coords, prominence=0.02, width=2)
         for idx in peak_indices:
             events.append(ThrowEvent(
                 timestamp=round(float(timestamps[idx]), 4),
@@ -44,7 +45,7 @@ def extract_throw_events(tracks: List[Track], segment: Segment) -> List[ThrowEve
         # 3. Handle off-frame peaks
         # Check if the track begins or ends near the top edge
         # Check first point
-        if segment_points[0].pos[1] < 0.15: # Slightly more generous threshold
+        if segment_points[0].pos_y < 0.15: # Slightly more generous threshold
             # If no peak was found very close to the start
             if not any(e.event_type == EventType.PEAK and abs(e.timestamp - timestamps[0]) < 0.4 for e in events if e.track_id == track.id):
                 events.append(ThrowEvent(
@@ -55,7 +56,7 @@ def extract_throw_events(tracks: List[Track], segment: Segment) -> List[ThrowEve
                 ))
 
         # Check last point
-        if segment_points[-1].pos[1] < 0.15:
+        if segment_points[-1].pos_y < 0.15:
             # If no peak was found very close to the end
             if not any(e.event_type == EventType.PEAK and abs(e.timestamp - timestamps[-1]) < 0.4 for e in events if e.track_id == track.id):
                 events.append(ThrowEvent(

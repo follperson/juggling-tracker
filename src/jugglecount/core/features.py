@@ -1,6 +1,6 @@
 from typing import List, Dict
 import numpy as np
-from .schema import Track, FrameFeatures
+from jugglecount.db.schema import Track, FrameFeatures
 
 def compute_features(tracks: List[Track], frame_count: int, fps: float) -> List[FrameFeatures]:
     features_list = []
@@ -14,8 +14,8 @@ def compute_features(tracks: List[Track], frame_count: int, fps: float) -> List[
             p2 = track.points[i]
             dt = p2.timestamp - p1.timestamp
             if dt > 0:
-                y1 = p1.pos[1]
-                y2 = p2.pos[1]
+                y1 = p1.pos_y
+                y2 = p2.pos_y
                 vy = (y2 - y1) / dt
                 track_velocities[track.id][p2.frame_idx] = vy
 

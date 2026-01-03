@@ -1,5 +1,5 @@
 from typing import List
-from .schema import Segment, FrameFeatures
+from jugglecount.db.schema import Segment, FrameFeatures
 
 def segment_video(features: List[FrameFeatures], min_on_duration: float = 1.0, min_off_duration: float = 0.5) -> List[Segment]:
     """
