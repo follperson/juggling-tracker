@@ -1,3 +1,5 @@
+from collections import Counter
+
 import numpy as np
 import pytest
 
@@ -72,3 +74,48 @@ def test_false_positives():
     r = simulate_cascade(n_throws=10, false_positives_per_frame=0.5, seed=3)
     clean = simulate_cascade(n_throws=10, seed=3)
     assert len(r.detections) > len(clean.detections)
+
+
+def test_include_held_emits_stationary_hand_detections():
+    """include_held=True is the ground-truth oracle later tasks rely on: held
+    balls must show up as stationary detections pinned to a hand position."""
+    fps = 30.0
+    r_held = simulate_cascade(n_throws=8, fps=fps, include_held=True, seed=5)
+    r_air = simulate_cascade(n_throws=8, fps=fps, include_held=False, seed=5)
+    p = r_held.params
+
+    assert len(r_held.detections) > len(r_air.detections)
+
+    held_per_frame = Counter(d.frame_idx for d in r_held.detections)
+    air_per_frame = Counter(d.frame_idx for d in r_air.detections)
+
+    # mid-run frames where held balls fill airborne gaps up to the full
+    # 3-ball count (airborne alone dips below 3 during hand dwell time).
+    mid_frames = [f for f in held_per_frame if 2.0 <= f / fps <= 4.0]
+    assert mid_frames
+    fill_in_frames = [
+        f for f in mid_frames
+        if held_per_frame[f] == 3 and air_per_frame.get(f, 0) < 3
+    ]
+    assert fill_in_frames, "expected held detections to fill airborne gaps to 3 mid-run"
+
+    # Every detection in the held run that isn't explainable as an airborne
+    # detection (per-frame (x, y) multiset diff) must sit exactly at a hand.
+    hand_positions = [(p.hand_x(0), p.hand_y), (p.hand_x(1), p.hand_y)]
+    held_by_frame: dict[int, Counter] = {}
+    air_by_frame: dict[int, Counter] = {}
+    for d in r_held.detections:
+        held_by_frame.setdefault(d.frame_idx, Counter())[(d.x, d.y)] += 1
+    for d in r_air.detections:
+        air_by_frame.setdefault(d.frame_idx, Counter())[(d.x, d.y)] += 1
+
+    checked_any = False
+    for f_idx, held_counts in held_by_frame.items():
+        extra = held_counts - air_by_frame.get(f_idx, Counter())
+        for (x, y) in extra:
+            checked_any = True
+            assert any(
+                x == pytest.approx(hx) and y == pytest.approx(hy)
+                for hx, hy in hand_positions
+            ), f"extra held detection at ({x}, {y}) on frame {f_idx} is not a hand position"
+    assert checked_any, "expected at least one held-only detection to verify"

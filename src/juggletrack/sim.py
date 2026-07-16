@@ -179,14 +179,25 @@ class _BounceSeg:
 
 
 def _hand_holds_ball(t: float, hand: int, flights: list[_Flight], p: CascadeParams) -> bool:
-    """A hand holds a ball between catching one flight and throwing the next."""
+    """A hand holds a ball between catching one flight and throwing the next.
+
+    ``next_throw`` must be searched for starting at ``last_catch``, not at the
+    query time ``t``: a hand may have already rethrown the ball it caught
+    before ``t`` arrives, and its schedule's next *upcoming* throw (relative to
+    ``t``) would then belong to a later, unrelated catch. Anchoring the search
+    at ``last_catch`` finds that specific catch's own next throw.
+    """
     last_catch = None
-    next_throw = None
     for fl in flights:
         thrown_from = 0 if fl.x0 < p.center_x else 1
         caught_by = 1 - thrown_from
         if fl.caught and caught_by == hand and fl.t0 + fl.dur <= t:
             last_catch = max(last_catch or -1.0, fl.t0 + fl.dur)
-        if thrown_from == hand and fl.t0 >= t:
+    if last_catch is None:
+        return False
+    next_throw = None
+    for fl in flights:
+        thrown_from = 0 if fl.x0 < p.center_x else 1
+        if thrown_from == hand and fl.t0 >= last_catch:
             next_throw = min(next_throw or 1e9, fl.t0)
-    return last_catch is not None and (next_throw is None or t < next_throw)
+    return next_throw is None or t < next_throw
