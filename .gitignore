@@ -1,5 +1,5 @@
-outputs
-data
+/outputs
+/data
 *.egg*
 *.pt
 *.pyc
