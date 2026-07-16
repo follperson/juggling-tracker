@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from juggletrack.arcs.extract import extract_arcs
 from juggletrack.events.catches import derive_events

@@ -119,28 +119,47 @@ def _em_assign_refit(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list
 
 
 def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]:
+    """Merge same-ball fragments split by a crossing with another ball's arc.
+
+    Candidates are scanned by ascending ``t_start``, not just the immediate
+    list neighbor: a ball crossing another mid-flight can leave its own
+    fragments with a different ball's arc time-interleaved between them, so
+    the two pieces that truly belong together are not adjacent in this sort
+    order. Scanning ahead until the time gap exceeds the threshold finds them
+    while keeping the same acceptance test (``union.rmse <= resid_tol``) that
+    guards against merging genuinely different balls.
+    """
     arcs = sorted(arcs, key=lambda a: a.t_start)
     t = arr[:, 0]
+    n = len(arcs)
+    used = [False] * n
     merged: list[Arc] = []
-    i = 0
-    while i < len(arcs):
+    for i in range(n):
+        if used[i]:
+            continue
         a = arcs[i]
-        if i + 1 < len(arcs):
-            b = arcs[i + 1]
-            if b.t_start - a.t_end < 0.2:
-                sel = ((t >= a.t_start) & (t <= a.t_end)) | ((t >= b.t_start) & (t <= b.t_end))
-                pts = arr[sel]
-                keep_a = y_residuals(a, pts) < 2 * resid_tol
-                keep_b = y_residuals(b, pts) < 2 * resid_tol
-                pts = pts[keep_a | keep_b]
-                if len(pts) >= 3:
-                    union = fit_arc(pts)
-                    if union.rmse <= resid_tol:
-                        merged.append(union)
-                        i += 2
-                        continue
-        merged.append(a)
-        i += 1
+        best_j, best_union = None, None
+        for j in range(i + 1, n):
+            if used[j]:
+                continue
+            b = arcs[j]
+            if b.t_start - a.t_end >= 0.2:
+                break  # candidates sorted by t_start: gap only grows from here
+            sel = ((t >= a.t_start) & (t <= a.t_end)) | ((t >= b.t_start) & (t <= b.t_end))
+            pts = arr[sel]
+            keep_a = y_residuals(a, pts) < 2 * resid_tol
+            keep_b = y_residuals(b, pts) < 2 * resid_tol
+            pts = pts[keep_a | keep_b]
+            if len(pts) < 3:
+                continue
+            union = fit_arc(pts)
+            if union.rmse <= resid_tol and (best_union is None or union.rmse < best_union.rmse):
+                best_j, best_union = j, union
+        if best_j is not None:
+            used[i] = used[best_j] = True
+            merged.append(best_union)
+        else:
+            merged.append(a)
     return merged
 
 
