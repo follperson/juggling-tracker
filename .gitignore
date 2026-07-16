@@ -8,6 +8,6 @@
 *.json
 .DS_Store
 *.db
-runs/
-models/
-datasets/
+/runs/
+/models/
+/datasets/
