@@ -113,3 +113,76 @@ def test_dead_pattern_fires_collapse_signal():
     assert "floor_descent" in d.signals
     assert "periodicity_collapse" in d.signals
     assert runs[0].end_reason == "drop"
+
+
+def test_pre_miss_arc_does_not_suppress_collapse():
+    """periodicity_collapse must key off *when* the other arc starts, not
+    merely whether one exists in the run. A ball already in flight before
+    the miss (thrown pre-drop, landing shortly after due to reaction
+    latency) is an artifact of the drop itself -- its mere presence must
+    not suppress periodicity_collapse. A mutant that suppresses on
+    `any(a.id != cand.id for a in run_arcs)` (ignoring timing entirely)
+    would pass this arc through and wrongly cancel the signal.
+    """
+    hand_line = 0.65
+    period = 0.45
+    cand = _make_floor_candidate(1, t_start=10.0)
+    _, miss_t = hand_line_crossings(cand, hand_line)
+
+    # A normal juggling arc (rises well above hand_line, caught cleanly at
+    # the hand line so it is not itself a floor candidate) that was already
+    # airborne 0.45s *before* the candidate's miss -- i.e. its t_start
+    # precedes miss_t, so it falls outside the (miss_t, miss_t +
+    # collapse_factor*period] window the real check requires.
+    pre_miss = Arc(
+        id=2, t_start=miss_t - 0.45, t_end=miss_t - 0.45 + 1.1,
+        ay=1.0, by=-1.1, cy=0.65, bx=0.0, cx=0.55,
+        n_points=10, rmse=0.01,
+    )
+    run = Run(
+        start_t=cand.t_start, end_t=miss_t, catches=1, throws=2,
+        arc_ids=[cand.id, pre_miss.id], period_s=period, end_reason="stop",
+    )
+
+    drops, runs = detect_drops([cand, pre_miss], [run], hand_line)
+
+    assert len(drops) == 1
+    d = drops[0]
+    assert d.arc_id == cand.id
+    assert "floor_descent" in d.signals
+    assert "periodicity_collapse" in d.signals
+    assert runs[0].end_reason == "drop"
+
+
+def test_late_arc_outside_window_does_not_suppress_collapse():
+    """Same idea as the pre-miss case, but for the other edge of the
+    window: an arc starting *after* miss_t + collapse_factor*period has
+    closed (default collapse_factor=1.5, period=0.45 -> window closes at
+    miss_t + 0.675) is too late to count as the pattern continuing, so it
+    must not suppress periodicity_collapse either. Only an arc starting
+    strictly inside (miss_t, miss_t + collapse_factor*period] is evidence
+    the juggler kept going.
+    """
+    hand_line = 0.65
+    period = 0.45
+    cand = _make_floor_candidate(1, t_start=10.0)
+    _, miss_t = hand_line_crossings(cand, hand_line)
+
+    late = Arc(
+        id=2, t_start=miss_t + 0.9, t_end=miss_t + 0.9 + 1.1,
+        ay=1.0, by=-1.1, cy=0.65, bx=0.0, cx=0.55,
+        n_points=10, rmse=0.01,
+    )
+    run = Run(
+        start_t=cand.t_start, end_t=miss_t, catches=1, throws=2,
+        arc_ids=[cand.id, late.id], period_s=period, end_reason="stop",
+    )
+
+    drops, runs = detect_drops([cand, late], [run], hand_line)
+
+    assert len(drops) == 1
+    d = drops[0]
+    assert d.arc_id == cand.id
+    assert "floor_descent" in d.signals
+    assert "periodicity_collapse" in d.signals
+    assert runs[0].end_reason == "drop"
