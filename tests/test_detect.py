@@ -1,8 +1,31 @@
+import sys
+import types
+
 import numpy as np
 
 from juggletrack.detect import BallDetector
 from juggletrack.detect.fake import FakeDetector
 from juggletrack.sim import simulate_cascade
+
+
+def install_fake_yolo_model(monkeypatch, names):
+    """Install a fake `ultralytics.YOLO` whose instance exposes `names` (as a
+    real model would) and records the `classes=` kwarg passed to `predict`,
+    returning a minimal boxes-less result so `YOLODetector.detect` short-circuits.
+    """
+    calls = {}
+
+    class FakeYOLO:
+        def __init__(self, model_path):
+            calls["model_path"] = model_path
+            self.names = names
+
+        def predict(self, frame, **kwargs):
+            calls["classes"] = kwargs.get("classes")
+            return [types.SimpleNamespace(boxes=None)]
+
+    monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeYOLO))
+    return calls
 
 
 def test_fake_detector_returns_per_frame_detections():
@@ -67,3 +90,31 @@ def test_resolve_ball_classes_unknown_names_means_no_filter():
 
     assert resolve_ball_classes({0: "beanbag"}) is None
     assert resolve_ball_classes({}) is None
+
+
+def test_yolodetector_resolves_classes_from_model_names(monkeypatch):
+    """Constructor wiring: classes should come from the loaded model's own
+    `names`, not a hardcoded COCO id — a regression guard for the class-id
+    bug fixed alongside resolve_ball_classes.
+    """
+    from juggletrack.detect.yolo import YOLODetector
+
+    calls = install_fake_yolo_model(monkeypatch, {0: "ball"})
+    det = YOLODetector(model_path="fake.pt")
+    assert det.classes == (0,)
+
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    det.detect(frame, 0, 0.0)
+    assert calls["classes"] == [0]
+
+
+def test_yolodetector_passes_none_when_unresolvable(monkeypatch):
+    from juggletrack.detect.yolo import YOLODetector
+
+    calls = install_fake_yolo_model(monkeypatch, {0: "cat", 1: "dog"})
+    det = YOLODetector(model_path="fake.pt")
+    assert det.classes is None
+
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    det.detect(frame, 0, 0.0)
+    assert calls["classes"] is None
