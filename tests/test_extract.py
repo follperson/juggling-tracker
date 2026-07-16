@@ -193,8 +193,10 @@ def test_gravity_prune_kills_chimera_curvature():
 def test_catch_accuracy_seed_sweep():
     """Spec §1 target: catch count within ±1 on >=90% of runs.
 
-    Plan 1's final review measured 16/20 at this noise regime; the EM x-cost
-    and gravity pruning exist to close the gap. This is the regression gate.
+    Measured history: pre-hardening baseline 19/20 (Plan 2's merge/witnessed-catch
+    fixes had already closed the older 16/20 gap); post-hardening 18/20 with a
+    strictly safer failure mode (fused arcs now rejected rather than silently
+    netting out); seeds 4/8 are the known residual crossing-fusion gap.
     """
     from juggletrack.analyze import analyze_detections
 

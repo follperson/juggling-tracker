@@ -111,8 +111,9 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
     of `cur` suddenly landing off the fitted x-line right as the window
     should split, and averaging that into an rmse-style statistic dilutes
     the signal across the (still mostly x-consistent) rest of the window.
-    The `2*resid_tol` threshold matches the x-gate `_merge_pass` uses for the
-    same check, keeping one tolerance convention for "is this x(t) line".
+    The threshold constant `2*resid_tol` is reused by `_merge_pass`, but this
+    check gates on the MAX x-residual (stricter), while `_merge_pass` gates on
+    x-RMSE (looser) — deliberate, because rmse dilutes the tail-point signal.
     """
     pieces: list[list[int]] = []
     cur: list[int] = []
@@ -121,6 +122,8 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
         if len(cur) >= 4:
             arc = fit_arc(arr[cur])
             x_bad = np.max(x_residuals(arc, arr[cur])) > 2 * resid_tol
+            # Known gap: some crossing-ball fusions are invisible to both curvature
+            # and the incremental x-line check here; next locus would be _link_fragments.
             if arc.rmse > resid_tol or x_bad:
                 pieces.append(cur[:-1])
                 cur = [i]
