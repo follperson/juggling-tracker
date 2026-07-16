@@ -270,3 +270,32 @@ def _gravity_prune(arcs: list[Arc], band: float = 0.3) -> list[Arc]:
     med = float(np.median([a.ay for a in arcs]))
     lo, hi = (1.0 - band) * med, (1.0 + band) * med
     return [a for a in arcs if lo <= a.ay <= hi]
+
+
+def assign_detections(
+    dets: list[Detection],
+    arcs: list[Arc],
+    *,
+    resid_tol: float = 0.02,
+    time_margin: float = 0.02,
+) -> list[int]:
+    """Best-fitting arc id per detection (input order), or -1 if none fits.
+
+    Same acceptance rule as EM assignment (max of y/x residuals under
+    2*resid_tol), so 'assigned' means 'would have survived extraction'.
+    This is the auto-labeler's precision gate (spec §5).
+    """
+    out: list[int] = []
+    for d in dets:
+        best_id, best_res = -1, 2.0 * resid_tol
+        for arc in arcs:
+            if not (arc.t_start - time_margin <= d.t <= arc.t_end + time_margin):
+                continue
+            dt = d.t - arc.t_start
+            ry = abs(arc.ay * dt * dt + arc.by * dt + arc.cy - d.y)
+            rx = abs(arc.bx * dt + arc.cx - d.x)
+            res = max(ry, rx)
+            if res < best_res:
+                best_id, best_res = arc.id, res
+        out.append(best_id)
+    return out
