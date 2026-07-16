@@ -3,13 +3,16 @@
 throw = rising crossing of the hand line (smaller quadratic root);
 catch = falling crossing (larger root), only if the arc actually terminates
 near the hand line — an arc that keeps descending toward the floor is a drop
-candidate and yields no catch.
+candidate and yields no catch. A catch must also be witnessed: if the
+falling crossing is only reached by extrapolating the fitted parabola well
+past the arc's last real detection (truncated video, occlusion), it doesn't
+count as a catch either.
 """
 from __future__ import annotations
 
 import math
 
-from juggletrack.events import FLOOR_MARGIN
+from juggletrack.events import CATCH_EXTRAPOLATION_MARGIN, FLOOR_MARGIN
 from juggletrack.types import Arc, CatchEvent, ThrowEvent
 
 
@@ -46,7 +49,8 @@ def derive_events(
             continue
         t_throw, t_catch = crossings
         throws.append(ThrowEvent(t=t_throw, x=arc.x_at(t_throw), arc_id=arc.id))
-        if arc.y_at(arc.t_end) <= hand_line + floor_margin:
+        witnessed = t_catch <= arc.t_end + CATCH_EXTRAPOLATION_MARGIN
+        if arc.y_at(arc.t_end) <= hand_line + floor_margin and witnessed:
             catches.append(CatchEvent(t=t_catch, x=arc.x_at(t_catch), arc_id=arc.id))
 
     throws.sort(key=lambda e: e.t)

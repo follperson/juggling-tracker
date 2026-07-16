@@ -4,11 +4,12 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from juggletrack.arcs.extract import extract_arcs
+from juggletrack.events import CATCH_EXTRAPOLATION_MARGIN
 from juggletrack.events.catches import derive_events
 from juggletrack.events.drops import detect_drops
 from juggletrack.events.handline import estimate_hand_line
 from juggletrack.events.runs import segment_runs
-from juggletrack.types import Detection, SessionResult
+from juggletrack.types import Detection, Run, SessionResult
 
 
 class AnalyzeConfig(BaseModel):
@@ -18,7 +19,12 @@ class AnalyzeConfig(BaseModel):
     min_duration: float = 0.15
     gap_factor: float = 1.3
     min_arcs: int = 3
-    video_end_margin: float = 1.0  # in throw periods
+    # Seconds of overshoot tolerance before an unconfirmed "stop" is
+    # reclassified "video_end". Matches events.catches's
+    # CATCH_EXTRAPOLATION_MARGIN so the two checks agree on what counts as
+    # "confirmed by real data": a run's end_t comes from the same falling
+    # hand-line crossing a catch would need to be witnessed at.
+    video_end_margin: float = CATCH_EXTRAPOLATION_MARGIN
 
 
 def analyze_detections(
@@ -41,9 +47,8 @@ def analyze_detections(
     drops, runs = detect_drops(arcs, runs, hand_line)
 
     t_last = max(d.t for d in dets)
-    final: list = []
+    final: list[Run] = []
     for run in runs:
-        period = run.period_s or 0.5
         # A "stop"-tagged run's end_t is only trustworthy when it lands at or
         # before the last thing actually observed: a fully-witnessed catch's
         # analytic hand-line-crossing time sits within a frame of the last
@@ -51,7 +56,7 @@ def analyze_detections(
         # reaches the hand line, end_t is extrapolated from the fitted
         # parabola well past t_last — that overshoot (not a small gap toward
         # t_last) is the signal that the ending is unconfirmed.
-        if run.end_reason == "stop" and run.end_t - t_last > cfg.video_end_margin * period:
+        if run.end_reason == "stop" and run.end_t - t_last > cfg.video_end_margin:
             run = run.model_copy(update={"end_reason": "video_end"})
         final.append(run)
 
