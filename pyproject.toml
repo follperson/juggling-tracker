@@ -12,6 +12,7 @@ dependencies = [
     "scipy>=1.14",
     "pydantic>=2.7",
     "opencv-python>=4.10",
+    "ultralytics>=8.3",
 ]
 
 [dependency-groups]
@@ -25,6 +26,10 @@ packages = ["src/juggletrack"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not detector'"
+markers = [
+    "detector: needs YOLO weights (network download on first run); run with -m detector",
+]
 
 [tool.ruff]
 line-length = 100
