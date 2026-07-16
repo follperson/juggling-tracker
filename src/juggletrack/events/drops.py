@@ -1,6 +1,7 @@
 """Three-signal drop detection (spec §4 — no prior art; first-principles design)."""
 from __future__ import annotations
 
+from juggletrack.events import FLOOR_MARGIN
 from juggletrack.events.catches import hand_line_crossings
 from juggletrack.types import Arc, DropEvent, Run
 
@@ -10,7 +11,7 @@ def detect_drops(
     runs: list[Run],
     hand_line: float,
     *,
-    floor_margin: float = 0.12,
+    floor_margin: float = FLOOR_MARGIN,
     bounce_window: float = 0.6,
     bounce_x_tol: float = 0.10,
     collapse_factor: float = 1.5,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 
+from juggletrack.events import FLOOR_MARGIN
 from juggletrack.types import Arc, CatchEvent, ThrowEvent
 
 
@@ -33,7 +34,7 @@ def derive_events(
     hand_line: float,
     *,
     min_apex_above: float = 0.05,
-    floor_margin: float = 0.10,
+    floor_margin: float = FLOOR_MARGIN,
 ) -> tuple[list[ThrowEvent], list[CatchEvent]]:
     throws: list[ThrowEvent] = []
     catches: list[CatchEvent] = []

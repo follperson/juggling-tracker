@@ -43,17 +43,18 @@ def test_noisy_clean_run_no_false_drops():
     assert runs and runs[0].end_reason == "stop"
 
 
-def _make_floor_candidate(arc_id: int, t_start: float) -> Arc:
+def _make_floor_candidate(arc_id: int, t_start: float, duration: float = 1.31) -> Arc:
     """A hand-crafted flight arc thrown from hand_line=0.65 with g=2.0 (ay=1.0).
 
     It would normally return to the hand line at dt=1.1 (a catch), but its
-    fitted window is extended to dt=1.31 so it keeps falling past the hand
-    line toward the floor: y_at(t_end) ~= 0.925 (well past hand_line +
-    floor_margin=0.77) with positive (downward) terminal velocity. This is
-    exactly the shape that makes floor_descent fire in detect_drops.
+    fitted window is extended past that (by default to dt=1.31) so it keeps
+    falling past the hand line toward the floor: with the default duration,
+    y_at(t_end) ~= 0.925 (well past hand_line + floor_margin=0.75) with
+    positive (downward) terminal velocity. This is exactly the shape that
+    makes floor_descent fire in detect_drops.
     """
     return Arc(
-        id=arc_id, t_start=t_start, t_end=t_start + 1.31,
+        id=arc_id, t_start=t_start, t_end=t_start + duration,
         ay=1.0, by=-1.1, cy=0.65, bx=0.0, cx=0.5,
         n_points=10, rmse=0.01,
     )
@@ -179,6 +180,45 @@ def test_late_arc_outside_window_does_not_suppress_collapse():
     )
 
     drops, runs = detect_drops([cand, late], [run], hand_line)
+
+    assert len(drops) == 1
+    d = drops[0]
+    assert d.arc_id == cand.id
+    assert "floor_descent" in d.signals
+    assert "periodicity_collapse" in d.signals
+    assert runs[0].end_reason == "drop"
+
+
+def test_dead_band_arc_is_drop_candidate():
+    """Regression for the floor_margin dead band between catches.py and
+    drops.py. Before FLOOR_MARGIN was unified, catches.py gated catches at
+    floor_margin=0.10 and drops.py gated drop-candidacy at floor_margin=0.12.
+    An arc ending strictly between those two margins below the hand line
+    (here ~0.107 below, i.e. y_end = hand_line + 0.107) failed *both* gates:
+    the catch gate (0.107 > 0.10, so no catch) and the drop-candidacy gate
+    (0.107 is not > 0.12, so detect_drops's `end_y <= hand_line +
+    floor_margin` short-circuit treated it as "caught, not dropped" and
+    skipped it) -- yielding neither a CatchEvent nor a DropEvent: a silent
+    misclassification.
+
+    With both gates unified to FLOOR_MARGIN=0.10, 0.107 > 0.10 clears the
+    drop-candidacy gate, so this now correctly yields a DropEvent
+    (floor_descent + periodicity_collapse) and still no catch.
+    """
+    hand_line = 0.65
+    period = 0.45
+    cand = _make_floor_candidate(1, t_start=10.0, duration=1.19)
+    assert cand.y_at(cand.t_end) == pytest.approx(0.7571, abs=1e-4)
+
+    throws, catches = derive_events([cand], hand_line)
+    assert len(throws) == 1
+    assert catches == []
+
+    run = Run(
+        start_t=cand.t_start, end_t=cand.t_end, catches=0, throws=1,
+        arc_ids=[cand.id], period_s=period, end_reason="stop",
+    )
+    drops, runs = detect_drops([cand], [run], hand_line)
 
     assert len(drops) == 1
     d = drops[0]
