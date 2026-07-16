@@ -22,6 +22,16 @@ def detect_drops(
     for run in runs:
         period = run.period_s or 0.5
         run_arcs = [by_id[i] for i in run.arc_ids if i in by_id]
+        # Bounce candidates only need to be considered within this run's own
+        # span (padded generously on both sides for slack in boundary
+        # estimates): a bounce, by definition, follows shortly after a
+        # candidate that itself belongs to this run. Scanning the full
+        # global arc list here instead is unnecessary and, for long
+        # sessions with many runs, wastefully quadratic.
+        bounce_candidates = [
+            b for b in arcs
+            if run.start_t - 1.0 <= b.t_start <= run.end_t + bounce_window + 1.0
+        ]
         for cand in run_arcs:
             end_y = cand.y_at(cand.t_end)
             if end_y <= hand_line + floor_margin:
@@ -31,7 +41,7 @@ def detect_drops(
             if cand.vy_at(cand.t_end) > 0:
                 signals.append("floor_descent")
 
-            for b in arcs:
+            for b in bounce_candidates:
                 if b.id == cand.id:
                     continue
                 starts_after = 0.0 < b.t_start - cand.t_end < bounce_window
@@ -43,16 +53,16 @@ def detect_drops(
 
             crossings = hand_line_crossings(cand, hand_line)
             miss_t = crossings[1] if crossings else cand.t_end
-            # "Airborne" here means a *new* throw was made after the miss —
+            # "Continued" here means a *new* throw was made after the miss —
             # i.e. the juggler kept the pattern going. Arcs already in flight
             # from before the miss (thrown pre-drop, landing shortly after
             # due to reaction latency) don't count: they're artifacts of the
             # drop itself, not evidence the pattern survived it.
-            others_airborne = any(
+            pattern_continued = any(
                 a.id != cand.id and miss_t < a.t_start <= miss_t + collapse_factor * period
                 for a in run_arcs
             )
-            if not others_airborne:
+            if not pattern_continued:
                 signals.append("periodicity_collapse")
 
             if len(signals) >= 2:

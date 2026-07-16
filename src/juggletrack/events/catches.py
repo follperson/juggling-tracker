@@ -45,6 +45,7 @@ def derive_events(
         crossings = hand_line_crossings(arc, hand_line)
         if crossings is None:
             continue
+        # never rose meaningfully above the hands: bounce or noise
         if arc.apex_y() > hand_line - min_apex_above:
             continue
         t_throw, t_catch = crossings

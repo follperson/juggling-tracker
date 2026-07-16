@@ -24,6 +24,8 @@ def extract_arcs(
     resid_tol: float = 0.02,
     min_points: int = 6,
     min_duration: float = 0.15,
+    # boundary recovery is bounded by _EM_TIME_MARGIN per iteration; 5
+    # empirically closes crossing-swap deficits
     em_iters: int = 5,
     max_abs_bx: float = 0.6,
 ) -> list[Arc]:
@@ -32,6 +34,9 @@ def extract_arcs(
         return []
     # points_array only sorts by t; break ties deterministically on content
     # (x, y, confidence) so results never depend on input ordering/identity.
+    # This only guarantees order-independence for rows that differ in
+    # (x, y, confidence); fully-identical rows are interchangeable anyway,
+    # so their relative order can't affect the result.
     order = np.lexsort((arr[:, 3], arr[:, 2], arr[:, 1], arr[:, 0]))
     arr = arr[order]
 
