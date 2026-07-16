@@ -1,12 +1,18 @@
 """juggletrack CLI: analyze videos, evaluate against labels."""
 from __future__ import annotations
 
+import enum
 import json
 from pathlib import Path
 
 import typer
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
+
+
+class DetectorBackend(str, enum.Enum):
+    yolo = "yolo"
+    motion = "motion"
 
 
 @app.command()
@@ -120,6 +126,12 @@ def label(
         None, exists=True, dir_okay=False,
         help="Replay saved detections.jsonl instead of running the detector",
     ),
+    detector: DetectorBackend = typer.Option(
+        DetectorBackend.yolo,
+        help="Detector backend. 'motion' (MOG2 background subtraction) is a "
+        "cold-start bootstrap for footage where the appearance detector fails "
+        "(static camera required); it IGNORES --model/--conf/--imgsz.",
+    ),
     model: str = typer.Option("yolo11n.pt"),
     conf: float = typer.Option(0.05),
     imgsz: int = typer.Option(640),
@@ -134,7 +146,26 @@ def label(
     from juggletrack.data.autolabel import export_video_labels, select_autolabels
 
     out_dir = out or Path("outputs") / "labels" / video.stem
-    dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
+    if detector == DetectorBackend.motion:
+        if stride > 1:
+            typer.echo(
+                "warning: --detector motion degrades at stride>1 (the "
+                "background model expects consecutive frames); recommend "
+                "--stride 1"
+            )
+        if detections is not None:
+            from juggletrack.pipeline.offline import load_detections_jsonl
+
+            dets = load_detections_jsonl(detections)
+        else:
+            from juggletrack.detect.motion import MotionDetector
+            from juggletrack.pipeline.offline import detect_video
+            from juggletrack.video.reader import VideoReader
+
+            with VideoReader(video) as reader:
+                dets = detect_video(reader, MotionDetector(), stride=stride)
+    else:
+        dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
     arcs = extract_arcs(dets, link_max_dist=link_max_dist)
     labels, review = select_autolabels(dets, arcs)
     stats = export_video_labels(video, labels, out_dir, review_frames=review)
