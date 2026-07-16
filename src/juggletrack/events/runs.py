@@ -1,0 +1,75 @@
+"""Run segmentation: chain event-bearing arcs, score with periodicity (spec §4)."""
+from __future__ import annotations
+
+import numpy as np
+
+from juggletrack.events.catches import hand_line_crossings
+from juggletrack.events.periodicity import periodicity_score
+from juggletrack.types import Arc, CatchEvent, Run, ThrowEvent
+
+
+def estimate_period(throws: list[ThrowEvent], default: float = 0.5) -> float:
+    if len(throws) < 3:
+        return default
+    ts = sorted(e.t for e in throws)
+    return float(np.median(np.diff(ts)))
+
+
+def segment_runs(
+    arcs: list[Arc],
+    throws: list[ThrowEvent],
+    catches: list[CatchEvent],
+    hand_line: float,
+    *,
+    gap_factor: float = 1.3,
+    min_arcs: int = 3,
+    default_period: float = 0.5,
+) -> list[Run]:
+    throw_arc_ids = {e.arc_id for e in throws}
+    juggling_arcs = sorted((a for a in arcs if a.id in throw_arc_ids), key=lambda a: a.t_start)
+    if not juggling_arcs:
+        return []
+    period = estimate_period(throws, default_period)
+
+    def arc_end(a: Arc) -> float:
+        crossings = hand_line_crossings(a, hand_line)
+        return crossings[1] if crossings else a.t_end
+
+    groups: list[list[Arc]] = [[juggling_arcs[0]]]
+    cur_end = arc_end(juggling_arcs[0])
+    for a in juggling_arcs[1:]:
+        if a.t_start > cur_end + gap_factor * period:
+            groups.append([a])
+            cur_end = arc_end(a)
+        else:
+            groups[-1].append(a)
+            cur_end = max(cur_end, arc_end(a))
+
+    catch_arc_ids = {e.arc_id for e in catches}
+
+    runs: list[Run] = []
+    for group in groups:
+        if len(group) < min_arcs:
+            continue
+        ids = {a.id for a in group}
+        run_throws = sorted(e.t for e in throws if e.arc_id in ids)
+        run_catches = [e for e in catches if e.arc_id in ids]
+        start_t = run_throws[0]
+        # A thrown arc with no matching catch is a missed catch: everything
+        # after it in this group is either the ball still descending past the
+        # hand line (uncaught) or arcs from throws the juggler made before
+        # noticing the drop. Either way, the run itself ended at that first
+        # missed catch's scheduled (falling-crossing) time, not at whatever
+        # later arc happens to have the largest arc_end. Only fall back to the
+        # max over all arcs when every throw in the group was caught.
+        ordered = sorted(group, key=lambda a: a.t_start)
+        first_miss = next((a for a in ordered if a.id not in catch_arc_ids), None)
+        end_t = arc_end(first_miss) if first_miss is not None else max(arc_end(a) for a in group)
+        p = float(np.median(np.diff(run_throws))) if len(run_throws) >= 3 else None
+        quality, _ = periodicity_score(group, start_t, end_t)
+        runs.append(Run(
+            start_t=start_t, end_t=end_t,
+            catches=len(run_catches), throws=len(run_throws),
+            arc_ids=sorted(ids), end_reason="stop", period_s=p, quality=quality,
+        ))
+    return runs
