@@ -12,6 +12,22 @@ import math
 from juggletrack.types import Arc, CatchEvent, ThrowEvent
 
 
+def hand_line_crossings(arc: Arc, hand_line: float) -> tuple[float, float] | None:
+    """Absolute times where the arc crosses the hand line (rising, falling).
+
+    Falls back to (t_start, t_end) when the fitted arc never reaches the line.
+    """
+    if arc.ay <= 0:
+        return None
+    disc = arc.by**2 - 4.0 * arc.ay * (arc.cy - hand_line)
+    if disc < 0:
+        return arc.t_start, arc.t_end
+    root = math.sqrt(disc)
+    dt_rise = (-arc.by - root) / (2.0 * arc.ay)
+    dt_fall = (-arc.by + root) / (2.0 * arc.ay)
+    return arc.t_start + dt_rise, arc.t_start + dt_fall
+
+
 def derive_events(
     arcs: list[Arc],
     hand_line: float,
@@ -22,24 +38,14 @@ def derive_events(
     throws: list[ThrowEvent] = []
     catches: list[CatchEvent] = []
     for arc in arcs:
-        if arc.ay <= 0:
+        crossings = hand_line_crossings(arc, hand_line)
+        if crossings is None:
             continue
         if arc.apex_y() > hand_line - min_apex_above:
-            continue  # never rose meaningfully above the hands: bounce or noise
-
-        disc = arc.by**2 - 4.0 * arc.ay * (arc.cy - hand_line)
-        if disc >= 0:
-            root = math.sqrt(disc)
-            dt_throw = (-arc.by - root) / (2.0 * arc.ay)
-            dt_catch = (-arc.by + root) / (2.0 * arc.ay)
-        else:  # fitted arc sits entirely above the hand line: fall back to span
-            dt_throw, dt_catch = 0.0, arc.t_end - arc.t_start
-
-        t_throw = arc.t_start + dt_throw
+            continue
+        t_throw, t_catch = crossings
         throws.append(ThrowEvent(t=t_throw, x=arc.x_at(t_throw), arc_id=arc.id))
-
         if arc.y_at(arc.t_end) <= hand_line + floor_margin:
-            t_catch = arc.t_start + dt_catch
             catches.append(CatchEvent(t=t_catch, x=arc.x_at(t_catch), arc_id=arc.id))
 
     throws.sort(key=lambda e: e.t)
