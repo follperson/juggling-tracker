@@ -16,6 +16,8 @@ from juggletrack.video.reader import VideoReader
 def detect_video(
     reader: VideoReader, detector: BallDetector, *, stride: int = 1
 ) -> list[Detection]:
+    if stride < 1:
+        raise ValueError(f"stride must be >= 1, got {stride}")
     dets: list[Detection] = []
     for idx, t, frame in reader.frames():
         if idx % stride:

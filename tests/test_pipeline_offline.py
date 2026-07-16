@@ -47,6 +47,12 @@ def test_detect_video_stride_skips_frames(video_path, sim):
     assert dets and all(d.frame_idx % 2 == 0 for d in dets)
 
 
+def test_detect_video_rejects_bad_stride(video_path, sim):
+    with VideoReader(video_path) as reader:
+        with pytest.raises(ValueError, match="stride"):
+            detect_video(reader, FakeDetector(sim.detections), stride=0)
+
+
 def test_analyze_video_end_to_end(tmp_path, video_path, sim):
     out = tmp_path / "out"
     sr = analyze_video(

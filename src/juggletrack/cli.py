@@ -22,7 +22,7 @@ def analyze(
     model: str = typer.Option("yolo11n.pt", help="YOLO weights path or name"),
     conf: float = typer.Option(0.05, help="Detector confidence threshold"),
     imgsz: int = typer.Option(640, help="Detector input size"),
-    stride: int = typer.Option(1, help="Detect every Nth frame"),
+    stride: int = typer.Option(1, min=1, help="Detect every Nth frame"),
     device: str | None = typer.Option(None, help="Torch device (mps/cpu/cuda)"),
 ) -> None:
     from juggletrack.pipeline.offline import analyze_video, load_detections_jsonl
