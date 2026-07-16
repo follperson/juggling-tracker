@@ -45,9 +45,9 @@ def evaluate_session(
 ) -> EvalReport:
     pairs = sorted(
         (
-            (temporal_iou(p.start_t, p.end_t, l.start_t, l.end_t), pi, li)
+            (temporal_iou(p.start_t, p.end_t, lab.start_t, lab.end_t), pi, li)
             for pi, p in enumerate(session.runs)
-            for li, l in enumerate(labels.runs)
+            for li, lab in enumerate(labels.runs)
         ),
         key=lambda x: -x[0],
     )
