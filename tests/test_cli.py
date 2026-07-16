@@ -29,6 +29,7 @@ def test_analyze_with_saved_detections(workspace):
     out = tmp / "out"
     result = runner.invoke(app, [
         "analyze", str(video), "--out", str(out), "--detections", str(dets),
+        "--link-max-dist", "0.2",
     ])
     assert result.exit_code == 0, result.output
     sr = SessionResult.model_validate(json.loads((out / "analysis.json").read_text()))

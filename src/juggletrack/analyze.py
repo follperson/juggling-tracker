@@ -17,6 +17,14 @@ class AnalyzeConfig(BaseModel):
     resid_tol: float = 0.02
     min_points: int = 6
     min_duration: float = 0.15
+    # Greedy linker's per-step gates (extract_arcs defaults): how far ahead in
+    # time / normalized distance a fragment may look for its next point.
+    # Fixed too tight and closer-framed footage with wider per-sample
+    # displacement links nothing (see docs/superpowers/plans/
+    # 2026-07-16-plan3-flywheel-turn2-findings.md).
+    link_max_dt: float = 0.12
+    link_max_dist: float = 0.08
+    em_iters: int = 5
     gap_factor: float = 1.3
     min_arcs: int = 3
     # Seconds of overshoot tolerance before an unconfirmed "stop" is
@@ -37,6 +45,8 @@ def analyze_detections(
     arcs = extract_arcs(
         dets, g_range=cfg.g_range, resid_tol=cfg.resid_tol,
         min_points=cfg.min_points, min_duration=cfg.min_duration,
+        link_max_dt=cfg.link_max_dt, link_max_dist=cfg.link_max_dist,
+        em_iters=cfg.em_iters,
     )
     hand_line = estimate_hand_line(arcs)
     throws, catches = derive_events(arcs, hand_line)

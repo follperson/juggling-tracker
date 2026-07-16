@@ -24,7 +24,11 @@ def analyze(
     imgsz: int = typer.Option(640, help="Detector input size"),
     stride: int = typer.Option(1, min=1, help="Detect every Nth frame"),
     device: str | None = typer.Option(None, help="Torch device (mps/cpu/cuda)"),
+    link_max_dist: float = typer.Option(
+        0.08, help="Linker max normalized distance per step (extract_arcs knob)"
+    ),
 ) -> None:
+    from juggletrack.analyze import AnalyzeConfig
     from juggletrack.pipeline.offline import analyze_video, load_detections_jsonl
 
     out_dir = out or Path("outputs") / video.stem
@@ -42,6 +46,7 @@ def analyze(
     session = analyze_video(
         video, detector,
         out_dir=out_dir, save_intermediates=save_intermediates, stride=stride,
+        config=AnalyzeConfig(link_max_dist=link_max_dist),
     )
 
     if overlay:
@@ -120,6 +125,9 @@ def label(
     imgsz: int = typer.Option(640),
     stride: int = typer.Option(1, min=1),
     device: str | None = typer.Option(None),
+    link_max_dist: float = typer.Option(
+        0.08, help="Linker max normalized distance per step (extract_arcs knob)"
+    ),
 ) -> None:
     """Auto-label a video: arc-verified detections become COCO 'ball' boxes."""
     from juggletrack.arcs.extract import extract_arcs
@@ -127,7 +135,7 @@ def label(
 
     out_dir = out or Path("outputs") / "labels" / video.stem
     dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
-    arcs = extract_arcs(dets)
+    arcs = extract_arcs(dets, link_max_dist=link_max_dist)
     labels, review = select_autolabels(dets, arcs)
     stats = export_video_labels(video, labels, out_dir, review_frames=review)
     typer.echo(
