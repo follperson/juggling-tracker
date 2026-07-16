@@ -100,8 +100,8 @@ def test_rmse_downweights_outlier_consistently_with_fit():
 
     A near-zero-confidence outlier barely moves the fit (already tested);
     it must also barely move rmse. With linear weights the outlier's
-    contribution is ~w*res^2 (=> rmse ~5.5e-3 here); with the correct w^2
-    weighting it is ~w^2*res^2 (=> rmse ~5.5e-4).
+    contribution is ~w*res^2 (=> rmse ~3.7e-3 here); with the correct w^2
+    weighting it is ~w^2*res^2 (=> rmse ~3.7e-4).
     """
     arr = flight_points()
     outlier = arr[len(arr) // 2].copy()

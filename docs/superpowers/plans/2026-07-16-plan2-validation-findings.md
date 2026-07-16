@@ -6,7 +6,7 @@
 
 - **Weights:** `/Users/andrew.follmann/personal-projects/juggling/yolo11n.pt` (stock COCO YOLO11n, "sports ball" class 32) — not fine-tuned.
 - **Detector config:** `conf=0.05` (CLI default), `imgsz=640` (default; `960` for the sensitivity run), `device=None` → ultralytics auto-selected MPS.
-- **Machine:** Apple M4 Pro, macOS 26.5.2, Python 3.11 (venv), 14 CPU cores.
+- **Machine:** Apple M4 Pro, macOS 26.5.2, Python 3.12.13 (uv venv), 14 CPU cores.
 - **Stride:** `1` for the three short/close videos (af1.mov, af2.mp4, PXL...). For the two long YouTube tutorials, the brief's pre-run planning heuristic (~0.2–0.3s/frame) projected 60 and 102 minutes of processing respectively for their 14,471 and 24,470 frames — both over the ~15-minute budget — so both ran with `--stride 2`. In practice, actual measured throughput on this machine turned out to be roughly 10x faster than that heuristic (~0.02–0.03s/frame observed on the short videos), so stride 2 was more conservative than strictly necessary in hindsight. It was still the correct call given the information available *before* running, so it stands; it's noted here for honesty about the coverage numbers below being computed over half the frames for those two videos.
 - **Command shape** (per video):
   ```
@@ -25,7 +25,7 @@
 | YTDown 3-Ball tutorial | 482.8s (14471f@29.97) | 854×480 | 2 | 2m 16.5s | 7502 | 48.6% / 26.1% / 13.8% | 0.202 | 0.033 | 35 | 2 | 9 | 0 | stop×2 |
 | YTDown 5-Easy tutorial | 816.5s (24470f@29.97) | 854×480 | 2 | **CRASHED** at 3m 19s (post-detection) | — | — | — | — | — | — | — | — |
 
-**Totals across the 4 completed videos:** 10 runs, 80 catches, 6 drops, 160 arcs, 11,033 raw detections. All 10 completed runs ended with `end_reason="stop"` — none hit `video_end` or an explicit drop-terminus classification in this batch.
+**Totals across the 4 completed videos:** 10 runs, 80 catches, 6 drops, 160 arcs, 12,033 raw detections. All 10 completed runs ended with `end_reason="stop"` — none hit `video_end` or an explicit drop-terminus classification in this batch.
 
 Coverage ≥2 balls, the primary "is this usable" signal: **af2.mp4 56.6%** (best) → PXL 48.8% → af1.mov 42.5% → YTDown 3-Ball 26.1% (worst, and it's also the lowest-resolution, most-distant framing).
 
@@ -74,7 +74,7 @@ The brief calls for re-running the single best-covered video (af2.mp4, 56.6% cov
 - `/Users/andrew.follmann/personal-projects/juggling/outputs/plan2-validation/pxl-imgsz960/overlay.mp4` (sensitivity re-run)
 - yt-5easy and af2-imgsz960 have no overlay — both crashed before overlay rendering.
 
-Each directory also has `detections.jsonl` (raw per-frame boxes) and `analysis.json` (the full `SessionResult`) for anyone who wants to re-derive different stats without re-running detection.
+Each directory also has `detections.jsonl` (raw per-frame boxes) and `analysis.json` (the full `SessionResult`) for anyone who wants to re-derive different stats without re-running detection — except `af2-imgsz960/`, which lacks `detections.jsonl` because that replay run wasn't passed `--save-intermediates`; its coverage row is reproducible only from `analysis.json`'s meta.
 
 ## Post-fix addendum
 
@@ -89,7 +89,7 @@ Both previously-crashed configurations were re-run after the fix and now complet
 
 **Reading:**
 
-- **The crash correlates with density exactly as hypothesized, and yt-5easy is the extreme case in this entire dataset.** Its corrected coverage (96.9%/89.3%/76.1% — note the original per-video table above computed coverage over frames-with-detections only, not total sampled frames; recomputed correctly here and it would change the completed-videos' percentages too if redone, though the completed videos' *relative* ordering is unaffected) is far denser than every other video, including the previously "best" af2.mp4 (75.8%/56.6%/34.6%). This is consistent with a video that has many overlapping "sports ball"-classified boxes per frame (whether real balls, a demonstrator's hands/props, or background false positives) — exactly the pattern (>=3 candidate boxes landing on one frame) that the fix targets.
+- **The crash correlates with density exactly as hypothesized, and yt-5easy is the extreme case in this entire dataset.** Its corrected coverage (96.9%/89.3%/76.1%) is far denser than every other video, including the previously "best" af2.mp4 (75.8%/56.6%/34.6%). The original per-video table above is correct as published: it already uses the `ceil(frame_count / stride)` denominator (total sampled frames, not frames-with-detections), and every one of its numbers reproduces exactly under that computation (af1 64.0%/42.5%/17.3%, af2 75.8%/56.6%/34.6%, PXL 82.1%/48.8%/30.3%, yt-3ball 48.6%/26.1%/13.8%) — no correction to that table is needed. This is consistent with a video that has many overlapping "sports ball"-classified boxes per frame (whether real balls, a demonstrator's hands/props, or background false positives) — exactly the pattern (>=3 candidate boxes landing on one frame) that the fix targets.
 - **af2.mp4 at imgsz 960 also shows a real density increase over imgsz 640** (2,461 vs 2,000 detections; coverage ≥2 64.8% vs 56.6%; ≥3 43.1% vs 34.6%) — a bigger jump than the imgsz 640→960 sensitivity check on PXL found (Sensitivity section above showed a noise-level, inconsistent-direction delta). This suggests the resolution-vs-density relationship isn't uniform across videos, though it's one data point.
 - **Both runs now produce plausible, non-degenerate output**: yt-5easy's 52 runs / 513 catches over its 816s length is consistent with a long tutorial video with many demonstration segments (pick-up/put-down cycles between explanations); af2.mp4 at imgsz 960 gained catches over imgsz 640 (35 vs 29) tracking its higher detection density.
 - **Coverage-computation caveat:** the corrected coverage denominator used here is `ceil(frame_count / stride)` (total sampled frames), matching a sanity check against af2.mp4's already-published 640 numbers (2,000 detections, 1,071 frames, stride 1 → 75.8%/56.6%/34.6%, reproduced exactly). The percentages in this addendum are directly comparable to the per-video table above.
