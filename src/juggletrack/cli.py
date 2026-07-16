@@ -173,5 +173,25 @@ def coverage(
         )
 
 
+@app.command()
+def train(
+    data_yaml: Path = typer.Argument(..., exists=True, dir_okay=False),
+    model: str = typer.Option("yolo11n.pt", help="Base weights to fine-tune"),
+    epochs: int = typer.Option(40, min=1),
+    imgsz: int = typer.Option(640),
+    device: str | None = typer.Option(None),
+    project: Path = typer.Option(Path("runs/finetune")),
+    name: str = typer.Option("juggletrack"),
+) -> None:
+    """Fine-tune the ball detector on an assembled dataset."""
+    from juggletrack.train.finetune import train_detector
+
+    best = train_detector(
+        data_yaml, base_model=model, epochs=epochs, imgsz=imgsz,
+        device=device, project=project, name=name,
+    )
+    typer.echo(f"best weights: {best}")
+
+
 if __name__ == "__main__":
     app()
