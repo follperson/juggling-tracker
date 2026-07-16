@@ -25,6 +25,7 @@ def extract_arcs(
     min_points: int = 6,
     min_duration: float = 0.15,
     em_iters: int = 5,
+    max_abs_bx: float = 0.6,
 ) -> list[Arc]:
     arr = points_array(dets)
     if len(arr) < min_points:
@@ -44,7 +45,7 @@ def extract_arcs(
     for _ in range(em_iters):
         arcs = _em_assign_refit(arr, arcs, resid_tol)
         arcs = _merge_pass(arr, arcs, resid_tol)
-        arcs = _prune(arcs, g_range, resid_tol, min_points, min_duration)
+        arcs = _prune(arcs, g_range, resid_tol, min_points, min_duration, max_abs_bx)
 
     arcs.sort(key=lambda a: a.t_start)
     return [a.model_copy(update={"id": i}) for i, a in enumerate(arcs)]
@@ -128,6 +129,17 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
     order. Scanning ahead until the time gap exceeds the threshold finds them
     while keeping the same acceptance test (``union.rmse <= resid_tol``) that
     guards against merging genuinely different balls.
+
+    y-rmse alone is not enough, though: two fragments from *different* balls
+    that cross paths through the same y-corridor (e.g. one ball rising in x
+    while another falls in x, briefly overlapping in y around the same time)
+    can union into a single low-y-rmse arc, because y alone doesn't carry
+    ball identity there. A real single ball has an (approximately) constant
+    x-velocity across a short merge window, so we additionally require the
+    union's own linear x-fit to explain the merged points, and reject
+    outright when the two fragments' fitted x-velocities point in opposite
+    directions with meaningful magnitude -- the structural signature of a
+    crossing rather than one continuous flight.
     """
     arcs = sorted(arcs, key=lambda a: a.t_start)
     t = arr[:, 0]
@@ -145,6 +157,12 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
             b = arcs[j]
             if b.t_start - a.t_end >= 0.2:
                 break  # candidates sorted by t_start: gap only grows from here
+            # Crossing-balls signature: opposite-signed, non-negligible
+            # x-velocities. A single ball's x-velocity can't flip sign like
+            # this over such a short window, so reject before even fitting
+            # the union.
+            if a.bx * b.bx < 0 and abs(a.bx) > 0.02 and abs(b.bx) > 0.02:
+                continue
             sel = ((t >= a.t_start) & (t <= a.t_end)) | ((t >= b.t_start) & (t <= b.t_end))
             pts = arr[sel]
             keep_a = y_residuals(a, pts) < 2 * resid_tol
@@ -153,7 +171,18 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
             if len(pts) < 3:
                 continue
             union = fit_arc(pts)
-            if union.rmse <= resid_tol and (best_union is None or union.rmse < best_union.rmse):
+            if union.rmse > resid_tol:
+                continue
+            # x-gate: even when the union's y-fit looks fine, a fused pair of
+            # crossing balls will not lie on one consistent x(t) line. Reject
+            # unions whose x-residuals against their own linear x-fit are too
+            # large to be one ball.
+            dt = pts[:, 0] - union.t_start
+            x_pred = union.bx * dt + union.cx
+            x_rmse = float(np.sqrt(np.mean((x_pred - pts[:, 1]) ** 2)))
+            if x_rmse > 2 * resid_tol:
+                continue
+            if best_union is None or union.rmse < best_union.rmse:
                 best_j, best_union = j, union
         if best_j is not None:
             used[i] = used[best_j] = True
@@ -165,8 +194,20 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
 
 def _prune(
     arcs: list[Arc], g_range: tuple[float, float], resid_tol: float,
-    min_points: int, min_duration: float,
+    min_points: int, min_duration: float, max_abs_bx: float,
 ) -> list[Arc]:
+    """Drop arcs that aren't physically plausible ball flights.
+
+    ``lo <= ay <= hi`` bounds vertical motion to a plausible gravity range
+    (the existing check). ``abs(bx) <= max_abs_bx`` is the same idea applied
+    to horizontal motion: with the x-consistency gate now guarding merges
+    (see ``_merge_pass``), a handful of unlinked false-positive detections
+    can still coincidentally chain into a low-point, low-y-rmse "arc" with
+    an implausibly large horizontal velocity -- previously such a fragment
+    would usually get silently absorbed into a real neighboring arc by the
+    old (too-permissive) merge gate. Rejecting implausible bx here catches
+    it directly instead of relying on that absorption as accidental cleanup.
+    """
     lo, hi = g_range[0] / 2.0, g_range[1] / 2.0
     return [
         a for a in arcs
@@ -174,4 +215,5 @@ def _prune(
         and a.duration() >= min_duration
         and lo <= a.ay <= hi
         and a.rmse <= resid_tol
+        and abs(a.bx) <= max_abs_bx
     ]
