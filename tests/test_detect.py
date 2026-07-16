@@ -47,3 +47,23 @@ def test_detections_from_xywhn_empty():
     from juggletrack.detect.yolo import detections_from_xywhn
 
     assert detections_from_xywhn(np.zeros((0, 4)), np.zeros(0), 0, 0.0) == []
+
+
+def test_resolve_ball_classes_coco():
+    from juggletrack.detect.yolo import resolve_ball_classes
+
+    coco_like = {0: "person", 32: "sports ball", 33: "kite"}
+    assert resolve_ball_classes(coco_like) == (32,)
+
+
+def test_resolve_ball_classes_finetuned_single_class():
+    from juggletrack.detect.yolo import resolve_ball_classes
+
+    assert resolve_ball_classes({0: "ball"}) == (0,)
+
+
+def test_resolve_ball_classes_unknown_names_means_no_filter():
+    from juggletrack.detect.yolo import resolve_ball_classes
+
+    assert resolve_ball_classes({0: "beanbag"}) is None
+    assert resolve_ball_classes({}) is None
