@@ -9,7 +9,7 @@ import math
 
 import numpy as np
 
-from juggletrack.arcs.fit import fit_arc, points_array, y_residuals
+from juggletrack.arcs.fit import fit_arc, points_array, x_residuals, y_residuals
 from juggletrack.types import Arc, Detection
 
 _EM_TIME_MARGIN = 0.15  # arcs may claim points this far beyond their current span
@@ -58,6 +58,7 @@ def extract_arcs(
         arcs = _em_assign_refit(arr, arcs, resid_tol)
         arcs = _merge_pass(arr, arcs, resid_tol)
         arcs = _prune(arcs, g_range, resid_tol, min_points, min_duration, max_abs_bx)
+        arcs = _gravity_prune(arcs)
 
     arcs.sort(key=lambda a: a.t_start)
     return [a.model_copy(update={"id": i}) for i, a in enumerate(arcs)]
@@ -117,7 +118,8 @@ def _em_assign_refit(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list
     best_arc = np.full(len(arr), -1, dtype=int)
     for k, arc in enumerate(arcs):
         in_span = (t >= arc.t_start - _EM_TIME_MARGIN) & (t <= arc.t_end + _EM_TIME_MARGIN)
-        res = np.where(in_span, y_residuals(arc, arr), np.inf)
+        res_both = np.maximum(y_residuals(arc, arr), x_residuals(arc, arr))
+        res = np.where(in_span, res_both, np.inf)
         better = res < best_res
         best_res[better] = res[better]
         best_arc[better] = k
@@ -235,3 +237,14 @@ def _prune(
         and a.rmse <= resid_tol
         and abs(a.bx) <= max_abs_bx
     ]
+
+
+def _gravity_prune(arcs: list[Arc], band: float = 0.3) -> list[Arc]:
+    """Self-consistency: all real arcs share one gravity, so curvature outliers
+    (cross-ball chimeras fit ay far above the cohort) are spurious. Needs a
+    quorum of >=4 arcs so the median is trustworthy."""
+    if len(arcs) < 4:
+        return arcs
+    med = float(np.median([a.ay for a in arcs]))
+    lo, hi = (1.0 - band) * med, (1.0 + band) * med
+    return [a for a in arcs if lo <= a.ay <= hi]

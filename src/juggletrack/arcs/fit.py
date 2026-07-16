@@ -50,3 +50,8 @@ def fit_arc(arr: np.ndarray, arc_id: int = -1) -> Arc:
 def y_residuals(arc: Arc, arr: np.ndarray) -> np.ndarray:
     dt = arr[:, 0] - arc.t_start
     return np.abs(arc.ay * dt * dt + arc.by * dt + arc.cy - arr[:, 2])
+
+
+def x_residuals(arc: Arc, arr: np.ndarray) -> np.ndarray:
+    dt = arr[:, 0] - arc.t_start
+    return np.abs(arc.bx * dt + arc.cx - arr[:, 1])

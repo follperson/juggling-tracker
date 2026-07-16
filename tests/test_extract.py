@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from juggletrack.arcs.extract import extract_arcs
+from juggletrack.arcs.fit import points_array
 from juggletrack.sim import simulate_cascade
 from juggletrack.types import Detection
 
@@ -157,3 +158,54 @@ def test_dense_same_timestamp_clusters_do_not_crash():
 
     arcs = extract_arcs(dets)  # must not raise
     assert isinstance(arcs, list)
+
+
+def test_x_residuals_flag_cross_ball_points():
+    from juggletrack.arcs.fit import fit_arc, x_residuals
+
+    r = simulate_cascade(n_throws=1, fps=60.0, seed=0)
+    arr = points_array(r.detections)
+    arc = fit_arc(arr)
+    # a point on the arc's y-parabola but at a wrong x (another ball's position)
+    t_mid = (arc.t_start + arc.t_end) / 2
+    impostor = np.array([[t_mid, arc.x_at(t_mid) + 0.2, arc.y_at(t_mid), 1.0]])
+    res = x_residuals(arc, impostor)
+    assert res[0] == pytest.approx(0.2, abs=1e-6)
+    assert x_residuals(arc, arr).max() < 0.01  # true points fit x tightly
+
+
+def test_gravity_prune_kills_chimera_curvature():
+    from juggletrack.arcs.extract import _gravity_prune
+    from juggletrack.types import Arc
+
+    def arc_with_ay(i, ay):
+        return Arc(id=i, t_start=float(i), t_end=float(i) + 1.0, ay=ay, by=-1.1,
+                   cy=0.65, bx=0.1, cx=0.4, n_points=20, rmse=0.005)
+
+    arcs = [arc_with_ay(i, 1.0 + 0.03 * i) for i in range(5)] + [arc_with_ay(9, 2.2)]
+    kept = _gravity_prune(arcs)
+    assert {a.id for a in kept} == {0, 1, 2, 3, 4}
+    # fewer than 4 arcs: untouched even with an outlier
+    few = [arc_with_ay(0, 1.0), arc_with_ay(1, 2.2)]
+    assert _gravity_prune(few) == few
+
+
+def test_catch_accuracy_seed_sweep():
+    """Spec §1 target: catch count within ±1 on >=90% of runs.
+
+    Plan 1's final review measured 16/20 at this noise regime; the EM x-cost
+    and gravity pruning exist to close the gap. This is the regression gate.
+    """
+    from juggletrack.analyze import analyze_detections
+
+    ok = 0
+    failures = []
+    for seed in range(20):
+        r = simulate_cascade(n_throws=12, fps=30.0, noise=0.004, dropout=0.15, seed=seed)
+        sr = analyze_detections(r.detections)
+        total = sum(run.catches for run in sr.runs)
+        if abs(total - 12) <= 1:
+            ok += 1
+        else:
+            failures.append((seed, total, len(sr.runs)))
+    assert ok >= 18, f"catch accuracy {ok}/20 below 90% target; failures: {failures}"
