@@ -14,6 +14,92 @@ from juggletrack.types import Arc, Detection
 
 _EM_TIME_MARGIN = 0.15  # arcs may claim points this far beyond their current span
 
+# A bin's detections only chain into one "occupancy run" while consecutive
+# timestamps are within this many seconds of each other (see
+# filter_static_detections). Comfortably above a normal per-frame/per-stride
+# interval (a real object present in a cell keeps re-appearing every frame,
+# with gaps this small) and comfortably below a real juggling cascade's
+# throw-to-throw period (>=0.45s in every existing sim config): a juggled
+# ball passing back through the same cell on a *later* throw always leaves a
+# gap well past this, so it starts a new run instead of extending one that
+# spans the whole video.
+_STATIC_RUN_GAP_S = 0.15
+
+
+def filter_static_detections(
+    dets: list[Detection], *, cell: float = 0.03, max_span_s: float = 1.5
+) -> list[Detection]:
+    """Drop detections parked in one spatial cell for too long: static clutter,
+    not a ball.
+
+    Field motivation: a fine-tuned detector can emit persistent high-confidence
+    false positives at fixed image locations (background objects) on new-
+    environment footage. The greedy nearest-neighbor linker in
+    ``_link_fragments`` locks onto these static clusters and absorbs real ball
+    detections into junk fragments, so filtering them out *before* linking is
+    the fix (see docs/superpowers/plans/2026-07-16-plan3-flywheel-turn2-findings.md).
+
+    Physics rationale: a juggled ball never *dwells* in one small region for
+    long -- hand dwell is ~0.2-0.5s, and flights sweep across the frame. A
+    detection cluster occupying one tiny spatial cell continuously across many
+    seconds is therefore a static object, not a ball: bin detections into
+    ``cell``-sized (x, y) grid cells (``floor(x/cell), floor(y/cell)``), and
+    within each cell, chain consecutive (sorted-by-time) detections into
+    "occupancy runs" -- a gap of more than ``_STATIC_RUN_GAP_S`` between
+    neighbors starts a new run. Any cell with a run spanning more than
+    ``max_span_s`` is judged static, and every detection in that cell is
+    dropped (not just the offending run's points -- see the module-level
+    comment above for why the gap threshold is chosen so this only ever
+    matches genuine continuous presence). Survivors are returned in input
+    order; bin membership and run spans are computed from each cell's own
+    sorted timestamps regardless of input order, so this is order-invariant
+    -- shuffling the input can't change which detections get kept.
+
+    Why runs, not the raw (max t - min t) envelope: juggling is periodic --
+    every same-hand throw starts and ends at the exact same hand position, so
+    a real ball's own cell near a hand gets hit again on every later throw of
+    that hand. The raw envelope across *all* those separate, brief visits
+    spans nearly the whole video, indistinguishable by that measure alone
+    from one continuously-present static object (confirmed empirically: on
+    every multi-throw ``simulate_cascade`` scenario in this test suite, the
+    raw-envelope version discards real detections, worst case 100% of them).
+    A static object, unlike a revisited-but-otherwise-empty cell, is detected
+    on essentially every frame throughout its whole span -- that continuity,
+    not just the time envelope, is what "dwell" in the physics rationale
+    above actually means, and is what the run-chaining picks out.
+
+    v1 known gap: a static object that jitters across a cell boundary splits
+    across two adjacent bins instead of landing in one. In the common case
+    each split bin is *still* continuously occupied throughout the window
+    (the object hasn't moved, so both bins keep getting hit on every frame)
+    and both get dropped correctly anyway; only an unlucky short-looking
+    timing pattern within one split bin could let a few of its points slip
+    through. Not handled here.
+    """
+    bins: dict[tuple[int, int], list[float]] = {}
+    keys: list[tuple[int, int]] = []
+    for d in dets:
+        k = (math.floor(d.x / cell), math.floor(d.y / cell))
+        keys.append(k)
+        bins.setdefault(k, []).append(d.t)
+
+    static_bin: dict[tuple[int, int], bool] = {}
+    for k, ts in bins.items():
+        ts = sorted(ts)
+        run_start = ts[0]
+        prev = ts[0]
+        is_static = False
+        for t in ts[1:]:
+            if t - prev > _STATIC_RUN_GAP_S:
+                run_start = t  # gap breaks the run: start a fresh one
+            elif t - run_start > max_span_s:
+                is_static = True
+                break
+            prev = t
+        static_bin[k] = is_static
+
+    return [d for d, k in zip(dets, keys) if not static_bin[k]]
+
 
 def extract_arcs(
     dets: list[Detection],
@@ -28,7 +114,10 @@ def extract_arcs(
     # empirically closes crossing-swap deficits
     em_iters: int = 5,
     max_abs_bx: float = 0.6,
+    static_cell: float = 0.03,
+    static_max_span_s: float = 1.5,
 ) -> list[Arc]:
+    dets = filter_static_detections(dets, cell=static_cell, max_span_s=static_max_span_s)
     arr = points_array(dets)
     if len(arr) < min_points:
         return []

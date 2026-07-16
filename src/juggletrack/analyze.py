@@ -27,6 +27,13 @@ class AnalyzeConfig(BaseModel):
     em_iters: int = 5
     gap_factor: float = 1.3
     min_arcs: int = 3
+    # Static-detection pre-filter (extract_arcs's filter_static_detections):
+    # drops detections stuck in one cell-sized spatial bin across more than
+    # static_max_span_s of video -- background false positives that would
+    # otherwise poison the greedy linker (see docs/superpowers/plans/
+    # 2026-07-16-plan3-flywheel-turn2-findings.md).
+    static_cell: float = 0.03
+    static_max_span_s: float = 1.5
     # Seconds of overshoot tolerance before an unconfirmed "stop" is
     # reclassified "video_end". Matches events.catches's
     # CATCH_EXTRAPOLATION_MARGIN so the two checks agree on what counts as
@@ -47,6 +54,7 @@ def analyze_detections(
         min_points=cfg.min_points, min_duration=cfg.min_duration,
         link_max_dt=cfg.link_max_dt, link_max_dist=cfg.link_max_dist,
         em_iters=cfg.em_iters,
+        static_cell=cfg.static_cell, static_max_span_s=cfg.static_max_span_s,
     )
     hand_line = estimate_hand_line(arcs)
     throws, catches = derive_events(arcs, hand_line)
