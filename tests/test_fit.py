@@ -60,3 +60,19 @@ def test_residuals_flag_the_outlier():
 def test_fit_requires_three_points():
     with pytest.raises(ValueError):
         fit_arc(np.array([[0.0, 0.5, 0.5, 1.0], [0.1, 0.5, 0.5, 1.0]]))
+
+
+def test_rmse_downweights_outlier_consistently_with_fit():
+    """rmse must reflect the fit's own objective: weights enter squared.
+
+    A near-zero-confidence outlier barely moves the fit (already tested);
+    it must also barely move rmse. With linear weights the outlier's
+    contribution is ~w*res^2 (=> rmse ~5.5e-3 here); with the correct w^2
+    weighting it is ~w^2*res^2 (=> rmse ~5.5e-4).
+    """
+    arr = flight_points()
+    outlier = arr[len(arr) // 2].copy()
+    outlier[2] += 0.3
+    outlier[3] = 0.01
+    arc = fit_arc(np.vstack([arr, outlier]))
+    assert arc.rmse < 1e-3

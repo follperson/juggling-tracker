@@ -24,7 +24,9 @@ def fit_arc(arr: np.ndarray, arc_id: int = -1) -> Arc:
     ay, by, cy = np.polyfit(dt, arr[:, 2], 2, w=w)
     bx, cx = np.polyfit(dt, arr[:, 1], 1, w=w)
     resid = (ay * dt * dt + by * dt + cy) - arr[:, 2]
-    rmse = float(np.sqrt(np.average(resid**2, weights=w)))
+    # polyfit minimizes sum((w*resid)^2), so the consistent diagnostic
+    # averages resid^2 with weights w^2 (uniform-confidence data unaffected).
+    rmse = float(np.sqrt(np.average(resid**2, weights=w**2)))
     return Arc(
         id=arc_id, t_start=float(t0), t_end=float(arr[-1, 0]),
         ay=float(ay), by=float(by), cy=float(cy), bx=float(bx), cx=float(cx),
