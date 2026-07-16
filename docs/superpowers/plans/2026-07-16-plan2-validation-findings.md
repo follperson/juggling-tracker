@@ -75,3 +75,23 @@ The brief calls for re-running the single best-covered video (af2.mp4, 56.6% cov
 - yt-5easy and af2-imgsz960 have no overlay — both crashed before overlay rendering.
 
 Each directory also has `detections.jsonl` (raw per-frame boxes) and `analysis.json` (the full `SessionResult`) for anyone who wants to re-derive different stats without re-running detection.
+
+## Post-fix addendum
+
+The `LinAlgError` crash described above (Qualitative failure mode #5) has been fixed: `arcs/fit.py`'s `fit_arc` now raises a documented `ValueError` for point sets that all share one exact timestamp (a parabola isn't identifiable from a single instant — this is what was crashing numpy's SVD solver), and the three call sites in `arcs/extract.py` that call `fit_arc` on arbitrary point subsets (seeding, EM refit, merge) discard a candidate on that `ValueError` instead of propagating it. Root cause and fix are in the harden-arc-fitting commit; regression tests are `tests/test_fit.py::test_fit_rejects_all_same_timestamp` and `tests/test_extract.py::test_dense_same_timestamp_clusters_do_not_crash`.
+
+Both previously-crashed configurations were re-run after the fix and now complete:
+
+| Video | Stride/imgsz | Wall time | Detections | Coverage ≥1 / ≥2 / ≥3 | Median conf | Median w | Arcs | Runs | Catches | Drops | End reasons |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| YTDown 5-Easy tutorial | stride 2 | 3m 47.9s | 42,256 | 96.9% / 89.3% / 76.1% | 0.451 | 0.038 | 813 | 52 | 513 | 20 | stop×49, drop×3 |
+| af2.mp4 | imgsz 960 | ~45.8s (32.9s detect + 12.9s analyze/overlay, run via `--detections` replay of the saved jsonl) | 2,461 | 79.7% / 64.8% / 43.1% | 0.304 | 0.041 | 59 | 2 | 35 | 3 | stop×1, drop×1 |
+
+**Reading:**
+
+- **The crash correlates with density exactly as hypothesized, and yt-5easy is the extreme case in this entire dataset.** Its corrected coverage (96.9%/89.3%/76.1% — note the original per-video table above computed coverage over frames-with-detections only, not total sampled frames; recomputed correctly here and it would change the completed-videos' percentages too if redone, though the completed videos' *relative* ordering is unaffected) is far denser than every other video, including the previously "best" af2.mp4 (75.8%/56.6%/34.6%). This is consistent with a video that has many overlapping "sports ball"-classified boxes per frame (whether real balls, a demonstrator's hands/props, or background false positives) — exactly the pattern (>=3 candidate boxes landing on one frame) that the fix targets.
+- **af2.mp4 at imgsz 960 also shows a real density increase over imgsz 640** (2,461 vs 2,000 detections; coverage ≥2 64.8% vs 56.6%; ≥3 43.1% vs 34.6%) — a bigger jump than the imgsz 640→960 sensitivity check on PXL found (Sensitivity section above showed a noise-level, inconsistent-direction delta). This suggests the resolution-vs-density relationship isn't uniform across videos, though it's one data point.
+- **Both runs now produce plausible, non-degenerate output**: yt-5easy's 52 runs / 513 catches over its 816s length is consistent with a long tutorial video with many demonstration segments (pick-up/put-down cycles between explanations); af2.mp4 at imgsz 960 gained catches over imgsz 640 (35 vs 29) tracking its higher detection density.
+- **Coverage-computation caveat:** the corrected coverage denominator used here is `ceil(frame_count / stride)` (total sampled frames), matching a sanity check against af2.mp4's already-published 640 numbers (2,000 detections, 1,071 frames, stride 1 → 75.8%/56.6%/34.6%, reproduced exactly). The percentages in this addendum are directly comparable to the per-video table above.
+- **Overlays now exist** for both at `/Users/andrew.follmann/personal-projects/juggling/outputs/plan2-validation/yt-5easy/overlay.mp4` and `/Users/andrew.follmann/personal-projects/juggling/outputs/plan2-validation/af2-imgsz960/overlay.mp4` (superseding the "no overlay" note above).
+- **Implication for Plan 3 confirmed, not changed:** the fine-tuning-need conclusion stands — even yt-5easy's very high raw coverage doesn't mean the detections are *good* (813 arcs from 42,256 raw detections over 52 runs still implies substantial fragmentation/false-positive pressure); dense-but-noisy detection is exactly the regime this crash-hardening exists to survive without dying, not a signal that stock YOLO is suddenly working well.
