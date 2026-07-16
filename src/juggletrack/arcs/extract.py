@@ -97,14 +97,33 @@ def _link_fragments(arr: np.ndarray, max_dt: float, max_dist: float) -> list[lis
 
 
 def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list[list[int]]:
-    """Split a fragment wherever one parabola stops explaining it."""
+    """Split a fragment wherever one parabola -- or one x(t) line -- stops explaining it.
+
+    y-rmse alone misses a crossing: two balls sharing the same gravity can
+    briefly trace a near-identical y-parabola while their x(t) lines diverge
+    (one ball's x rising as the other's falls through the same y-corridor),
+    so `_link_fragments` links points from both into one fragment and the
+    y-only check here used to let it ride as one seed all the way through
+    (mirrors the x-gate `_merge_pass` already applies when unioning two
+    already-separate arcs -- this closes the same hole one stage earlier,
+    before a fragment is even split into candidate seeds).
+    Use `max`, not an rmse, on x: a crossing shows up as the tail few points
+    of `cur` suddenly landing off the fitted x-line right as the window
+    should split, and averaging that into an rmse-style statistic dilutes
+    the signal across the (still mostly x-consistent) rest of the window.
+    The `2*resid_tol` threshold matches the x-gate `_merge_pass` uses for the
+    same check, keeping one tolerance convention for "is this x(t) line".
+    """
     pieces: list[list[int]] = []
     cur: list[int] = []
     for i in idxs:
         cur.append(i)
-        if len(cur) >= 4 and fit_arc(arr[cur]).rmse > resid_tol:
-            pieces.append(cur[:-1])
-            cur = [i]
+        if len(cur) >= 4:
+            arc = fit_arc(arr[cur])
+            x_bad = np.max(x_residuals(arc, arr[cur])) > 2 * resid_tol
+            if arc.rmse > resid_tol or x_bad:
+                pieces.append(cur[:-1])
+                cur = [i]
     if len(cur) >= 4:
         pieces.append(cur)
     return [p for p in pieces if len(p) >= 4]
