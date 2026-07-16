@@ -115,3 +115,45 @@ def test_merge_does_not_fuse_crossing_balls():
     assert not any(a.t_start < 0.4 and a.t_end > 0.53 for a in arcs), (
         "a single arc spans both fragments -- opposite-direction balls were fused"
     )
+
+
+def test_dense_same_timestamp_clusters_do_not_crash():
+    """Regression: extract_arcs used to crash end-to-end with
+    numpy.linalg.LinAlgError on real dense footage.
+
+    Detections below are a delta-debug-minimized (69 -> 18 points) slice of
+    real detections captured off af2.mp4 at imgsz=960 (frames 860-870,
+    t~28.62-28.95s): several frames there each carry >=2-3 overlapping
+    candidate ball boxes (a real, dense-detection pattern, not synthetic
+    noise). Pre-fix, some EM-refit/merge iteration inside extract_arcs
+    isolated a same-timestamp cluster as a fit candidate, and fit_arc's
+    weighted np.polyfit crashed with LinAlgError instead of raising the
+    documented ValueError for unfittable input -- see tests/test_fit.py's
+    test_fit_rejects_all_same_timestamp for the minimal unit-level case.
+    The exact output (arcs may legitimately be empty; this slice is too
+    short/sparse to pass the usual min_points/min_duration gates) doesn't
+    matter here -- only that the call completes without raising.
+    """
+    dets = [
+        Detection(frame_idx=860, t=28.620932, x=0.758729, y=0.596699, confidence=0.255003),
+        Detection(frame_idx=860, t=28.620932, x=0.759045, y=0.599219, confidence=0.105573),
+        Detection(frame_idx=861, t=28.654212, x=0.743005, y=0.599745, confidence=0.488518),
+        Detection(frame_idx=861, t=28.654212, x=0.749257, y=0.600747, confidence=0.072931),
+        Detection(frame_idx=862, t=28.687492, x=0.729324, y=0.590641, confidence=0.112499),
+        Detection(frame_idx=862, t=28.687492, x=0.736447, y=0.593838, confidence=0.052603),
+        Detection(frame_idx=863, t=28.720773, x=0.723885, y=0.570815, confidence=0.105532),
+        Detection(frame_idx=865, t=28.787333, x=0.632862, y=0.567148, confidence=0.185014),
+        Detection(frame_idx=865, t=28.787333, x=0.632417, y=0.563010, confidence=0.087624),
+        Detection(frame_idx=866, t=28.820613, x=0.632732, y=0.581252, confidence=0.320277),
+        Detection(frame_idx=866, t=28.820613, x=0.629926, y=0.580358, confidence=0.089623),
+        Detection(frame_idx=866, t=28.820613, x=0.634149, y=0.581015, confidence=0.084602),
+        Detection(frame_idx=867, t=28.853893, x=0.638207, y=0.596839, confidence=0.301228),
+        Detection(frame_idx=867, t=28.853893, x=0.632152, y=0.596847, confidence=0.289990),
+        Detection(frame_idx=867, t=28.853893, x=0.632994, y=0.597118, confidence=0.063283),
+        Detection(frame_idx=869, t=28.920453, x=0.640977, y=0.607052, confidence=0.190243),
+        Detection(frame_idx=870, t=28.953734, x=0.651686, y=0.602629, confidence=0.434234),
+        Detection(frame_idx=870, t=28.953734, x=0.649421, y=0.604342, confidence=0.133543),
+    ]
+
+    arcs = extract_arcs(dets)  # must not raise
+    assert isinstance(arcs, list)

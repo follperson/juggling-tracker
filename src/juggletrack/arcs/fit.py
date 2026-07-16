@@ -20,6 +20,19 @@ def fit_arc(arr: np.ndarray, arc_id: int = -1) -> Arc:
     arr = arr[np.argsort(arr[:, 0])]
     t0 = arr[0, 0]
     dt = arr[:, 0] - t0
+    if dt[-1] <= 0:
+        # Every point shares one timestamp (dense real detections can put
+        # >=3 candidate boxes in a single frame that all land in the same
+        # fit candidate). A parabola isn't identifiable from a single
+        # instant: the dt-dependent Vandermonde columns are then exactly
+        # zero, which drives numpy.polyfit's internal column-scale
+        # normalization to 0/0 and crashes its SVD solver with LinAlgError
+        # instead of failing cleanly. Treat it as unfittable input, same
+        # contract as the point-count check above.
+        raise ValueError(
+            f"fit_arc needs points spanning nonzero time, got {len(arr)} "
+            f"points all at t={t0!r}"
+        )
     w = arr[:, 3]
     ay, by, cy = np.polyfit(dt, arr[:, 2], 2, w=w)
     bx, cx = np.polyfit(dt, arr[:, 1], 1, w=w)

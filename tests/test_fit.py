@@ -62,6 +62,39 @@ def test_fit_requires_three_points():
         fit_arc(np.array([[0.0, 0.5, 0.5, 1.0], [0.1, 0.5, 0.5, 1.0]]))
 
 
+def test_fit_rejects_all_same_timestamp():
+    """Regression: real dense detections can put >=3 candidate boxes in a
+    single video frame. Shrunk from the array actually captured off
+    af2.mp4 at imgsz=960 (4 points, all t=28.85389312...), which crashed
+    `numpy.polyfit`'s SVD-based solver with `LinAlgError: SVD did not
+    converge` instead of the documented ValueError contract.
+
+    Cause: with every point at the same t, the dt-dependent Vandermonde
+    columns (dt^2, dt) are identically zero even after weighting, so
+    numpy.polyfit's internal column-scale normalization computes 0/0 and
+    feeds a NaN-containing matrix to LAPACK's SVD, which cannot converge.
+    A parabola is genuinely unidentifiable from points at a single instant,
+    so this must raise the same ValueError as too-few-points, not crash.
+    """
+    t = 28.85389312
+    arr = np.array([
+        [t, 0.63215172, 0.59684718, 0.28999031],
+        [t, 0.63299447, 0.59711826, 0.06328251],
+        [t, 0.63366514, 0.60147285, 0.09570954],
+        [t, 0.6382072, 0.59683901, 0.3012276],
+    ])
+    # Note: np.linalg.LinAlgError is itself a ValueError subclass, so a bare
+    # `pytest.raises(ValueError)` would not distinguish the documented,
+    # controlled contract from the leaked numpy crash this test guards
+    # against -- assert the exact type to make that distinction explicit.
+    with pytest.raises(ValueError) as exc_info:
+        fit_arc(arr)
+    assert not isinstance(exc_info.value, np.linalg.LinAlgError), (
+        "fit_arc leaked numpy's LinAlgError instead of raising its own "
+        "controlled ValueError before ever calling polyfit"
+    )
+
+
 def test_rmse_downweights_outlier_consistently_with_fit():
     """rmse must reflect the fit's own objective: weights enter squared.
 

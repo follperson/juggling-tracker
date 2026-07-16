@@ -45,7 +45,14 @@ def extract_arcs(
     for frag in fragments:
         seeds.extend(_split_ballistic(arr, frag, resid_tol))
 
-    arcs = [fit_arc(arr[idxs]) for idxs in seeds if len(idxs) >= 4]
+    arcs: list[Arc] = []
+    for idxs in seeds:
+        if len(idxs) < 4:
+            continue
+        try:
+            arcs.append(fit_arc(arr[idxs]))
+        except ValueError:
+            continue  # degenerate seed (e.g. all-same-timestamp cluster)
 
     for _ in range(em_iters):
         arcs = _em_assign_refit(arr, arcs, resid_tol)
@@ -120,7 +127,10 @@ def _em_assign_refit(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list
     for k in range(len(arcs)):
         member = np.where(best_arc == k)[0]
         if len(member) >= 3:
-            out.append(fit_arc(arr[member]))
+            try:
+                out.append(fit_arc(arr[member]))
+            except ValueError:
+                continue  # degenerate reassignment (e.g. all-same-timestamp cluster)
     return out
 
 
@@ -175,7 +185,10 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
             pts = pts[keep_a | keep_b]
             if len(pts) < 3:
                 continue
-            union = fit_arc(pts)
+            try:
+                union = fit_arc(pts)
+            except ValueError:
+                continue  # degenerate union (e.g. all-same-timestamp cluster)
             if union.rmse > resid_tol:
                 continue
             # x-gate: even when the union's y-fit looks fine, a fused pair of
