@@ -13,7 +13,11 @@ dependencies = [
     "pydantic>=2.7",
     "opencv-python>=4.10",
     "ultralytics>=8.3",
+    "typer>=0.12",
 ]
+
+[project.scripts]
+juggletrack = "juggletrack.cli:app"
 
 [dependency-groups]
 dev = [
