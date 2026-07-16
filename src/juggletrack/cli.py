@@ -94,5 +94,84 @@ def eval(
         out.write_text(report.model_dump_json(indent=2))
 
 
+def _get_detections(video, detections, model, conf, imgsz, stride, device):
+    from juggletrack.pipeline.offline import detect_video, load_detections_jsonl
+    from juggletrack.video.reader import VideoReader
+
+    if detections is not None:
+        return load_detections_jsonl(detections)
+    from juggletrack.detect.yolo import YOLODetector
+
+    det = YOLODetector(model_path=model, conf=conf, imgsz=imgsz, device=device)
+    with VideoReader(video) as reader:
+        return detect_video(reader, det, stride=stride)
+
+
+@app.command()
+def label(
+    video: Path = typer.Argument(..., exists=True, dir_okay=False),
+    out: Path | None = typer.Option(None, help="Output dir (default outputs/labels/<stem>)"),
+    detections: Path | None = typer.Option(
+        None, exists=True, dir_okay=False,
+        help="Replay saved detections.jsonl instead of running the detector",
+    ),
+    model: str = typer.Option("yolo11n.pt"),
+    conf: float = typer.Option(0.05),
+    imgsz: int = typer.Option(640),
+    stride: int = typer.Option(1, min=1),
+    device: str | None = typer.Option(None),
+) -> None:
+    """Auto-label a video: arc-verified detections become COCO 'ball' boxes."""
+    from juggletrack.arcs.extract import extract_arcs
+    from juggletrack.data.autolabel import export_video_labels, select_autolabels
+
+    out_dir = out or Path("outputs") / "labels" / video.stem
+    dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
+    arcs = extract_arcs(dets)
+    labels, review = select_autolabels(dets, arcs)
+    stats = export_video_labels(video, labels, out_dir, review_frames=review)
+    typer.echo(
+        f"{stats['n_images']} images, {stats['n_boxes']} boxes, "
+        f"{stats['n_review_frames']} review frames -> {out_dir}"
+    )
+
+
+@app.command()
+def coverage(
+    video: Path = typer.Argument(..., exists=True, dir_okay=False),
+    detections: Path | None = typer.Option(
+        None, exists=True, dir_okay=False,
+        help="Score saved detections.jsonl (pass the SAME --stride it was made with)",
+    ),
+    model: str = typer.Option("yolo11n.pt"),
+    conf: float = typer.Option(0.05),
+    imgsz: int = typer.Option(640),
+    stride: int = typer.Option(1, min=1),
+    device: str | None = typer.Option(None),
+) -> None:
+    """Detection-coverage stats: the before/after fine-tuning metric."""
+    import math
+    import statistics
+    from collections import Counter
+
+    from juggletrack.video.reader import VideoReader
+
+    dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
+    with VideoReader(video) as reader:
+        n_sampled = math.ceil(reader.info.frame_count / stride)
+    per_frame = Counter(d.frame_idx for d in dets)
+    cov = {
+        k: sum(1 for v in per_frame.values() if v >= k) / n_sampled if n_sampled else 0.0
+        for k in (1, 2, 3)
+    }
+    typer.echo(f"detections {len(dets)} over {n_sampled} sampled frames")
+    typer.echo(f"coverage >=1: {cov[1]:.1%}  >=2: {cov[2]:.1%}  >=3: {cov[3]:.1%}")
+    if dets:
+        typer.echo(
+            f"median conf {statistics.median(d.confidence for d in dets):.3f}  "
+            f"median w {statistics.median(d.w for d in dets):.4f}"
+        )
+
+
 if __name__ == "__main__":
     app()

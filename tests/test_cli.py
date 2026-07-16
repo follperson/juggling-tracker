@@ -76,3 +76,30 @@ def test_eval_command(workspace, tmp_path):
     report = json.loads(report_path.read_text())
     assert report["frac_catch_within_1"] == 1.0
     assert "catch" in result.output.lower()
+
+
+def test_label_command_with_saved_detections(workspace):
+    from juggletrack.cli import app
+
+    sim, video, dets, tmp = workspace
+    out = tmp / "labels_out"
+    result = runner.invoke(app, [
+        "label", str(video), "--out", str(out), "--detections", str(dets),
+    ])
+    assert result.exit_code == 0, result.output
+    assert (out / "annotations.json").exists()
+    assert (out / "review_manifest.json").exists()
+    assert any((out / "images").iterdir())
+    assert "boxes" in result.output and "review" in result.output
+
+
+def test_coverage_command(workspace):
+    from juggletrack.cli import app
+
+    sim, video, dets, tmp = workspace
+    result = runner.invoke(app, [
+        "coverage", str(video), "--detections", str(dets),
+    ])
+    assert result.exit_code == 0, result.output
+    assert f"detections {len(sim.detections)}" in result.output
+    assert ">=2:" in result.output and ">=3:" in result.output
