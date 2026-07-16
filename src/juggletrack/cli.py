@@ -130,7 +130,10 @@ def label(
         DetectorBackend.yolo,
         help="Detector backend. 'motion' (MOG2 background subtraction) is a "
         "cold-start bootstrap for footage where the appearance detector fails "
-        "(static camera required); it IGNORES --model/--conf/--imgsz.",
+        "(static camera required); it IGNORES --model/--conf/--imgsz. Motion "
+        "labels also get their box sizes physics-calibrated (see "
+        "calibrate_label_boxes) before export, since raw motion-blob boxes "
+        "underestimate ball size and vary with speed.",
     ),
     model: str = typer.Option("yolo11n.pt"),
     conf: float = typer.Option(0.05),
@@ -143,7 +146,11 @@ def label(
 ) -> None:
     """Auto-label a video: arc-verified detections become COCO 'ball' boxes."""
     from juggletrack.arcs.extract import extract_arcs
-    from juggletrack.data.autolabel import export_video_labels, select_autolabels
+    from juggletrack.data.autolabel import (
+        calibrate_label_boxes,
+        export_video_labels,
+        select_autolabels,
+    )
 
     out_dir = out or Path("outputs") / "labels" / video.stem
     if detector == DetectorBackend.motion:
@@ -168,6 +175,8 @@ def label(
         dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
     arcs = extract_arcs(dets, link_max_dist=link_max_dist)
     labels, review = select_autolabels(dets, arcs)
+    if detector == DetectorBackend.motion:
+        labels = calibrate_label_boxes(labels, arcs)
     stats = export_video_labels(video, labels, out_dir, review_frames=review)
     typer.echo(
         f"{stats['n_images']} images, {stats['n_boxes']} boxes, "

@@ -3,9 +3,13 @@ import json
 import pytest
 
 from juggletrack.arcs.extract import extract_arcs
-from juggletrack.data.autolabel import export_video_labels, select_autolabels
+from juggletrack.data.autolabel import (
+    calibrate_label_boxes,
+    export_video_labels,
+    select_autolabels,
+)
 from juggletrack.sim import simulate_cascade
-from juggletrack.types import Detection
+from juggletrack.types import Arc, Detection
 from tests.helpers import write_test_video
 
 
@@ -67,3 +71,62 @@ def test_export_bbox_matches_normalized_center(tmp_path):
     export_video_labels(video, [lb], out)
     coco = json.loads((out / "annotations.json").read_text())
     assert coco["annotations"][0]["bbox"] == pytest.approx([144.0, 96.0, 32.0, 48.0])
+
+
+def _hand_crafted_arc(arc_id: int = 0, t_start: float = 0.0, n_points: int = 16) -> Arc:
+    """Same flight shape as tests/test_drops.py's `_make_floor_candidate`: thrown
+    from hand_line=0.65 with g=2.0 (ay=1.0). apex at dt=0.55, catch at dt=1.1.
+    """
+    return Arc(
+        id=arc_id, t_start=t_start, t_end=t_start + 1.1,
+        ay=1.0, by=-1.1, cy=0.65, bx=0.0, cx=0.5,
+        n_points=n_points, rmse=0.0,
+    )
+
+
+def _labels_on_arc(arc: Arc, n: int = 16) -> list[Detection]:
+    """n labels evenly spaced across the arc's flight, each lying exactly on it
+    (zero residual, so `assign_detections` accepts all of them). Box size is
+    0.05 for the slowest quarter (nearest the apex -- with bx=0 here, |vy| is
+    exactly proportional to |dt - apex_dt|, so ranking by time-to-apex is
+    identical to ranking by speed) and 0.02 for the rest: a real motion blob
+    measures the ball cleanly at low speed and smears it at high speed.
+    """
+    dts = [arc.duration() * i / (n - 1) for i in range(n)]
+    apex_dt = arc.apex_t() - arc.t_start
+    order = sorted(range(n), key=lambda i: abs(dts[i] - apex_dt))
+    slow_idx = set(order[: round(0.25 * n)])
+    labels = []
+    for i, dt in enumerate(dts):
+        t = arc.t_start + dt
+        w = h = 0.05 if i in slow_idx else 0.02
+        labels.append(Detection(frame_idx=i, t=t, x=arc.x_at(t), y=arc.y_at(t), w=w, h=h))
+    return labels
+
+
+def test_calibrate_label_boxes_uses_slow_point_size():
+    arc = _hand_crafted_arc()
+    labels = _labels_on_arc(arc, n=16)
+    calibrated = calibrate_label_boxes(labels, [arc])
+    assert all(lb.w == pytest.approx(0.05) and lb.h == pytest.approx(0.05) for lb in calibrated)
+
+
+def test_calibrate_label_boxes_quorum_guard():
+    arc = _hand_crafted_arc()
+    labels = _labels_on_arc(arc, n=16)[:3]
+    # below the 8-assigned-label quorum: unchanged
+    calibrated = calibrate_label_boxes(labels, [arc])
+    assert calibrated == labels
+    # no arcs at all: unchanged too
+    assert calibrate_label_boxes(labels, []) == labels
+
+
+def test_calibrate_label_boxes_preserves_centers():
+    arc = _hand_crafted_arc()
+    labels = _labels_on_arc(arc, n=16)
+    calibrated = calibrate_label_boxes(labels, [arc])
+    for before, after in zip(labels, calibrated):
+        assert after.x == pytest.approx(before.x)
+        assert after.y == pytest.approx(before.y)
+        assert after.frame_idx == before.frame_idx
+        assert after.t == pytest.approx(before.t)

@@ -7,6 +7,8 @@ verify go to the review manifest for a human pass.
 from __future__ import annotations
 
 import json
+import math
+import statistics
 from pathlib import Path
 
 import cv2
@@ -36,6 +38,60 @@ def select_autolabels(
             "h": d.h if d.h > 0 else default_box,
         }))
     return labels, sorted(review_frames)
+
+
+def calibrate_label_boxes(
+    labels: list[Detection], arcs: list[Arc], *, slow_quantile: float = 0.25,
+) -> list[Detection]:
+    """Replace motion-derived box sizes with a physics-calibrated canonical size.
+
+    Diagnosis: motion blobs systematically underestimate ball size, and the
+    error varies with speed -- a fast-moving ball smears across the frame
+    during its exposure window (motion blur / MOG2 tail), so its detected
+    blob is narrower than the ball's true extent, while a ball near its
+    arc's apex (low |velocity|) is essentially stationary for that frame and
+    yields a blob close to the true size. A ball's physical size is ~constant
+    within one video, so the apex-region boxes are the trustworthy sample.
+
+    Method: assign each label to its arc (same acceptance rule as
+    `select_autolabels`'s precision gate), compute each assigned label's
+    speed from the arc model (`hypot(vy_at(t), bx)`), pool speeds globally
+    across all arcs (not per-arc), and take the slowest `slow_quantile`
+    fraction. The canonical box is the median w and median h of that slow
+    subset. Every label's box (assigned or not) is replaced with this
+    canonical size; centers (x, y) are never touched.
+
+    Needs a quorum to trust the estimate: fewer than 8 assigned labels, or
+    no arcs at all, returns `labels` unchanged.
+    """
+    if not arcs:
+        return labels
+
+    assignment = assign_detections(labels, arcs)
+    arc_by_id = {a.id: a for a in arcs}
+
+    # (speed, w, h) for every label that landed on an arc -- pooled globally
+    # across arcs, per the spec, not bucketed per-arc.
+    assigned: list[tuple[float, float, float]] = []
+    for lb, arc_id in zip(labels, assignment):
+        arc = arc_by_id.get(arc_id)
+        if arc is None:
+            continue
+        speed = math.hypot(arc.vy_at(lb.t), arc.bx)
+        assigned.append((speed, lb.w, lb.h))
+
+    if len(assigned) < 8:
+        return labels
+
+    assigned.sort(key=lambda s: s[0])
+    n_slow = max(1, round(slow_quantile * len(assigned)))
+    slow = assigned[:n_slow]
+    canon_w = statistics.median(w for _, w, _ in slow)
+    canon_h = statistics.median(h for _, _, h in slow)
+
+    # Uniform size applies to ALL labels, including any with arc_id == -1
+    # (shouldn't exist post-select_autolabels, but handled here too).
+    return [lb.model_copy(update={"w": canon_w, "h": canon_h}) for lb in labels]
 
 
 def export_video_labels(
