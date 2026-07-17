@@ -29,15 +29,50 @@ def _union_rect(boxes: list[list[float]]) -> tuple[float, float, float, float]:
     return x_min, y_min, x_max, y_max
 
 
+def _max_coverage_offset(
+    box_los: list[float], box_his: list[float], side: int, img_dim: int,
+) -> float:
+    """Best-effort fallback for when the full union can't fit in `side`:
+    pick the offset (within image bounds) that keeps the most per-axis box
+    extents fully inside the [offset, offset+side] window. Candidates are
+    each box's natural window edges — the optimal window boundary always
+    aligns with some box's edge, so this is exhaustive, not heuristic."""
+    lo_bound, hi_bound = 0.0, float(img_dim - side)
+    candidates = sorted({
+        min(max(v, lo_bound), hi_bound)
+        for lo, hi in zip(box_los, box_his)
+        for v in (lo, hi - side)
+    })
+    best_off, best_count = lo_bound, -1
+    for off in candidates:
+        count = sum(
+            1 for lo, hi in zip(box_los, box_his)
+            if lo >= off - 1e-6 and hi <= off + side + 1e-6
+        )
+        if count > best_count:
+            best_off, best_count = off, count
+    return best_off
+
+
 def _axis_position(
     center: float, side: int, img_dim: int,
-    union_lo: float, union_hi: float, jitter: float,
+    union_lo: float, union_hi: float,
+    box_los: list[float], box_his: list[float],
+    jitter: float,
 ) -> float:
-    """Clamp a jittered axis position so the square stays within the image
-    and still fully contains the union rect on this axis."""
+    """Position a `side`-length window on this axis.
+
+    Normal case: clamp a jittered, ex-rect-centered window so it stays within
+    the image and still fully contains the union rect on this axis. When the
+    union (boxes spread across more of the frame than `side` allows — real
+    on portrait footage with a wide vertical throw range) can't fit even
+    without jitter, fall back to the offset that keeps the most boxes inside;
+    genuine outliers get dropped downstream, not silently mispositioned.
+    """
     lo = max(0.0, union_hi - side)
     hi = min(float(img_dim - side), union_lo)
-    assert lo <= hi + 1e-6, "expanded square too small to contain box union"
+    if lo > hi + 1e-6:
+        return _max_coverage_offset(box_los, box_his, side, img_dim)
     base = min(max(center - side / 2.0, lo), hi)
     return min(max(base + jitter, lo), hi)
 
@@ -62,8 +97,13 @@ def _positive_crop_rect(
     dx = rng.uniform(-jitter_max, jitter_max)
     dy = rng.uniform(-jitter_max, jitter_max)
 
-    x = _axis_position(cx, side, img_w, x_min, x_max, dx)
-    y = _axis_position(cy, side, img_h, y_min, y_max, dy)
+    box_x_los = [b[0] for b in boxes]
+    box_x_his = [b[0] + b[2] for b in boxes]
+    box_y_los = [b[1] for b in boxes]
+    box_y_his = [b[1] + b[3] for b in boxes]
+
+    x = _axis_position(cx, side, img_w, x_min, x_max, box_x_los, box_x_his, dx)
+    y = _axis_position(cy, side, img_h, y_min, y_max, box_y_los, box_y_his, dy)
 
     # final integer-rounding safety clamp (side/positions must stay in bounds)
     x_i = min(max(int(round(x)), 0), img_w - side)
@@ -105,6 +145,7 @@ def crop_coco_source(
     ball_rel_before: list[float] = []
     ball_rel_after: list[float] = []
     crop_sides: list[int] = []
+    n_boxes_dropped_oob = 0
 
     for im in coco["images"]:
         img_w, img_h = im["width"], im["height"]
@@ -132,8 +173,14 @@ def crop_coco_source(
         for a in anns:
             bx, by, bw, bh = a["bbox"]
             nx, ny = bx - x, by - y
-            assert nx >= -1e-6 and ny >= -1e-6, "box fell outside crop"
-            assert nx + bw <= side + 1e-6 and ny + bh <= side + 1e-6, "box fell outside crop"
+            # Normally guaranteed by the union logic above. The one exception
+            # is a box union spread across more of the frame than the square
+            # can cover (real on portrait footage with clustered-but-not-all
+            # boxes) — _axis_position's max-coverage fallback keeps most
+            # boxes, but true outliers land outside and are dropped here.
+            if nx < -1e-6 or ny < -1e-6 or nx + bw > side + 1e-6 or ny + bh > side + 1e-6:
+                n_boxes_dropped_oob += 1
+                continue
             out_annotations.append({
                 "id": next_ann_id,
                 "image_id": im["id"],
@@ -165,4 +212,5 @@ def crop_coco_source(
         "median_crop_px": median(crop_sides),
         "median_ball_rel_before": median(ball_rel_before),
         "median_ball_rel_after": median(ball_rel_after),
+        "n_boxes_dropped_oob": n_boxes_dropped_oob,
     }

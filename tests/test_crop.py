@@ -135,6 +135,36 @@ def test_stats_fields_sane(tmp_path):
     assert stats["median_ball_rel_after"] > stats["median_ball_rel_before"]
 
 
+def test_union_taller_than_image_width_drops_outliers_without_crashing(tmp_path):
+    # Portrait frame where ball boxes are spread over more vertical range than
+    # the image is wide (plausible for a 3-ball cascade shot close-up): a
+    # square crop can't contain the full union while staying in image bounds.
+    # This should degrade gracefully (drop the outlier boxes that can't fit,
+    # tracked in stats) rather than crash.
+    boxes = [
+        (550.0, 240.0, 20.0, 20.0),
+        (560.0, 700.0, 20.0, 20.0),
+        (555.0, 900.0, 20.0, 20.0),
+        (565.0, 1470.0, 20.0, 20.0),
+    ]
+    src = make_source(tmp_path, "vid", [(1080, 1920, boxes)])
+    out = tmp_path / "out"
+    stats = crop_coco_source(src, out, crop=640, margin=0.35, seed=0)
+    coco = load_out(out)
+    im = coco["images"][0]
+    assert im["width"] == im["height"]
+    # some boxes near the clustered middle are kept
+    assert len(coco["annotations"]) >= 2
+    assert len(coco["annotations"]) < len(boxes)
+    for ann in coco["annotations"]:
+        bx, by, bw, bh = ann["bbox"]
+        assert bx >= 0 and by >= 0
+        assert bx + bw <= im["width"]
+        assert by + bh <= im["height"]
+    assert stats["n_boxes_dropped_oob"] == len(boxes) - len(coco["annotations"])
+    assert stats["n_boxes_dropped_oob"] > 0
+
+
 def test_deterministic_output(tmp_path):
     src = make_source(tmp_path, "vid", [
         (1080, 1920, [(500.0, 900.0, 17.0, 24.0)]),
