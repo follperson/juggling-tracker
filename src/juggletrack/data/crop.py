@@ -192,7 +192,11 @@ def crop_coco_source(
             next_ann_id += 1
             ball_px_before.append(bw)
             ball_px_after.append(bw)
-            ball_rel_before.append(bw / img_w)
+            # "before" = relative to the full frame as YOLO actually sees it
+            # pre-crop: letterboxing scales the LONGER side down to imgsz, so
+            # the long side (not the width) is the right divisor for
+            # portrait frames. "after" = relative to the (square) crop side.
+            ball_rel_before.append(bw / max(img_w, img_h))
             ball_rel_after.append(bw / side)
 
     (out / "annotations.json").write_text(json.dumps({

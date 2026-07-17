@@ -165,6 +165,18 @@ def test_union_taller_than_image_width_drops_outliers_without_crashing(tmp_path)
     assert stats["n_boxes_dropped_oob"] > 0
 
 
+def test_ball_rel_before_uses_long_side_not_width(tmp_path):
+    # YOLO letterboxes to imgsz by scaling the LONGER side down to imgsz, so
+    # a ball's "before" relative size (full uncropped frame fed to the net)
+    # must be measured against the long side (height, for portrait), not the
+    # width -- otherwise the reported win doesn't match what YOLO actually
+    # sees. A 1080x1920 frame with an 18px-wide ball: before = 18/1920.
+    src = make_source(tmp_path, "vid", [(1080, 1920, [(500.0, 900.0, 18.0, 20.0)])])
+    out = tmp_path / "out"
+    stats = crop_coco_source(src, out, crop=640, seed=0)
+    assert stats["median_ball_rel_before"] == pytest.approx(18.0 / 1920)
+
+
 def test_deterministic_output(tmp_path):
     src = make_source(tmp_path, "vid", [
         (1080, 1920, [(500.0, 900.0, 17.0, 24.0)]),
