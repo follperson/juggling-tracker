@@ -106,8 +106,12 @@ def extract_arcs(
     *,
     # Floor lowered 0.5 -> 0.1: normalized gravity scales with framing (a tight
     # crop shrinks ay below the old 0.25 ay-floor and zeroed out extraction on
-    # ground-truth footage). The absolute band now only rejects near-linear
-    # junk (ay ~= 0); cohort consistency is _gravity_prune's job.
+    # ground-truth footage). KNOWN GAP accepted with this change: a cohort of
+    # SELF-consistent slow-drift junk (ay in [0.05, 0.25)) now survives — the
+    # median-relative _gravity_prune only rejects outliers within a cohort, it
+    # cannot invalidate a junk-consistent cohort, and the old absolute floor
+    # was the sole defense. Pinned by test_slow_drift_junk_cohort_known_gap;
+    # the principled fix is the spec-§4 periodicity run-validator (unbuilt).
     g_range: tuple[float, float] = (0.1, 8.0),
     link_max_dt: float = 0.12,
     link_max_dist: float = 0.08,

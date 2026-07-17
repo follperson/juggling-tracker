@@ -312,3 +312,45 @@ def test_held_balls_survive_filter():
     r = simulate_cascade(n_throws=1, fps=30.0, include_held=True, seed=5)
     dets = list(r.detections)
     assert filter_static_detections(dets) == dets
+
+
+def test_slow_drift_junk_cohort_known_gap():
+    """KNOWN GAP pin (final review of the turn-2/3 branch): the framing fix
+    (gravity floor ay 0.25 -> 0.05, commit 73b0b0f) admits SELF-consistent
+    slow-drift junk cohorts that the old absolute floor rejected, because
+    _gravity_prune is median-relative and cannot invalidate a cohort that
+    agrees with itself.
+
+    This test documents the accepted tradeoff by asserting the CURRENT
+    behavior: three smooth drift paths with ay ~= 0.1 and apex rise ~0.036
+    (would have failed both the old 0.25 ay-floor and the old 0.05 apex
+    guard) chain into a run with catches. When the spec-§4 periodicity
+    run-validator (or another junk-cohort defense) lands, this scenario
+    SHOULD stop producing runs — flip these assertions then; do not treat
+    this test as endorsement of the behavior.
+
+    Note the paths must be spatially SEPARATED and drift briskly: slow
+    drifters sharing spatial bins are already killed by
+    filter_static_detections (verified while building this fixture), so
+    the residual gap is specifically well-separated smooth movers.
+    """
+    from juggletrack.analyze import analyze_detections
+    from juggletrack.types import Detection
+
+    fps = 30.0
+    dets = []
+    for k in range(3):
+        t0 = 0.5 + k * 0.7
+        v0, a = 0.12, 0.1  # apex rise v0^2/(4a) = 0.036; fitted ay ~= a
+        for i in range(int(1.2 * fps)):
+            dt = i / fps
+            dets.append(Detection(
+                frame_idx=int((t0 + dt) * fps), t=t0 + dt,
+                x=0.15 + 0.22 * k + 0.15 * dt,
+                y=0.6 - v0 * dt + a * dt * dt,
+            ))
+    sr = analyze_detections(dets)
+    assert len(sr.arcs) == 3, "drift paths currently fit as plausible arcs"
+    assert len(sr.runs) >= 1 and sum(r.catches for r in sr.runs) >= 1, (
+        "junk cohort currently mints a run+catches — the documented gap"
+    )
