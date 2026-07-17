@@ -13,7 +13,7 @@ from juggletrack.types import Detection, Run, SessionResult
 
 
 class AnalyzeConfig(BaseModel):
-    g_range: tuple[float, float] = (0.5, 8.0)
+    g_range: tuple[float, float] = (0.1, 8.0)
     resid_tol: float = 0.02
     min_points: int = 6
     min_duration: float = 0.15

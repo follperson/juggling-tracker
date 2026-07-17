@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from juggletrack.analyze import AnalyzeConfig, analyze_detections
-from juggletrack.sim import simulate_cascade
+from juggletrack.sim import CascadeParams, simulate_cascade
 from juggletrack.types import SessionResult
 
 
@@ -77,3 +77,29 @@ def test_config_plumbs_linker_knobs():
 
     assert len(sr_wide.arcs) >= 4
     assert len(sr_default.arcs) < len(sr_wide.arcs)
+
+
+def test_low_gravity_framing_recovers_events():
+    """Normalized gravity is a framing artifact, not a physical constant.
+
+    Meschke's tightly-cropped ground-truth footage has true-ball ay ~= 0.177
+    -- below extract_arcs's pre-fix absolute floor of g_range[0]/2 == 0.25,
+    so a perfectly clean, correctly-tracked cascade shot with that framing
+    gets every arc pruned and the whole run vanishes (see
+    .superpowers/sdd/meschke-import-report.md). Reproduce the failure mode
+    directly with the simulator instead of real footage: CascadeParams(g=0.35)
+    yields ay = g/2 = 0.175, in the same dead zone.
+
+    Sim geometry check (kept here, not assumed): flight_s = n_balls*period_s
+    - dwell_s = 3*0.45 - 0.25 = 1.1s (independent of g). v0 = g*flight_s/2
+    = 0.35*1.1/2 ~= 0.1925. Apex rise = v0**2/(2*g) ~= 0.1925**2/0.7 ~= 0.053.
+    hand_y defaults to 0.65, so the apex sits at y ~= 0.597 -- a shallow arc
+    that stays safely inside [0, 1] (asserted below), unlike a naive low-g
+    scenario that might send the ball out of frame.
+    """
+    r = simulate_cascade(n_throws=12, fps=30.0, seed=1, params=CascadeParams(g=0.35))
+    assert all(0.0 <= d.y <= 1.0 and 0.0 <= d.x <= 1.0 for d in r.detections)
+
+    sr = analyze_detections(r.detections)
+    assert len(sr.runs) == 1
+    assert abs(sr.runs[0].catches - 12) <= 1

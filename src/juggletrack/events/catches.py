@@ -36,7 +36,11 @@ def derive_events(
     arcs: list[Arc],
     hand_line: float,
     *,
-    min_apex_above: float = 0.05,
+    # 0.05 -> 0.02: like the gravity floor, an absolute normalized height is a
+    # framing artifact — tight crops / shallow patterns compress apex height.
+    # Bounce/noise rejection is unaffected (their apexes never clear the hand
+    # line at all); a cohort-relative guard is future work if 0.02 ever bites.
+    min_apex_above: float = 0.02,
     floor_margin: float = FLOOR_MARGIN,
 ) -> tuple[list[ThrowEvent], list[CatchEvent]]:
     throws: list[ThrowEvent] = []

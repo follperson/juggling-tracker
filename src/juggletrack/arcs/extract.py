@@ -104,7 +104,11 @@ def filter_static_detections(
 def extract_arcs(
     dets: list[Detection],
     *,
-    g_range: tuple[float, float] = (0.5, 8.0),
+    # Floor lowered 0.5 -> 0.1: normalized gravity scales with framing (a tight
+    # crop shrinks ay below the old 0.25 ay-floor and zeroed out extraction on
+    # ground-truth footage). The absolute band now only rejects near-linear
+    # junk (ay ~= 0); cohort consistency is _gravity_prune's job.
+    g_range: tuple[float, float] = (0.1, 8.0),
     link_max_dt: float = 0.12,
     link_max_dist: float = 0.08,
     resid_tol: float = 0.02,
