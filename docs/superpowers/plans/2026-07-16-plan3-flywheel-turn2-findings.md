@@ -215,3 +215,89 @@ Post-filter = detections surviving `filter_static_detections` (the static-clutte
 - Datasets: `/Users/andrew.follmann/personal-projects/juggling/datasets/flywheel-v2/` (control) and `/Users/andrew.follmann/personal-projects/juggling/datasets/flywheel-v2b/`
 - Weights: `/Users/andrew.follmann/personal-projects/juggling/models/juggletrack-ft-v2-control/best.pt`, `/Users/andrew.follmann/personal-projects/juggling/models/juggletrack-ft-v2b/best.pt`
 - Execution notes: `.superpowers/sdd/turn2-report.md`, `.superpowers/sdd/turn2-staticfilter-report.md`, `.superpowers/sdd/turn2-motion-report.md` (worktree)
+
+## Turn 2c: calibrated boxes × 40-epoch recipe
+
+Turn 2c ran the two follow-ups the v2b caveats demanded, together: (1) physics-calibrated box sizes for motion-derived labels (commit `aa73d8a` — `calibrate_label_boxes` in `src/juggletrack/data/autolabel.py`, wired into `label --detector motion`), and (2) the 40-epoch turn-1 recipe on the geometry-cleaned corpus (the "retrain with the v1 recipe" next-step from above). One training run tests both hypotheses because corpus v2c differs from v2b **only** in box geometry, and ft-v2c differs from ft-v2b's setup **only** in geometry + epochs.
+
+### Calibration: what it did to the boxes
+
+`calibrate_label_boxes` assigns each auto-label to its arc, computes speed at its timestamp from the arc model (`hypot(vy_at(t), bx)`), takes the slowest 25% (near-apex, where a motion blob captures the ball cleanly instead of a blur streak), and replaces every box in the video with the median w × h of that slow subset (centers untouched; quorum guard: <8 assigned labels or no arcs → unchanged). Re-exported all five motion-label dirs to `outputs/flywheel-t2/labels-motion-cal/<stem>/` (raw detections.jsonl replayed for 182734164/191622045; fresh stride-1 motion re-detect for the other three). Image/box counts identical to the uncalibrated export on all five — calibration touches only geometry, never selection.
+
+| stem | before median w×h (px) | before p75 w×h | after (uniform) w×h |
+|---|---|---|---|
+| 182734164 | 17 × 20 | 36 × 45 | 19 × 24 |
+| 182847912 | 15 × 16 | 26 × 25 | 15.5 × 16 |
+| 182922676 | 16 × 20 | 28 × 37 | 18 × 20 |
+| 183035587 | 15 × 19 | 24 × 35 | 15 × 20 |
+| 191622045 | 15 × 17 | 26 × 31 | 14.5 × 15 |
+
+**The sanity check went the honest way:** calibrated sizes did NOT land near the 40–60px YOLO norm — the slow-point estimate says these balls really ARE ~15–24px in this portrait framing. What calibration fixed is the speed-dependent variance: the p75 streak tails (24–45px) collapse to one per-video canonical size. The "~42–60px YOLO-derived" comparison in the diagnosis came from other footage/looser YOLO boxes, not from a defect in these blobs.
+
+### Corpus v2c
+
+`assemble_dataset([af2, pxl, yt-3ball, yt-5easy, 5 × labels-motion-cal], datasets/flywheel-v2c, val_fraction=0.2, seed=0)`: train 4,026 images / 10,708 boxes (af2, pxl, yt-3ball, yt-5easy, 182922676, 183035587, 191622045); val 939 images / 4,346 boxes (182734164, 182847912). Identical counts and split to v2b — seed-0 permutation is deterministic over the same 9-source list — so v2c vs v2b is a clean geometry A/B.
+
+### Training ft-v2c (40 epochs, the v1 recipe)
+
+Same recipe as turn 1 (base `yolo11n.pt`, imgsz 640, device mps, AdamW lr0=0.002 auto, batch 16), 40 epochs in ~84 min. Best epoch **29**: val mAP50 **0.0237** (mAP50-95 0.0077, P 0.158, R 0.042). The val curve is as noisy and flat as v2b's (never exceeds 0.024). **Metric caveat and root cause:** val is 100% motion-labeled new-env portrait footage (seed-0 sent both portrait sources to val), and the calibrated boxes are ~15–19px at 1080×1920 — which is **~6px after the 640 resize, below what YOLO-nano can learn or detect**. The val metric was structurally doomed at this imgsz regardless of geometry quality; it measures the resolution problem, not label quality. Weights: `/Users/andrew.follmann/personal-projects/juggling/models/juggletrack-ft-v2c/best.pt`; per-epoch metrics: `/Users/andrew.follmann/personal-projects/juggling/runs/detect/runs/finetune/flywheel-v2c/results.csv`.
+
+### Coverage: five-way (fresh detection, `--conf 0.05 --stride 2`; ft-v2c also probed at imgsz 1280 on the holdouts)
+
+**af1.mov — TURN-1 HOLDOUT (600 sampled frames):**
+
+| Model | ≥1 | ≥2 | ≥3 | Post-filter dets |
+|---|---|---|---|---|
+| stock | 64.0% | 44.2% | 18.3% | 785 (−0.0%) |
+| **ft-v1** | **99.7%** | **95.8%** | **92.3%** | 1,400 (−60.1%) |
+| ft-v2b | 70.3% | 55.8% | 34.2% | 1,078 (−0.0%) |
+| ft-v2c @640 | 69.8% | 61.0% | 40.5% | 1,208 (−0.0%) |
+| ft-v2c @1280 | 58.3% | 30.8% | 12.8% | 660 (−0.0%) |
+
+**PXL_20260716_191702756 — NEW-ENV HOLDOUT (177 sampled frames):**
+
+| Model | ≥1 | ≥2 | ≥3 | Post-filter dets |
+|---|---|---|---|---|
+| stock | 4.0% | 0.0% | 0.0% | 7 (−0.0%) |
+| ft-v1 | 74.6% | 53.1% | 29.4% | 328 (−0.0%) |
+| ft-v2b | 31.1% | 7.9% | 4.0% | 91 (−0.0%) |
+| ft-v2c @640 | 11.9% | 9.6% | 4.0% | 49 (−0.0%) |
+| **ft-v2c @1280** | **78.5%** | **55.4%** | **45.2%** | 324 (−22.1%) |
+
+**af2.mp4 (train source, 536 sampled):** stock 75.6/56.9/33.2 · ft-v1 98.9/92.5/86.9 · ft-v2b 89.0/75.2/45.1 · ft-v2c @640 79.9/68.1/37.3.
+
+**PXL_20260716_182734164 (val source for v2b AND v2c, 750 sampled):** stock 41.6/5.3/0.0 · ft-v1 97.2/56.9/38.5 · ft-v2b 87.7/48.3/2.9 · ft-v2c @640 77.2/39.9/17.9.
+
+The @1280 row is the turn's headline: the same 640-trained weights go from 49 detections (9.6% ≥2) to 416 detections (**55.4% ≥2, 45.2% ≥3**) on the never-labeled new-env holdout — matching ft-v1@640's 53.1% ≥2 with a nearly identical post-static-filter count (324 vs 328), and beating its ≥3 (45.2% vs 29.4%). And the inverse happens on af1 (61.0%→30.8% ≥2 going 640→1280): scale mismatch cuts both ways — upscaling inference pushes af1's already-large balls out of the training scale distribution exactly as it pulls the portrait balls into it.
+
+### Events on the holdouts (ft-v2c @640, stride 1, overlays + intermediates saved)
+
+| | af1 stock | af1 ft-v1 | af1 ft-v2b | af1 ft-v2c | 191702756 ft-v2b | 191702756 ft-v2c |
+|---|---|---|---|---|---|---|
+| Detections | 1,529 | 7,025 | 2,144 | 2,400 | 189 | 106 |
+| Arcs | 60 | 58 | 60 | 62 | 7 | 2 |
+| Runs | 3 | 3 | 3 | 3 | 0 | 0 |
+| Total catches | 39 | 55 | 42 | 50 | 0 | 0 |
+| Drops | 2 | 0 | 1 | 2 | 0 | 0 |
+
+- **af1 / ft-v2c:** runs 2.13–2.90 s (1 catch), 8.52–11.19 s (20), 23.23–25.08 s (29); 2 drops at t=35.92/36.12 s (both floor_descent + periodicity_collapse — same event double-fired across adjacent arcs). Catch total 50 is the closest any v2-family model has come to ft-v1's 55, and the 2 drops match stock's Plan-2 baseline count.
+- **191702756 / ft-v2c @640:** 106 detections → 2 arcs → 0 runs, 0 drops. Still no event output on the new-env holdout at 640 — consistent with the resolution root cause (the @1280 coverage says the balls ARE detectable by these weights when they're big enough; an @1280 analyze pass is the obvious turn-3 follow-up once the ROI path lands).
+- Overlays: `/Users/andrew.follmann/personal-projects/juggling/outputs/flywheel-t2/analyze-ftv2c/{af1,PXL_20260716_191702756}/overlay.mp4`.
+
+### Hypothesis verdicts
+
+1. **Schedule hypothesis — REFUTED as the dominant factor.** The prediction was that the 40-epoch recipe "recovers most of the gap" to ft-v1. It did not: ft-v2c@640 lands within a few points of ft-v2b on every row (af1 ≥2: 61.0% vs 55.8%; af2: 68.1% vs 75.2%; 182734164: 39.9% vs 48.3%) — ~35 pp below ft-v1 on af1. Schedule mattered on *identical* data (ft-v2-control showed that), but 40 epochs cannot rescue a corpus whose new-env half is unlearnable at the training resolution. The turn-2 "schedule dominates data" reading is dead; **resolution dominates both**.
+2. **Geometry hypothesis — NOT DECIDABLE AT 640, weakly positive.** v2c vs v2b (same data, cleaned geometry, +20 epochs) moved af1 ≥2/≥3 up (+5.2/+6.3 pp) but af2 and 182734164 down. Any geometry effect is swamped by the ~6px-ball problem: boxes whose objects the network cannot see at all cannot reward better box extents. Calibration itself is validated (uniform, physically-grounded sizes; selection unchanged) and stays in the pipeline; re-judge it after the resolution fix.
+3. **Resolution (root cause, confirmed by the @1280 probe).** The new-env holdout jumps 9.6%→55.4% ≥2 at inference imgsz 1280 with no retraining — the balls were below the detectable-size floor at 640, not unrecognizable. This converts turn 2's "dark balls on foliage are hard" story into a concrete, fixable geometry problem.
+
+### Forward path (turn 3)
+
+The structural fix is already built: **action-ROI cropped export** (commits `f464d11`..`032177c`) crops label frames to the juggling action region so the ball's relative size at training resolution matches what the detector needs, plus the Roboflow adapter (`e9f55a1`) and Meschke importer (`575f996`) for external small-ball corpora. Turn 3 should assemble an ROI-cropped corpus (mixed val split — one old-env + one new-env source, per the turn-2 next-steps), retrain with the 40-epoch recipe, and re-run this table; the @1280 result predicts a large new-env gain at native 640 inference cost.
+
+### Turn 2c artifacts (not committed)
+
+- Calibrated label corpora: `/Users/andrew.follmann/personal-projects/juggling/outputs/flywheel-t2/labels-motion-cal/{182734164,182847912,182922676,183035587,191622045}/`
+- Dataset: `/Users/andrew.follmann/personal-projects/juggling/datasets/flywheel-v2c/`
+- Weights: `/Users/andrew.follmann/personal-projects/juggling/models/juggletrack-ft-v2c/best.pt`
+- Holdout analyses + overlays: `/Users/andrew.follmann/personal-projects/juggling/outputs/flywheel-t2/analyze-ftv2c/{af1,PXL_20260716_191702756}/`
+- Execution notes: `.superpowers/sdd/turn2c-report.md` (worktree)
