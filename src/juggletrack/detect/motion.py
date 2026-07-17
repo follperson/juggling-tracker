@@ -31,6 +31,7 @@ class MotionDetector:
         min_area: float = 2e-5,
         max_area: float = 4e-3,
         warmup_frames: int = 10,
+        max_blobs: int = 12,
     ):
         import cv2  # lazy: keep cv2 out of module load, per detect/ package constraint
 
@@ -42,6 +43,7 @@ class MotionDetector:
         self.min_area = min_area
         self.max_area = max_area
         self.warmup_frames = warmup_frames
+        self.max_blobs = max_blobs
         self._n_calls = 0
 
     def detect(self, frame: np.ndarray, frame_idx: int, t: float) -> list[Detection]:
@@ -75,4 +77,15 @@ class MotionDetector:
                 w=bw / w, h=bh / h,
                 confidence=0.5,
             ))
+
+        # Busy-frame guard: a MOVING camera makes MOG2 fire on nearly the
+        # whole frame (hundreds of blobs on harvested footage), which floods
+        # downstream arc extraction with junk detections -- both quality
+        # (garbage arcs) and performance (extract_arcs' pairwise merge pass
+        # is quadratic in arc count, and thousands of spurious short-lived
+        # fragments from a busy scene blow that up to minutes). A frame this
+        # cluttered can't be trusted as ball motion, so drop it entirely
+        # rather than pass junk downstream.
+        if len(out) > self.max_blobs:
+            return []
         return out

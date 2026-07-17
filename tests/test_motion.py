@@ -105,3 +105,58 @@ def test_static_object_absorbed(tmp_path):
     assert scored > 0
     assert static_hits / scored < 0.10
     assert moving_hits / scored >= 0.8
+
+
+def _feed_black_warmup(det, n: int, size: tuple[int, int]) -> None:
+    """Advance a MotionDetector past warmup on an all-black background so its
+    MOG2 model has learned a clean background before the frame under test."""
+    w, h = size
+    black = np.zeros((h, w, 3), dtype=np.uint8)
+    for i in range(n):
+        det.detect(black, i, i / 30.0)
+
+
+def test_busy_frame_guard_suppresses_dense_scene():
+    """Field motivation: harvested clips with a MOVING camera make MOG2 fire
+    on nearly the whole frame (hundreds of blobs), which floods downstream arc
+    extraction with junk (both quality and O(n^2)-blowup performance -- see
+    arcs/extract.py's _merge_pass). A frame this busy can't be trusted, so it
+    should be dropped outright rather than passed downstream.
+    """
+    from juggletrack.detect.motion import MotionDetector
+
+    size = (640, 480)
+    w, h = size
+    det = MotionDetector(warmup_frames=5, max_blobs=12)
+    _feed_black_warmup(det, det.warmup_frames + 1, size)
+
+    busy = np.zeros((h, w, 3), dtype=np.uint8)
+    n_blobs = 20  # > max_blobs
+    for j in range(n_blobs):
+        cx = 20 + j * 30
+        cv2.circle(busy, (cx, h // 2), 8, (255, 255, 255), -1)
+
+    idx = det.warmup_frames + 1
+    dets = det.detect(busy, idx, idx / 30.0)
+    assert dets == []
+
+
+def test_busy_frame_guard_lets_sparse_scene_through():
+    """The mirror case: a frame with <= max_blobs size-filtered blobs is not
+    considered busy and passes through normally."""
+    from juggletrack.detect.motion import MotionDetector
+
+    size = (640, 480)
+    w, h = size
+    det = MotionDetector(warmup_frames=5, max_blobs=12)
+    _feed_black_warmup(det, det.warmup_frames + 1, size)
+
+    sparse = np.zeros((h, w, 3), dtype=np.uint8)
+    n_blobs = 8  # <= max_blobs
+    for j in range(n_blobs):
+        cx = 40 + j * 70
+        cv2.circle(sparse, (cx, h // 2), 8, (255, 255, 255), -1)
+
+    idx = det.warmup_frames + 1
+    dets = det.detect(sparse, idx, idx / 30.0)
+    assert len(dets) == n_blobs
