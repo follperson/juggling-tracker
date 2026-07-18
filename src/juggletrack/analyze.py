@@ -9,7 +9,7 @@ from juggletrack.events.catches import derive_events
 from juggletrack.events.drops import detect_drops
 from juggletrack.events.handline import estimate_hand_line
 from juggletrack.events.runs import segment_runs
-from juggletrack.types import Detection, Run, SessionResult
+from juggletrack.types import Arc, Detection, Run, SessionResult
 
 
 class AnalyzeConfig(BaseModel):
@@ -48,6 +48,48 @@ class AnalyzeConfig(BaseModel):
     video_end_margin: float = CATCH_EXTRAPOLATION_MARGIN
 
 
+def _events_from_arcs(
+    arcs: list[Arc], dets_t_last: float, cfg: AnalyzeConfig
+) -> SessionResult:
+    """Post-extraction tail shared by every arc-set consumer (spec §3 data flow).
+
+    Everything after arc extraction is identical whether the arcs came from
+    ``analyze_detections``'s single global extraction or from
+    ``oracle_events``'s per-ball extraction + union (see
+    ``juggletrack.data.meschke_import``): hand-line estimate, throw/catch
+    derivation, run segmentation, drop detection, and the video-end
+    reclassification, all keyed only off the arc list and the timestamp of
+    the last real observation (``dets_t_last``) — never off how the arcs
+    were produced. Extracted so both callers share one code path instead of
+    two copies that could drift out of sync.
+    """
+    hand_line = estimate_hand_line(arcs)
+    throws, catches = derive_events(arcs, hand_line)
+    runs = segment_runs(
+        arcs, throws, catches, hand_line,
+        gap_factor=cfg.gap_factor, min_arcs=cfg.min_arcs,
+    )
+    drops, runs = detect_drops(arcs, runs, hand_line)
+
+    final: list[Run] = []
+    for run in runs:
+        # A "stop"-tagged run's end_t is only trustworthy when it lands at or
+        # before the last thing actually observed: a fully-witnessed catch's
+        # analytic hand-line-crossing time sits within a frame of the last
+        # detection. When the video/detection stream cuts out before the arc
+        # reaches the hand line, end_t is extrapolated from the fitted
+        # parabola well past t_last — that overshoot (not a small gap toward
+        # t_last) is the signal that the ending is unconfirmed.
+        if run.end_reason == "stop" and run.end_t - dets_t_last > cfg.video_end_margin:
+            run = run.model_copy(update={"end_reason": "video_end"})
+        final.append(run)
+
+    return SessionResult(
+        runs=final, drops=drops, arcs=arcs, hand_line_y=hand_line,
+        meta={"t_last": dets_t_last},
+    )
+
+
 def analyze_detections(
     dets: list[Detection], config: AnalyzeConfig | None = None
 ) -> SessionResult:
@@ -62,29 +104,7 @@ def analyze_detections(
         em_iters=cfg.em_iters,
         static_cell=cfg.static_cell, static_max_span_s=cfg.static_max_span_s,
     )
-    hand_line = estimate_hand_line(arcs)
-    throws, catches = derive_events(arcs, hand_line)
-    runs = segment_runs(
-        arcs, throws, catches, hand_line,
-        gap_factor=cfg.gap_factor, min_arcs=cfg.min_arcs,
-    )
-    drops, runs = detect_drops(arcs, runs, hand_line)
-
     t_last = max(d.t for d in dets)
-    final: list[Run] = []
-    for run in runs:
-        # A "stop"-tagged run's end_t is only trustworthy when it lands at or
-        # before the last thing actually observed: a fully-witnessed catch's
-        # analytic hand-line-crossing time sits within a frame of the last
-        # detection. When the video/detection stream cuts out before the arc
-        # reaches the hand line, end_t is extrapolated from the fitted
-        # parabola well past t_last — that overshoot (not a small gap toward
-        # t_last) is the signal that the ending is unconfirmed.
-        if run.end_reason == "stop" and run.end_t - t_last > cfg.video_end_margin:
-            run = run.model_copy(update={"end_reason": "video_end"})
-        final.append(run)
-
-    return SessionResult(
-        runs=final, drops=drops, arcs=arcs, hand_line_y=hand_line,
-        meta={"n_detections": len(dets), "t_last": t_last},
-    )
+    result = _events_from_arcs(arcs, t_last, cfg)
+    result.meta["n_detections"] = len(dets)
+    return result

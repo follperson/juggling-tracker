@@ -8,7 +8,9 @@ from juggletrack.data.meschke_import import (
     DEFAULT_BOX,
     export_meschke_source,
     load_meschke_trajectories,
+    oracle_events,
 )
+from juggletrack.sim import CascadeParams
 from tests.helpers import write_test_video
 
 
@@ -163,3 +165,71 @@ def test_export_meschke_source_raises_on_large_row_frame_mismatch(tmp_path):
 
     with pytest.raises(ValueError, match="row count"):
         export_meschke_source(csv_path, video_path, tmp_path / "out", frame_stride=5, max_frames=10)
+
+
+def _write_per_ball_cascade_csv(csv_path: Path, *, n_throws: int, fps: float, width: int, height: int) -> CascadeParams:
+    """Synthesize a Meschke-style per-ball CSV directly from simulate_cascade's
+    flight equations (module docstring: ``y(dt) = hand_y - v0*dt + g*dt^2/2``),
+    with balls assigned round-robin to flights (ball i%n_balls owns flight i,
+    the standard cascade assignment). Each ball's column only ever contains
+    that ball's own points -- exactly how the real Meschke corpus is shaped,
+    and why oracle_events (per-ball extraction) has no cross-ball interference
+    to skip: there is none to skip, by construction.
+    """
+    p = CascadeParams()
+    t_first = 0.5
+    flights = []  # (ball, t0, x0, x1, dur)
+    for i in range(n_throws):
+        t0 = t_first + i * p.period_s
+        hand = i % 2
+        flights.append((i % p.n_balls, t0, p.hand_x(hand), p.hand_x(1 - hand), p.flight_s))
+
+    t_max = flights[-1][1] + flights[-1][4] + 0.5
+    n_frames = int(t_max * fps) + 1
+
+    rows = []
+    for f in range(n_frames):
+        t = f / fps
+        row = []
+        for b in range(p.n_balls):
+            hit = next(((t0, x0, x1, dur) for (ball, t0, x0, x1, dur) in flights
+                       if ball == b and t0 <= t <= t0 + dur), None)
+            if hit is None:
+                row.extend([0, 0])  # sentinel: ball not visible (in-hand / not yet thrown)
+            else:
+                t0, x0, x1, dur = hit
+                dt = t - t0
+                y = p.hand_y - p.v0 * dt + 0.5 * p.g * dt * dt
+                x = x0 + (x1 - x0) * dt / dur
+                row.extend([round(x * width), round(y * height)])
+        rows.append(row)
+
+    _write_csv(csv_path, rows, header="skip,this,junk,header,line,here")
+    return p
+
+
+def test_oracle_events_recovers_catches_from_per_ball_trajectories(tmp_path):
+    """oracle_events must recover every throw's catch exactly when each ball's
+    trajectory is clean and self-contained -- the per-ball extraction (one
+    extract_arcs call per column, no merged cloud) has no cross-ball linker
+    ambiguity to introduce error.
+    """
+    csv_path = tmp_path / "synthetic_cascade.csv"
+    n_throws = 12
+    fps = 30.0
+    width, height = 200, 400
+    _write_per_ball_cascade_csv(csv_path, n_throws=n_throws, fps=fps, width=width, height=height)
+
+    sr = oracle_events(csv_path, fps=fps, width=width, height=height)
+
+    assert sum(r.catches for r in sr.runs) == n_throws
+    assert sum(r.throws for r in sr.runs) == n_throws
+
+
+def test_oracle_events_empty_csv_returns_empty_session(tmp_path):
+    csv_path = tmp_path / "empty.csv"
+    _write_csv(csv_path, [(0, 0, 0, 0) for _ in range(5)])
+
+    sr = oracle_events(csv_path, fps=30.0, width=200, height=400)
+
+    assert sr.runs == [] and sr.arcs == [] and sr.drops == []

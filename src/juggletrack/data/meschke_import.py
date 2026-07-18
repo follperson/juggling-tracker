@@ -28,7 +28,9 @@ from pathlib import Path
 
 import numpy as np
 
-from juggletrack.types import Detection
+from juggletrack.analyze import AnalyzeConfig, _events_from_arcs
+from juggletrack.arcs.extract import extract_arcs
+from juggletrack.types import Detection, SessionResult
 
 CITATION = (
     "Citation: Stephen Meschke - Juggling Data Set - "
@@ -105,6 +107,65 @@ def load_meschke_trajectories(
     """
     rows = _read_csv_rows(csv_path)
     return _trajectories_from_rows(rows, fps=fps, width=width, height=height)
+
+
+def oracle_events(
+    csv_path: str | Path,
+    *,
+    fps: float,
+    width: int,
+    height: int,
+    config: AnalyzeConfig | None = None,
+) -> SessionResult:
+    """Per-ball 'oracle' SessionResult from Meschke ground-truth label trajectories.
+
+    ``load_meschke_trajectories`` already returns one Detection list PER BALL
+    (one column-pair each). The previous oracle script flattened all of them
+    into a single cloud before calling ``analyze_detections`` -- feeding a
+    dense, perfectly-labeled multi-ball cloud (balls tracked even while held)
+    through the same global linker/EM that ``analyze_detections`` uses for
+    noisy, identity-free detector output. That merged cloud poisons the
+    linker with in-hand clusters and under-extracts real flights (turn-4
+    bake-off: ss3_id_016 oracle counted 23 catches, ss441_id_013 counted 136,
+    both far below what frame-audited evidence shows are real, caught
+    flights).
+
+    The fix: since each trajectory is already one ball's own points with no
+    other ball's detections mixed in, there is no cross-ball linker ambiguity
+    to resolve -- run ``extract_arcs`` on each ball's trajectory
+    independently (a single-object time series can't be confused by another
+    ball crossing through the same frame), then take the union of all balls'
+    arcs (re-identified sequentially by ``t_start``) and hand that union to
+    the same post-extraction tail ``analyze_detections`` uses
+    (``_events_from_arcs``), so hand-line/throw/catch/run/drop logic is
+    identical to the real pipeline -- only the arc-extraction stage differs.
+    """
+    cfg = config or AnalyzeConfig()
+    trajectories = load_meschke_trajectories(csv_path, fps=fps, width=width, height=height)
+    all_dets = [d for traj in trajectories for d in traj]
+    if not all_dets:
+        return SessionResult()
+
+    per_ball_arcs = []
+    for traj in trajectories:
+        if not traj:
+            continue
+        per_ball_arcs.extend(extract_arcs(
+            traj,
+            g_range=cfg.g_range, resid_tol=cfg.resid_tol,
+            min_points=cfg.min_points, min_duration=cfg.min_duration,
+            link_max_dt=cfg.link_max_dt, link_max_dist=cfg.link_max_dist,
+            em_iters=cfg.em_iters,
+            static_cell=cfg.static_cell, static_max_span_s=cfg.static_max_span_s,
+        ))
+
+    union = sorted(per_ball_arcs, key=lambda a: a.t_start)
+    union = [a.model_copy(update={"id": i}) for i, a in enumerate(union)]
+
+    t_last = max(d.t for d in all_dets)
+    result = _events_from_arcs(union, t_last, cfg)
+    result.meta["n_detections"] = len(all_dets)
+    return result
 
 
 def export_meschke_source(
