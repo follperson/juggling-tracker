@@ -380,19 +380,19 @@ def test_held_balls_survive_filter():
 
 
 def test_slow_drift_junk_cohort_known_gap():
-    """KNOWN GAP pin (final review of the turn-2/3 branch): the framing fix
-    (gravity floor ay 0.25 -> 0.05, commit 73b0b0f) admits SELF-consistent
-    slow-drift junk cohorts that the old absolute floor rejected, because
-    _gravity_prune is median-relative and cannot invalidate a cohort that
-    agrees with itself.
+    """GAP CLOSED (turn-4 drift-cohort run gate, events/validate.py): the
+    framing fix (gravity floor ay 0.25 -> 0.05, commit 73b0b0f) admitted
+    SELF-consistent slow-drift junk cohorts that the old absolute floor
+    rejected, because _gravity_prune is median-relative and cannot
+    invalidate a cohort that agrees with itself -- arc EXTRACTION still
+    fits these three smooth drift paths as plausible arcs (asserted below).
 
-    This test documents the accepted tradeoff by asserting the CURRENT
-    behavior: three smooth drift paths with ay ~= 0.1 and apex rise ~0.036
-    (would have failed both the old 0.25 ay-floor and the old 0.05 apex
-    guard) chain into a run with catches. When the spec-§4 periodicity
-    run-validator (or another junk-cohort defense) lands, this scenario
-    SHOULD stop producing runs — flip these assertions then; do not treat
-    this test as endorsement of the behavior.
+    The gap is closed one stage later, at run-validation time: this cohort
+    is unidirectional (dom2=1.0), monotonically marching across the frame
+    (mono=1.0), and never alternates (alt2=0.0) -- exactly the drift-cohort
+    shape events.validate.is_drift_cohort rejects. analyze_detections now
+    drops this run entirely (0 runs), even though its 3 arcs still exist in
+    sr.arcs (the gate removes runs, not arcs -- see analyze._events_from_arcs).
 
     Note the paths must be spatially SEPARATED and drift briskly: slow
     drifters sharing spatial bins are already killed by
@@ -415,7 +415,5 @@ def test_slow_drift_junk_cohort_known_gap():
                 y=0.6 - v0 * dt + a * dt * dt,
             ))
     sr = analyze_detections(dets)
-    assert len(sr.arcs) == 3, "drift paths currently fit as plausible arcs"
-    assert len(sr.runs) >= 1 and sum(r.catches for r in sr.runs) >= 1, (
-        "junk cohort currently mints a run+catches — the documented gap"
-    )
+    assert len(sr.arcs) == 3, "drift paths still fit as plausible arcs (extraction is unchanged)"
+    assert sr.runs == [], "drift-cohort run gate must reject this cohort's run"

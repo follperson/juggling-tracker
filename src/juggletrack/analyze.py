@@ -9,6 +9,7 @@ from juggletrack.events.catches import derive_events
 from juggletrack.events.drops import detect_drops
 from juggletrack.events.handline import estimate_hand_line
 from juggletrack.events.runs import segment_runs
+from juggletrack.events.validate import is_drift_cohort
 from juggletrack.types import Arc, Detection, Run, SessionResult
 
 
@@ -70,6 +71,19 @@ def _events_from_arcs(
         gap_factor=cfg.gap_factor, min_arcs=cfg.min_arcs,
     )
     drops, runs = detect_drops(arcs, runs, hand_line)
+
+    # Drift-cohort run gate (spec §4 validator, turn-4 cascade-structure-gate
+    # bake-off clause A): a self-consistent slow-drift junk cohort can pass
+    # every arc-level check (each arc individually looks like a plausible
+    # ballistic flight) yet be structurally not-juggling at the RUN level --
+    # unidirectional, monotonically marching across the frame, never
+    # alternating hands. Reject the run outright; its arcs stay in `arcs`
+    # (and in any other surviving run's arc_ids) untouched.
+    by_id = {a.id: a for a in arcs}
+    runs = [
+        run for run in runs
+        if not is_drift_cohort([by_id[i] for i in run.arc_ids if i in by_id])
+    ]
 
     final: list[Run] = []
     for run in runs:
