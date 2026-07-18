@@ -164,6 +164,14 @@ def extract_arcs(
         arcs = _prune(arcs, g_range, resid_tol, min_points, min_duration, max_abs_bx)
         arcs = _gravity_prune(arcs)
 
+    # Real, distinct ids are required before the split-stitch pass: every
+    # arc up to this point still carries fit_arc's default id=-1, which
+    # collides with assign_detections's own "no arc fits" sentinel.
+    arcs.sort(key=lambda a: a.t_start)
+    arcs = [a.model_copy(update={"id": i}) for i, a in enumerate(arcs)]
+
+    arcs = _stitch_splits(dets, arcs, resid_tol)
+
     arcs.sort(key=lambda a: a.t_start)
     return [a.model_copy(update={"id": i}) for i, a in enumerate(arcs)]
 
@@ -374,6 +382,85 @@ def _gravity_prune(arcs: list[Arc], band: float = 0.3) -> list[Arc]:
     med = float(np.median([a.ay for a in arcs]))
     lo, hi = (1.0 - band) * med, (1.0 + band) * med
     return [a for a in arcs if lo <= a.ay <= hi]
+
+
+# Split-stitch tunables (turn-4 overcount-surgeon bake-off, stage B): merges
+# a single flight that a brief mid-flight detection dropout split into two
+# sequential arcs. Deliberately conservative -- measured on the full turn-4
+# battery to fire only on genuine same-flight splits (2 true repairs on af1,
+# 0 elsewhere): a gap budget, midpoint continuity in both y and x, curvature
+# (ay) agreement, compatible x-velocity sign, and a strict union-refit
+# acceptance test are ALL required together before two arcs are merged.
+_STITCH_GAP_MAX = 0.25
+_STITCH_AY_BAND = 0.30
+
+
+def _stitch_splits(dets: list[Detection], arcs: list[Arc], resid_tol: float) -> list[Arc]:
+    """Merge sequential same-flight arc splits (final pass in extract_arcs).
+
+    A brief mid-flight detection gap can make ``_link_fragments`` /
+    ``_split_ballistic`` mint two arcs for what was really one continuous
+    ball flight (see test_split_flight_gets_stitched_back_into_one_arc).
+    This scans consecutive-in-time arc pairs and, only when their fitted
+    parabolas agree closely enough across the gap to plausibly be one
+    flight, refits the union of their member detections and accepts the
+    merge only if that union is itself a clean single-arc fit -- the same
+    acceptance bar (``resid_tol`` / ``2*resid_tol`` on x) real extraction
+    uses everywhere else, so a stitched arc is never worse-fit than a
+    freshly-extracted one would be. Requires ``arcs`` to already carry
+    real, distinct ids (assign_detections's "no arc fits" sentinel is -1,
+    which collides with fit_arc's default arc_id).
+    """
+    arcs = sorted(arcs, key=lambda a: a.t_start)
+    continuity_tol = 2.0 * resid_tol
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(arcs) - 1):
+            a = arcs[i]
+            for j in range(i + 1, len(arcs)):
+                b = arcs[j]
+                gap = b.t_start - a.t_end
+                if gap > _STITCH_GAP_MAX:
+                    break  # candidates sorted by t_start: gap only grows from here
+                if gap < 0:
+                    continue
+                tm = a.t_end + 0.5 * gap
+                if abs(a.y_at(tm) - b.y_at(tm)) >= continuity_tol:
+                    continue
+                if abs(a.x_at(tm) - b.x_at(tm)) >= continuity_tol:
+                    continue
+                if abs(a.ay - b.ay) > _STITCH_AY_BAND * max(a.ay, b.ay):
+                    continue
+                # Crossing-balls signature (same guard as _merge_pass): a
+                # single ball's x-velocity can't flip sign like this across
+                # such a short gap.
+                if a.bx * b.bx < 0 and abs(a.bx) > 0.02 and abs(b.bx) > 0.02:
+                    continue
+                window = [d for d in dets if a.t_start - 0.02 <= d.t <= b.t_end + 0.02]
+                owner = assign_detections(window, [a, b], resid_tol=resid_tol)
+                member = [d for d, o in zip(window, owner) if o in (a.id, b.id)]
+                if len(member) < 4:
+                    continue
+                try:
+                    union = fit_arc(points_array(member))
+                except ValueError:
+                    continue
+                if union.rmse > resid_tol:
+                    continue
+                pts = points_array(member)
+                dt = pts[:, 0] - union.t_start
+                x_rmse = float(np.sqrt(np.mean((union.bx * dt + union.cx - pts[:, 1]) ** 2)))
+                if x_rmse > 2 * resid_tol:
+                    continue
+                union = union.model_copy(update={"id": a.id})
+                arcs = arcs[:i] + [union] + [c for c in arcs[i + 1 :] if c is not b]
+                arcs.sort(key=lambda arc: arc.t_start)
+                changed = True
+                break
+            if changed:
+                break
+    return arcs
 
 
 def assign_detections(

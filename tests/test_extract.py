@@ -417,3 +417,61 @@ def test_slow_drift_junk_cohort_known_gap():
     sr = analyze_detections(dets)
     assert len(sr.arcs) == 3, "drift paths still fit as plausible arcs (extraction is unchanged)"
     assert sr.runs == [], "drift-cohort run gate must reject this cohort's run"
+
+
+def test_split_flight_gets_stitched_back_into_one_arc():
+    """Turn-4 split-stitch post-pass (final pass inside extract_arcs): a
+    brief mid-flight detection dropout can make the linker/EM machinery mint
+    two sequential arcs for what was really one continuous ball flight.
+
+    Reproduce directly: one clean throw, 6 consecutive frames deleted from
+    the middle. Empirically the smallest gap that still splits under the
+    shipped linker budget (link_max_dt=0.18s, link_max_dist=0.08) -- a 4-5
+    frame gap gets bridged by the linker itself before ever reaching the
+    stitch pass (verified before writing this test: extract_arcs on this
+    same fixture with a 4- or 5-frame gap already returns 1 arc; 6 frames
+    is where it splits into 2, which the stitch pass must then repair).
+    """
+    r = simulate_cascade(n_throws=1, fps=30.0, seed=1)
+    dets = sorted(r.detections, key=lambda d: d.t)
+    mid = len(dets) // 2
+    gapped = dets[:mid] + dets[mid + 6 :]
+
+    arcs = extract_arcs(gapped)
+
+    assert len(arcs) == 1
+    assert arcs[0].t_start == pytest.approx(r.throw_times[0], abs=0.05)
+    assert arcs[0].t_end == pytest.approx(r.throw_times[0] + r.params.flight_s, abs=0.05)
+
+
+def test_split_stitch_does_not_fuse_crossing_balls():
+    """The split-stitch pass must respect the same crossing-balls signature
+    _merge_pass already guards against: opposite-direction x-velocity across
+    the gap. Same fixture as test_merge_does_not_fuse_crossing_balls (0.13s
+    gap, within the stitch pass's own 0.25s gap budget) -- confirms the new
+    post-pass doesn't reopen that hole from a different angle."""
+    fps = 30.0
+    dt = 1.0 / fps
+    apex_t, apex_y = 0.465, 0.35
+    ay = 0.30 / apex_t**2
+
+    def y_at(tt: float) -> float:
+        return ay * (tt - apex_t) ** 2 + apex_y
+
+    frame_a = [i * dt for i in range(13)]
+    frame_b = [0.53 + i * dt for i in range(13)]
+
+    dets = []
+    idx = 0
+    for tt in frame_a:
+        dets.append(Detection(frame_idx=idx, t=tt, x=0.3 + 0.15 * tt, y=y_at(tt)))
+        idx += 1
+    for tt in frame_b:
+        dets.append(Detection(frame_idx=idx, t=tt, x=0.42 - 0.15 * (tt - 0.53), y=y_at(tt)))
+        idx += 1
+
+    arcs = extract_arcs(dets)
+
+    assert not any(a.t_start < 0.4 and a.t_end > 0.53 for a in arcs), (
+        "a single arc spans both fragments -- opposite-direction balls were fused"
+    )
