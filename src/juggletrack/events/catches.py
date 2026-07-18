@@ -49,8 +49,17 @@ def derive_events(
         crossings = hand_line_crossings(arc, hand_line)
         if crossings is None:
             continue
-        # never rose meaningfully above the hands: bounce or noise
-        if arc.apex_y() > hand_line - min_apex_above:
+        # never rose meaningfully above the hands: bounce or noise.
+        # Only enforce this when the apex is WITNESSED (falls inside the
+        # arc's own observed span) -- otherwise apex_y() is extrapolating
+        # the fitted parabola past the last real detection, and a marginal
+        # extrapolated apex_gap can reject a truncated-but-real throw (the
+        # turn-4-diagnosed failure). An unwitnessed apex still gets a throw:
+        # the witnessed-catch gate below already guards against manufacturing
+        # phantom events from truncated arcs, same as it does for catches.
+        apex_t = arc.apex_t()
+        apex_witnessed = arc.t_start <= apex_t <= arc.t_end
+        if apex_witnessed and arc.apex_y() > hand_line - min_apex_above:
             continue
         t_throw, t_catch = crossings
         throws.append(ThrowEvent(t=t_throw, x=arc.x_at(t_throw), arc_id=arc.id))

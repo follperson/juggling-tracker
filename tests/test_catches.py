@@ -72,3 +72,52 @@ def test_truncated_arc_yields_no_phantom_catch():
     throws, catches = derive_events([arc], hand_line)
     assert len(throws) == 1
     assert catches == []
+
+
+def test_truncated_rising_arc_yields_throw():
+    """The apex guard must only judge a WITNESSED apex, not an extrapolated one.
+
+    This arc's observed span is truncated on the ascent, before ``apex_t``
+    is ever reached: ``ay=1.0, by=-1.1`` puts the fitted apex at
+    ``t_start + 0.55``, but ``t_end = t_start + 0.4`` -- the real detections
+    stop 0.15s before the ball actually recrosses the hand line (occlusion/
+    dropout cutting the ascent short, the turn-4-diagnosed mechanism).
+
+    The fitted apex (0.3475) sits only 0.015 above the hand line (0.3625),
+    under the default ``min_apex_above=0.02`` margin. The OLD guard
+    evaluated ``arc.apex_y()`` unconditionally and rejected this as "never
+    rose meaningfully above the hands" -- but that 0.015 figure comes from
+    extrapolating the fit past its own observed window, not from anything
+    actually seen. The NEW rule enforces the guard only when the apex is
+    witnessed (``t_start <= apex_t <= t_end``); here it isn't, so the guard
+    is skipped and the throw is correctly emitted.
+    """
+    hand_line = 0.3625
+    arc = Arc(
+        id=1, t_start=10.0, t_end=10.4,
+        ay=1.0, by=-1.1, cy=0.65, bx=0.0, cx=0.5,
+        n_points=8, rmse=0.01,
+    )
+    assert not (arc.t_start <= arc.apex_t() <= arc.t_end), "fixture must have an unwitnessed apex"
+    throws, catches = derive_events([arc], hand_line)
+    assert len(throws) == 1
+
+
+def test_bounce_arc_apex_witnessed_still_rejected():
+    """A bounce's apex is fully witnessed and sits below the hand line: the
+    witnessed-apex-aware rule must not relax this case. Since the apex
+    (0.82) is within the arc's own observed span [5.0, 5.4] (apex_t=5.2),
+    the guard still applies, and a real bounce (never clearing the hands)
+    keeps yielding no throw event, exactly as before this fix.
+    """
+    hand_line = 0.65
+    arc = Arc(
+        id=3, t_start=5.0, t_end=5.4,
+        ay=2.0, by=-0.8, cy=0.9, bx=0.0, cx=0.5,
+        n_points=8, rmse=0.01,
+    )
+    assert arc.t_start <= arc.apex_t() <= arc.t_end, "fixture must have a witnessed apex"
+    assert arc.apex_y() > hand_line, "fixture apex must stay below (not clear) the hand line"
+    throws, catches = derive_events([arc], hand_line)
+    assert throws == []
+    assert catches == []
