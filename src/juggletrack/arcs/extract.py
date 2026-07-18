@@ -113,7 +113,14 @@ def extract_arcs(
     # was the sole defense. Pinned by test_slow_drift_junk_cohort_known_gap;
     # the principled fix is the spec-§4 periodicity run-validator (unbuilt).
     g_range: tuple[float, float] = (0.1, 8.0),
-    link_max_dt: float = 0.12,
+    # 0.12 -> 0.18: 0.12s tolerated zero consecutive missed-detection frames
+    # at 24fps stride-2 (and only ~2 at 30fps stride-1) -- fine for in-domain
+    # footage, but turn-4's outdoor/domain-shifted holdout showed 3-4
+    # consecutive-frame detection gaps (0.125s-0.166s) clustering around
+    # single flights, exceeding the old budget and costing 60% of that
+    # video's real misses (see docs/superpowers/sdd/turn4-diagnosis.md).
+    # 0.18s tolerates 3 missed frames at 24fps.
+    link_max_dt: float = 0.18,
     link_max_dist: float = 0.08,
     resid_tol: float = 0.02,
     min_points: int = 6,

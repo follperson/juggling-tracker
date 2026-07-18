@@ -22,7 +22,13 @@ class AnalyzeConfig(BaseModel):
     # Fixed too tight and closer-framed footage with wider per-sample
     # displacement links nothing (see docs/superpowers/plans/
     # 2026-07-16-plan3-flywheel-turn2-findings.md).
-    link_max_dt: float = 0.12
+    # 0.12 -> 0.18: 0.12s tolerated zero consecutive missed-detection frames
+    # at 24fps stride-2 (and only ~2 at 30fps stride-1); turn-4's outdoor
+    # holdout showed 3-4 consecutive-frame detection gaps that exceeded the
+    # old budget and cost 60% of that video's real misses (see
+    # docs/superpowers/sdd/turn4-diagnosis.md). 0.18s tolerates 3 missed
+    # frames at 24fps. Mirrors extract_arcs's default -- keep them in sync.
+    link_max_dt: float = 0.18
     link_max_dist: float = 0.08
     em_iters: int = 5
     gap_factor: float = 1.3

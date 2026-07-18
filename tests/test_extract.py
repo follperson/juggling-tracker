@@ -38,6 +38,71 @@ def test_noise_and_dropout_still_recovers_all_arcs():
         assert len(hits) == 1
 
 
+def test_linker_survives_three_frame_gaps():
+    """Turn-4 diagnosis: domain-shifted/outdoor footage doesn't drop so many
+    detections overall that ``min_points`` fails -- it clusters the drops
+    into 3-4 consecutive-frame gaps that the old 0.12s ``link_max_dt`` budget
+    can't bridge (0.12s tolerated zero consecutive misses at 24fps
+    stride-2), costing 60% of the outdoor holdout's real misses.
+
+    Reproduce the same failure mode synthetically: a 12-throw cascade at
+    24fps (the outdoor clip's approximate frame rate) with a 3-consecutive-
+    frame detection gap injected twice per flight (mid-ascent, mid-descent;
+    fractional offsets seeded for reproducibility), surgically removing only
+    the targeted flight's own points (matched by recomputing its analytic
+    position) so other simultaneously-airborne balls in the cascade are left
+    untouched.
+
+    Pins both sides of the fix: the legacy 0.12s budget (explicit override,
+    stable regardless of the shipped default) stays starved below the 11/12
+    recovery bar -- if this ever stops failing, the fixture no longer
+    reproduces the diagnosed gap and needs revisiting -- while the shipped
+    default must clear that bar.
+    """
+    fps = 24.0
+    dt = 1.0 / fps
+    r = simulate_cascade(n_throws=12, fps=fps, seed=2)
+    p = r.params
+    rng = np.random.default_rng(2)
+
+    def flight_pos(i: int, t: float) -> tuple[float, float]:
+        t0 = r.throw_times[i]
+        hand = i % 2
+        x0, x1 = p.hand_x(hand), p.hand_x(1 - hand)
+        dtt = t - t0
+        x = x0 + (x1 - x0) * dtt / p.flight_s
+        y = p.hand_y - p.v0 * dtt + 0.5 * p.g * dtt * dtt
+        return x, y
+
+    gapped = list(r.detections)
+    for i in range(12):
+        # mid-ascent and mid-descent windows, each jittered within its band
+        for frac in (0.25 + 0.1 * rng.random(), 0.55 + 0.1 * rng.random()):
+            center = r.throw_times[i] + frac * p.flight_s
+            frame0 = round(center / dt)
+            drop_ts = [(frame0 + k) * dt for k in range(3)]  # 3 consecutive frames
+            keep = []
+            for d in gapped:
+                hit = any(
+                    abs(d.t - tt) < 1e-6
+                    and abs(d.x - flight_pos(i, tt)[0]) < 1e-4
+                    and abs(d.y - flight_pos(i, tt)[1]) < 1e-4
+                    for tt in drop_ts
+                )
+                if not hit:
+                    keep.append(d)
+            gapped = keep
+
+    starved = extract_arcs(gapped, link_max_dt=0.12)
+    assert len(starved) < 11, (
+        f"expected the legacy 0.12s budget to still be starved by these gaps "
+        f"(got {len(starved)}/12); fixture no longer reproduces the diagnosed failure"
+    )
+
+    recovered = extract_arcs(gapped)  # shipped default
+    assert len(recovered) >= 11, f"only recovered {len(recovered)}/12 arcs"
+
+
 def test_false_positives_do_not_create_arcs():
     r = simulate_cascade(n_throws=12, fps=30.0, false_positives_per_frame=0.5, seed=3)
     arcs = extract_arcs(r.detections)
