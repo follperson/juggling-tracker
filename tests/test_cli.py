@@ -1,11 +1,12 @@
 import json
 
+import numpy as np
 import pytest
 from typer.testing import CliRunner
 
 from juggletrack.pipeline.offline import save_detections_jsonl
 from juggletrack.sim import simulate_cascade
-from juggletrack.types import SessionResult
+from juggletrack.types import Detection, SessionResult
 from tests.helpers import write_test_video
 
 runner = CliRunner()
@@ -19,6 +20,32 @@ def workspace(tmp_path):
     write_test_video(video, n_frames=n_frames, fps=30.0)
     dets = tmp_path / "dets.jsonl"
     save_detections_jsonl(sim.detections, dets)
+    return sim, video, dets, tmp_path
+
+
+@pytest.fixture()
+def workspace_with_junk(tmp_path):
+    """Same as `workspace`, plus a persistent background false positive (see
+    tests/test_autolabel.py's `_persistent_junk_cascade`) parked at (0.91,
+    0.71) for the whole video -- gives the `--negatives` export something to
+    mine (a pre-first-throw lead-in stretch of pure-junk frames).
+    """
+    sim = simulate_cascade(n_throws=12, fps=30.0, seed=1)
+    real = list(sim.detections)
+    fps = 30.0
+    n_frames = max(d.frame_idx for d in real) + 1
+    rng = np.random.default_rng(11)
+    junk = []
+    for i in range(n_frames):
+        t = i / fps
+        for _ in range(2):
+            x = 0.91 + float(rng.uniform(-0.005, 0.005))
+            y = 0.71 + float(rng.uniform(-0.005, 0.005))
+            junk.append(Detection(frame_idx=i, t=t, x=x, y=y))
+    video = tmp_path / "cascade.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+    dets = tmp_path / "dets.jsonl"
+    save_detections_jsonl(real + junk, dets)
     return sim, video, dets, tmp_path
 
 
@@ -117,6 +144,43 @@ def test_label_command_with_saved_detections(workspace):
     assert (out / "review_manifest.json").exists()
     assert any((out / "images").iterdir())
     assert "boxes" in result.output and "review" in result.output
+
+
+def test_label_command_negatives_option(workspace_with_junk):
+    from juggletrack.cli import app
+
+    sim, video, dets, tmp = workspace_with_junk
+    out = tmp / "labels_out"
+    negatives = tmp / "negatives_out"
+    result = runner.invoke(app, [
+        "label", str(video), "--out", str(out), "--detections", str(dets),
+        "--negatives", str(negatives),
+    ])
+    assert result.exit_code == 0, result.output
+    # the normal label export still happens
+    assert (out / "annotations.json").exists()
+    # plus the hard-negative export
+    assert (negatives / "annotations.json").exists()
+    assert (negatives / "negatives_manifest.json").exists()
+    coco = json.loads((negatives / "annotations.json").read_text())
+    assert coco["annotations"] == []
+    assert coco["images"]
+    assert coco["categories"] == [{"id": 1, "name": "ball"}]
+    for im in coco["images"]:
+        assert (negatives / "images" / im["file_name"]).exists()
+    assert "negatives" in result.output.lower()
+
+
+def test_label_command_without_negatives_skips_export(workspace):
+    from juggletrack.cli import app
+
+    _, video, dets, tmp = workspace
+    out = tmp / "labels_out2"
+    result = runner.invoke(app, [
+        "label", str(video), "--out", str(out), "--detections", str(dets),
+    ])
+    assert result.exit_code == 0, result.output
+    assert "negatives" not in result.output.lower()
 
 
 def test_coverage_command(workspace):

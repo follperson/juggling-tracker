@@ -1,10 +1,12 @@
 import json
 
+import numpy as np
 import pytest
 
-from juggletrack.arcs.extract import extract_arcs
+from juggletrack.arcs.extract import assign_detections, extract_arcs
 from juggletrack.data.autolabel import (
     calibrate_label_boxes,
+    export_hard_negatives,
     export_video_labels,
     select_autolabels,
 )
@@ -130,3 +132,130 @@ def test_calibrate_label_boxes_preserves_centers():
         assert after.y == pytest.approx(before.y)
         assert after.frame_idx == before.frame_idx
         assert after.t == pytest.approx(before.t)
+
+
+def _persistent_junk_cascade(
+    *, n_throws: int = 8, noise: float = 0.002, sim_seed: int = 3,
+    junk_seed: int = 11, junk_density: int = 2, junk_jitter: float = 0.005,
+):
+    """Real cascade detections plus a persistent background false positive:
+    a jittering point parked at (0.91, 0.71) -- nudged off (0.9, 0.7)'s exact
+    static-filter grid line, same reasoning as test_extract.py's
+    `_inject_static_cluster` -- for every frame of the whole video, at a spot
+    the ball's own flight path never visits (hand_x in [0.41, 0.59], nowhere
+    near x=0.91). Field motivation: an eye pupil the detector keeps firing on.
+
+    Because this junk sits on every frame, it naturally produces both kinds
+    of frame the hard-negative miner must tell apart: frames where no real
+    ball is in flight (pure junk -- fair game for a zero-box negative) and
+    frames where a real, arc-verified ball shares the frame with the junk
+    (ambiguous -- must be skipped, since a zero-box negative there would
+    un-teach a genuine ball).
+    """
+    r = simulate_cascade(n_throws=n_throws, fps=30.0, noise=noise, seed=sim_seed)
+    real = list(r.detections)
+    fps = 30.0
+    n_frames = max(d.frame_idx for d in real) + 1
+    rng = np.random.default_rng(junk_seed)
+    junk = []
+    for i in range(n_frames):
+        t = i / fps
+        for _ in range(junk_density):
+            x = 0.91 + float(rng.uniform(-junk_jitter, junk_jitter))
+            y = 0.71 + float(rng.uniform(-junk_jitter, junk_jitter))
+            junk.append(Detection(frame_idx=i, t=t, x=x, y=y))
+    dets = real + junk
+    arcs = extract_arcs(dets)
+    return r, dets, arcs, n_frames, fps
+
+
+def _expected_candidates(dets, arcs, min_junk):
+    assignment = assign_detections(dets, arcs)
+    by_frame: dict[int, list[bool]] = {}
+    for d, arc_id in zip(dets, assignment):
+        by_frame.setdefault(d.frame_idx, []).append(arc_id != -1)
+    ambiguous = {f for f, flags in by_frame.items() if any(flags)}
+    pure_junk = {f for f, flags in by_frame.items()
+                 if not any(flags) and len(flags) >= min_junk}
+    return pure_junk, ambiguous
+
+
+def test_export_hard_negatives_selects_pure_junk_frames_only(tmp_path):
+    r, dets, arcs, n_frames, fps = _persistent_junk_cascade()
+    assert arcs, "sanity: extraction must actually verify some real throws"
+    pure_junk, ambiguous = _expected_candidates(dets, arcs, min_junk=2)
+    assert pure_junk and ambiguous, "fixture must exercise both frame kinds"
+
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+    out = tmp_path / "negatives"
+    stats = export_hard_negatives(
+        video, dets, arcs, out, max_frames=len(pure_junk) + 5, min_junk=2, seed=0,
+    )
+
+    assert stats["n_candidate_frames"] == len(pure_junk)
+    assert stats["n_skipped_ambiguous"] == len(ambiguous)
+    assert stats["n_images"] == len(pure_junk)
+
+    coco = json.loads((out / "annotations.json").read_text())
+    assert coco["annotations"] == []
+    assert coco["images"]
+    assert coco["categories"] == [{"id": 1, "name": "ball"}]
+    exported_frames = {int(im["file_name"][6:12]) for im in coco["images"]}
+    assert exported_frames == pure_junk
+    assert exported_frames.isdisjoint(ambiguous)
+
+    manifest = json.loads((out / "negatives_manifest.json").read_text())
+    manifest_frames = {f["frame_idx"] for f in manifest["frames"]}
+    assert manifest_frames == pure_junk
+    for entry in manifest["frames"]:
+        assert entry["n_junk"] >= 2
+        assert len(entry["positions"]) == entry["n_junk"]
+
+
+def test_export_hard_negatives_respects_max_frames_and_is_deterministic(tmp_path):
+    r, dets, arcs, n_frames, fps = _persistent_junk_cascade()
+    pure_junk, _ = _expected_candidates(dets, arcs, min_junk=2)
+    cap = max(1, len(pure_junk) // 2)
+    assert cap < len(pure_junk), "fixture must have more candidates than the cap"
+
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+
+    out_a = tmp_path / "neg_a"
+    stats_a = export_hard_negatives(video, dets, arcs, out_a, max_frames=cap, seed=7)
+    out_b = tmp_path / "neg_b"
+    stats_b = export_hard_negatives(video, dets, arcs, out_b, max_frames=cap, seed=7)
+
+    assert stats_a["n_images"] == stats_b["n_images"] == cap
+    assert stats_a["n_candidate_frames"] == stats_b["n_candidate_frames"] == len(pure_junk)
+    frames_a = sorted(f["frame_idx"] for f in json.loads(
+        (out_a / "negatives_manifest.json").read_text())["frames"])
+    frames_b = sorted(f["frame_idx"] for f in json.loads(
+        (out_b / "negatives_manifest.json").read_text())["frames"])
+    assert frames_a == frames_b
+
+
+def test_export_hard_negatives_feeds_assemble_dataset(tmp_path):
+    from juggletrack.data.dataset import assemble_dataset
+    from tests.test_dataset import make_coco_source
+
+    pos_src = make_coco_source(tmp_path, "positive", n_images=3)
+
+    r, dets, arcs, n_frames, fps = _persistent_junk_cascade()
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+    neg_src = tmp_path / "negatives_src"
+    neg_stats = export_hard_negatives(video, dets, arcs, neg_src, max_frames=5, seed=0)
+    assert neg_stats["n_images"] > 0
+
+    out = tmp_path / "assembled"
+    stats = assemble_dataset([pos_src, neg_src], out, val_fraction=0.5, seed=0)
+
+    neg_split = "val" if neg_src.name in stats["val_sources"] else "train"
+    neg_images = sorted((out / "images" / neg_split).glob(f"{neg_src.name}_*"))
+    assert len(neg_images) == neg_stats["n_images"]
+    for img in neg_images:
+        label = out / "labels" / neg_split / f"{img.stem}.txt"
+        assert label.exists()
+        assert label.read_text().strip() == ""

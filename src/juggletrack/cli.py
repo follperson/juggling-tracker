@@ -154,11 +154,17 @@ def label(
     link_max_dist: float = typer.Option(
         0.08, help="Linker max normalized distance per step (extract_arcs knob)"
     ),
+    negatives: Path | None = typer.Option(
+        None,
+        help="Also mine arc-rejected junk detections into zero-box hard-negative "
+        "images (COCO, same dets/arcs, no extra detection pass) at this dir",
+    ),
 ) -> None:
     """Auto-label a video: arc-verified detections become COCO 'ball' boxes."""
     from juggletrack.arcs.extract import extract_arcs
     from juggletrack.data.autolabel import (
         calibrate_label_boxes,
+        export_hard_negatives,
         export_video_labels,
         select_autolabels,
     )
@@ -193,6 +199,13 @@ def label(
         f"{stats['n_images']} images, {stats['n_boxes']} boxes, "
         f"{stats['n_review_frames']} review frames -> {out_dir}"
     )
+    if negatives is not None:
+        neg_stats = export_hard_negatives(video, dets, arcs, negatives)
+        typer.echo(
+            f"negatives: {neg_stats['n_images']} images "
+            f"({neg_stats['n_candidate_frames']} candidates, "
+            f"{neg_stats['n_skipped_ambiguous']} skipped ambiguous) -> {negatives}"
+        )
 
 
 @app.command()

@@ -12,6 +12,7 @@ import statistics
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from juggletrack.arcs.extract import assign_detections
 from juggletrack.types import Arc, Detection
@@ -150,3 +151,100 @@ def export_video_labels(
     }, indent=2))
     return {"n_images": len(images), "n_boxes": len(annotations),
             "n_review_frames": len(set(review_frames or []))}
+
+
+def export_hard_negatives(
+    video_path: str | Path,
+    dets: list[Detection],
+    arcs: list[Arc],
+    out_dir: str | Path,
+    *,
+    max_frames: int = 40,
+    min_junk: int = 2,
+    seed: int = 0,
+    jpeg_quality: int = 90,
+) -> dict:
+    """Mine arc-rejected detections into zero-box negative training images.
+
+    The arc gate (`assign_detections`) already tells the pipeline which
+    detections are junk -- physics-implausible false positives (e.g. an eye
+    pupil the detector keeps firing on outdoor footage). That knowledge never
+    made it back into training before this: negative (zero-box) images teach
+    YOLO what NOT to detect, and `assemble_dataset` already passes
+    zero-annotation images through untouched with empty label files, so all
+    that was missing was generating them.
+
+    A frame only qualifies if EVERY detection on it is unassigned (pure
+    junk) and there are at least `min_junk` of them. A frame where a real,
+    arc-verified ball also appears is ambiguous and is skipped entirely: a
+    zero-box negative there would leave that real ball unlabeled, which
+    actively teaches the model to miss balls -- worse than not training on
+    the frame at all.
+    """
+    from juggletrack.video.reader import VideoReader
+
+    assignment = assign_detections(dets, arcs)
+    by_frame: dict[int, list[Detection]] = {}
+    assigned_by_frame: dict[int, list[bool]] = {}
+    for d, arc_id in zip(dets, assignment):
+        by_frame.setdefault(d.frame_idx, []).append(d)
+        assigned_by_frame.setdefault(d.frame_idx, []).append(arc_id != -1)
+
+    n_skipped_ambiguous = 0
+    candidates: dict[int, list[Detection]] = {}
+    for frame_idx, flags in assigned_by_frame.items():
+        if any(flags):
+            n_skipped_ambiguous += 1
+            continue
+        if len(flags) >= min_junk:
+            candidates[frame_idx] = by_frame[frame_idx]
+
+    n_candidate_frames = len(candidates)
+    frame_list = sorted(candidates)
+    rng = np.random.default_rng(seed)
+    if len(frame_list) > max_frames:
+        chosen = rng.choice(len(frame_list), size=max_frames, replace=False)
+        chosen_frames = sorted(frame_list[i] for i in chosen)
+    else:
+        chosen_frames = frame_list
+    chosen_set = set(chosen_frames)
+
+    out = Path(out_dir)
+    (out / "images").mkdir(parents=True, exist_ok=True)
+
+    images: list[dict] = []
+    manifest_frames: list[dict] = []
+    with VideoReader(video_path) as reader:
+        w_px, h_px = reader.info.width, reader.info.height
+        for idx, _t, frame in reader.frames():
+            if idx not in chosen_set:
+                continue
+            file_name = f"frame_{idx:06d}.jpg"
+            cv2.imwrite(
+                str(out / "images" / file_name), frame,
+                [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality],
+            )
+            image_id = len(images) + 1
+            images.append({"id": image_id, "file_name": file_name,
+                           "width": w_px, "height": h_px})
+            junk_dets = candidates[idx]
+            manifest_frames.append({
+                "frame_idx": idx,
+                "n_junk": len(junk_dets),
+                "positions": [[d.x, d.y] for d in junk_dets],
+            })
+
+    (out / "annotations.json").write_text(json.dumps({
+        "images": images, "annotations": [],
+        "categories": [BALL_CATEGORY],
+    }, indent=2))
+    (out / "negatives_manifest.json").write_text(json.dumps({
+        "video": str(video_path),
+        "frames": manifest_frames,
+    }, indent=2))
+
+    return {
+        "n_images": len(images),
+        "n_candidate_frames": n_candidate_frames,
+        "n_skipped_ambiguous": n_skipped_ambiguous,
+    }
