@@ -15,6 +15,12 @@ class DetectorBackend(str, enum.Enum):
     motion = "motion"
 
 
+class DotsMode(str, enum.Enum):
+    verified = "verified"
+    all = "all"
+    none = "none"
+
+
 @app.command()
 def analyze(
     video: Path = typer.Argument(..., exists=True, dir_okay=False),
@@ -32,6 +38,11 @@ def analyze(
     device: str | None = typer.Option(None, help="Torch device (mps/cpu/cuda)"),
     link_max_dist: float = typer.Option(
         0.08, help="Linker max normalized distance per step (extract_arcs knob)"
+    ),
+    dots: DotsMode = typer.Option(
+        DotsMode.verified,
+        help="Overlay dot filtering: 'verified' (default, arc-assigned "
+        "detections only), 'all' (every raw detection), or 'none'",
     ),
 ) -> None:
     from juggletrack.analyze import AnalyzeConfig
@@ -65,7 +76,7 @@ def analyze(
         elif jsonl.exists():
             dets_for_overlay = load_detections_jsonl(jsonl)
         render_overlay(video, session, out_dir / "overlay.mp4",
-                       detections=dets_for_overlay)
+                       detections=dets_for_overlay, dots=dots.value)
 
     for i, run in enumerate(session.runs):
         typer.echo(

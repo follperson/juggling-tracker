@@ -52,6 +52,31 @@ def test_analyze_no_overlay(workspace):
     assert not (out / "overlay.mp4").exists()
 
 
+def test_analyze_dots_option_passthrough(workspace):
+    from juggletrack.cli import app
+
+    sim, video, dets, tmp = workspace
+    out = tmp / "out_dots"
+    result = runner.invoke(app, [
+        "analyze", str(video), "--out", str(out), "--detections", str(dets),
+        "--link-max-dist", "0.2", "--dots", "all",
+    ])
+    assert result.exit_code == 0, result.output
+    assert (out / "overlay.mp4").exists()
+
+
+def test_analyze_dots_invalid_choice_rejected(workspace):
+    from juggletrack.cli import app
+
+    _, video, dets, tmp = workspace
+    out = tmp / "out_dots_bad"
+    result = runner.invoke(app, [
+        "analyze", str(video), "--out", str(out), "--detections", str(dets),
+        "--dots", "bogus",
+    ])
+    assert result.exit_code != 0
+
+
 def test_eval_command(workspace, tmp_path):
     from juggletrack.cli import app
 

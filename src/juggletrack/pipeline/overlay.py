@@ -7,6 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from juggletrack.arcs.extract import assign_detections
 from juggletrack.events.catches import derive_events
 from juggletrack.types import Detection, SessionResult
 from juggletrack.video.reader import VideoReader
@@ -24,9 +25,29 @@ def render_overlay(
     *,
     detections: list[Detection] | None = None,
     tail_s: float = 0.4,
+    dots: str = "verified",
 ) -> None:
+    """Render the debug overlay.
+
+    ``dots`` controls which raw detections get drawn as small circles:
+    "verified" (default) draws only detections the arc gate assigned to a
+    fitted arc -- junk detections (e.g. eye pupils) are rejected from counts
+    by that same gate, so they're hidden here too, by default, to avoid
+    alarming the user with dots that don't affect the result. "all" draws
+    every detection (the old, unfiltered behavior). "none" draws no dots.
+    """
+    if dots not in ("verified", "all", "none"):
+        raise ValueError(f"dots must be 'verified', 'all', or 'none' (got {dots!r})")
+
+    dets = list(detections or [])
+    if dots == "none":
+        dets = []
+    elif dots == "verified" and dets:
+        assigned = assign_detections(dets, session.arcs)
+        dets = [d for d, arc_id in zip(dets, assigned) if arc_id != -1]
+
     dets_by_frame: dict[int, list[Detection]] = defaultdict(list)
-    for d in detections or []:
+    for d in dets:
         dets_by_frame[d.frame_idx].append(d)
 
     _, catches = derive_events(session.arcs, session.hand_line_y)
