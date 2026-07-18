@@ -91,6 +91,13 @@ class Run(BaseModel):
     arc_ids: list[int] = Field(default_factory=list)
     end_reason: Literal["drop", "stop", "video_end"] = "stop"
     period_s: float | None = None
+    # Airborne-count periodicity (events.periodicity.periodicity_score) over
+    # this run's own arc span, judged against a lag band derived from
+    # period_s. 0.0 is overloaded: it means EITHER "judged, and no
+    # periodicity found" OR "unjudgeable" (the arc span was too short to
+    # search any lag in the band) -- periodicity_score distinguishes those
+    # (returns None for the latter) but this field can't, so
+    # events.runs.segment_runs collapses "unjudgeable" to 0.0.
     quality: float = 0.0
 
 

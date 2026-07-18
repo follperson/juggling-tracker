@@ -66,7 +66,26 @@ def segment_runs(
         first_miss = next((a for a in ordered if a.id not in catch_arc_ids), None)
         end_t = arc_end(first_miss) if first_miss is not None else max(arc_end(a) for a in group)
         p = float(np.median(np.diff(run_throws))) if len(run_throws) >= 3 else None
-        quality, _ = periodicity_score(group, start_t, end_t)
+        # Score periodicity over the arcs' OWN span (min t_start .. max
+        # arc-end), not [start_t, end_t]: end_t truncates at the first
+        # missed catch, which can be an extraction miss on an otherwise
+        # continuous run, not a real drop -- scoring that truncated sliver
+        # makes quality garbage (measured: a real run scored 0.004 there vs
+        # 0.351 over its own arc span). Lag band is adaptive to the run's
+        # own period when known -- [max(0.1, 0.5p), 1.5p] -- because a fixed
+        # band tuned to one framing can sit wholly outside another framing's
+        # true period (Meschke ground truth: period 1.19-2.89s, outside the
+        # fixed default (0.2, 1.2)); falls back to that fixed default only
+        # when the run has too few throws for its own period estimate.
+        arc_span = (min(a.t_start for a in group), max(a.t_end for a in group))
+        lag_range = (max(0.1, 0.5 * p), 1.5 * p) if p else (0.2, 1.2)
+        score, _ = periodicity_score(group, *arc_span, lag_range=lag_range)
+        # periodicity_score returns None when the window can't be judged at
+        # all (too short to search any lag in the band) -- distinct from a
+        # judged score of 0.0. Run.quality is a plain float, so "can't
+        # judge" collapses to 0.0 here; callers cannot distinguish the two
+        # from quality alone (0.0 means "unjudgeable OR judged-and-flat").
+        quality = score if score is not None else 0.0
         runs.append(Run(
             start_t=start_t, end_t=end_t,
             catches=len(run_catches), throws=len(run_throws),
