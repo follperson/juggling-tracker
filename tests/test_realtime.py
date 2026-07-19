@@ -156,3 +156,78 @@ def test_realtime_module_is_cv2_free():
             "sys.exit(1 if 'cv2' in sys.modules else 0)")
     proc = subprocess.run([sys.executable, "-c", code], cwd="src")
     assert proc.returncode == 0, "importing realtime pulled in cv2"
+
+
+def _three_run_stream(gap_s, noise, dropout):
+    """Concatenate three independent 12-throw cascades with `gap_s` of
+    silence between each pair (same shift pattern as `_two_run_stream`,
+    extended to a third run). Each run individually lasts well under
+    `RealtimeConfig.window_s` (8s, ~6.5s per run here), but the whole
+    stream (~24s) spans far longer than the window.
+
+    `noise`/`dropout` matter empirically, not cosmetically: at the
+    near-noiseless levels `_two_run_stream` uses (0.003/0.1), this fixture
+    reproduces NO divergence at all pre-fix (verified) -- three short,
+    clean, gapped runs never give the sliding window a reason to
+    misbehave. Measured (see .superpowers/sdd/task-5b-report.md) that
+    noise=0.015/dropout=0.15 is enough real-detector-like jitter to
+    reproduce the same class of window-boundary run-churn the field bench
+    found on ss3_id_016 (offline 9 runs vs live 46), just at a much
+    smaller, fast, deterministic scale suitable for a unit test."""
+    a = simulate_cascade(n_throws=12, fps=30.0, noise=noise, dropout=dropout, seed=41)
+    b = simulate_cascade(n_throws=12, fps=30.0, noise=noise, dropout=dropout, seed=42)
+    c = simulate_cascade(n_throws=12, fps=30.0, noise=noise, dropout=dropout, seed=43)
+
+    dt_b = gap_s + a.run_end - b.run_start
+    b_shifted = shift(b.detections, dt_b, round(dt_b * 30.0))
+    b_run_end = b.run_end + dt_b
+
+    dt_c = gap_s + b_run_end - c.run_start
+    c_shifted = shift(c.detections, dt_c, round(dt_c * 30.0))
+
+    return a.detections + b_shifted + c_shifted
+
+
+def test_parity_very_long_stream():
+    """The field-bench failure (docs/superpowers/plans/
+    2026-07-19-plan4-bench-findings.md, .superpowers/sdd/task-5-report.md):
+    ss3_id_016 (205s of real footage, runs up to ~14s) turned 9 offline
+    runs/39 catches/0 drops into 46 runs/306 catches/42 phantom drops live.
+    This reproduces the same class of failure -- window-boundary run churn
+    -- with three ~6.5s synthetic runs (each individually well under
+    window_s=8) separated by ~3s gaps, spanning ~24s total (>> window_s),
+    at just enough real-detector-like noise (see `_three_run_stream`) to
+    make segment_runs' from-scratch-every-cycle re-derivation flap.
+
+    MEASURED, not assumed (both directions reproduced and pinned here):
+    pre-fix this fixture inflates runs_completed by +2 and catches_total by
+    +4 (offline 3/23/0 -> live 5/27/0); post-fix runs_completed and
+    drops_total match offline exactly and catches_total is pinned at the
+    measured post-fix gap (+4 -- the left-edge guard's event/drop filtering
+    and the sticky-open liveness signal fix the run-churn and phantom-drop
+    mechanisms directly, but this fixture's remaining catch-count gap comes
+    from a broader re-extraction-instability mechanism the left-edge guard
+    doesn't target; see task-5b-report.md's field-gate section for the
+    much larger version of this same gap on real ss3_id_016 footage and
+    why it's out of scope for this design)."""
+    dets = _three_run_stream(gap_s=3.0, noise=0.015, dropout=0.15)
+    offline = analyze_detections(dets)
+    total_span = max(d.t for d in dets) - min(d.t for d in dets)
+    assert total_span > 20.0, "fixture must span well beyond window_s=8"
+    assert len(offline.runs) == 3, "fixture must offline-segment into 3 runs"
+    assert len(offline.drops) == 0, "fixture has no drops by construction"
+    off_catches = sum(run.catches for run in offline.runs)
+    assert off_catches == 23, "pinned offline baseline for this fixture; revisit if sim.py changes"
+
+    analyzer = RealtimeAnalyzer()
+    final = stream_dets(dets, analyzer)[-1]
+
+    assert final.runs_completed == len(offline.runs), (
+        f"live={final.runs_completed} offline={len(offline.runs)}"
+    )
+    assert abs(final.catches_total - off_catches) <= 4, (
+        f"live={final.catches_total} offline={off_catches}"
+    )
+    assert final.drops_total == len(offline.drops) == 0, (
+        f"live={final.drops_total} offline={len(offline.drops)}"
+    )

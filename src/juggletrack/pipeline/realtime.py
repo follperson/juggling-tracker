@@ -26,6 +26,27 @@ class RealtimeConfig(BaseModel):
     freeze_s: float = 1.5
     drop_freeze_s: float = 2.5
     event_match_tol: float = 0.15
+    # Left-edge guard (symmetric with the freeze horizon's right-edge guard):
+    # an arc whose t_start falls within `edge_pad` of the window's trailing
+    # cut (`now - window_s`) had its early history trimmed by the sliding
+    # buffer before this analysis cycle ever ran -- its fitted coefficients
+    # (and anything derived from it: crossing times, "first missed catch",
+    # floor-descent signals) reflect a tail-only fit, not the ball's real
+    # trajectory. See _analyze's left-edge guard for the mechanism this
+    # fixes (docs/superpowers/plans/2026-07-19-plan4-bench-findings.md §3,
+    # .superpowers/sdd/task-5b-report.md).
+    edge_pad: float = 0.5
+    # Hand-line EMA smoothing factor. MEASURED (not assumed) before adding:
+    # a raw per-cycle hand-line re-estimate can swing >0.1 in normalized y
+    # between consecutive 0.1s cadence ticks on real, arc-sparse footage
+    # (trace evidence in task-5b-report.md), which shifts every
+    # hand-line-relative computation (crossings, catch/drop witnessing)
+    # enough to manufacture duplicate event confirmations. Smoothing alone
+    # measured a ~14% reduction in duplicate catches on the ss3_id_016
+    # field-gate replay -- real but partial; see the report for the
+    # remaining, larger, out-of-scope mechanism (local-window vs
+    # whole-video arc-segmentation instability) this does not reach.
+    hand_line_ema_alpha: float = 0.2
     analyze: AnalyzeConfig = Field(default_factory=AnalyzeConfig)
 
 
@@ -90,6 +111,7 @@ class RealtimeAnalyzer:
         self._pending_close_t: float | None = None
         self._finalized = False
         self._last_state = RealtimeState(t=0.0)
+        self._hand_line_ema: float | None = None
 
     def feed(self, dets: list[Detection], t: float) -> RealtimeState:
         self._now = t
@@ -127,13 +149,81 @@ class RealtimeAnalyzer:
     def _analyze(self, *, freeze: float, drop_freeze: float) -> None:
         t0 = time.perf_counter()
         session = analyze_detections(list(self._buffer), self.cfg.analyze)
-        throws, catches = derive_events(session.arcs, session.hand_line_y)
+
+        # Left-edge guard: any arc whose t_start is within edge_pad of the
+        # window's trailing cut (`left_edge = now - window_s`, matching
+        # feed()'s own eviction rule -- NOT `buffer[0].t`, which stays
+        # pinned at the stream's own start for the whole first window_s
+        # seconds and would falsely flag every early-session arc as
+        # "truncated" before feed() has ever evicted anything) had its early
+        # history trimmed by the sliding buffer before this cycle's
+        # extraction ever ran. Its fitted coefficients (and anything derived
+        # from it: crossing times, floor-descent signals) reflect a
+        # tail-only fit, not the ball's real trajectory. window_s (8s) is
+        # far longer than a real arc's flight+freeze lag (~2.6s), so a
+        # genuine event is always confirmed from a still-full,
+        # non-truncated fit several cycles before its arc could ever reach
+        # this edge -- discarding events/drops sourced from a truncated arc
+        # therefore never loses a real confirmation, only a corrupted
+        # re-derivation of one that already landed.
+        #
+        # Deliberately NOT implemented as "drop the arc and re-run
+        # segment_runs/detect_drops on what's left": measured (see
+        # .superpowers/sdd/task-5b-report.md) that this footage can have as
+        # few as 2-5 arcs in a full 8s window (a slow real cascade, not this
+        # module's fast synthetic-test cadence), so removing even one arc
+        # routinely drops the group below segment_runs' min_arcs=3 gate and
+        # wipes out run recognition entirely -- worse than the bug it was
+        # meant to fix. Filtering the DERIVED events/drops list is enough:
+        # it can only ever remove a confirmation, never fabricate one.
+        left_edge = self._now - self.cfg.window_s
+        truncated_ids = {a.id for a in session.arcs if a.t_start < left_edge + self.cfg.edge_pad}
+
+        # Hand-line EMA (see RealtimeConfig.hand_line_ema_alpha's docstring
+        # for the measured jitter this smooths).
+        if session.arcs:
+            raw_hand = session.hand_line_y
+            self._hand_line_ema = (
+                raw_hand if self._hand_line_ema is None
+                else self.cfg.hand_line_ema_alpha * raw_hand
+                + (1.0 - self.cfg.hand_line_ema_alpha) * self._hand_line_ema
+            )
+        hand_line = self._hand_line_ema if self._hand_line_ema is not None else session.hand_line_y
+
+        throws, catches = derive_events(session.arcs, hand_line)
+        throws = [e for e in throws if e.arc_id not in truncated_ids]
+        catches = [e for e in catches if e.arc_id not in truncated_ids]
+        # A drop with arc_id=None is never emitted by detect_drops today,
+        # but the type allows it (DropEvent.arc_id: int | None) -- treat
+        # "no arc to check" as "not truncated" rather than crashing.
+        drops = [d for d in session.drops if d.arc_id is None or d.arc_id not in truncated_ids]
 
         self._confirm("throw", [e.t for e in throws], self._now - freeze)
         self._confirm("catch", [e.t for e in catches], self._now - freeze)
-        self._confirm("drop", [d.t for d in session.drops], self._now - drop_freeze)
+        self._confirm("drop", [d.t for d in drops], self._now - drop_freeze)
 
-        live = any(r.end_t > self._now - freeze for r in session.runs)
+        # Run liveness: the naive `end_t > now - freeze` check is exactly
+        # right for deciding whether to OPEN a new tracked run (it's
+        # segment_runs' own, min_arcs-gated notion of "a real run exists").
+        # But measured evidence (task-5b-report.md) shows this same check
+        # can flap false on an ALREADY-open run purely from re-extraction
+        # noise at low arc density -- segment_runs re-derives the whole
+        # arc/run graph from scratch every cadence tick, and at 2-5 arcs per
+        # window (slow real cascades), losing or regrouping even one arc
+        # between consecutive ticks can swing "one clearly live run" to "no
+        # runs at all", with no left-edge truncation involved. Once a run is
+        # already open, treat ANY recent arc activity (any arc at all, not
+        # gated by min_arcs or first-missed-catch grouping) as proof the
+        # pattern is still going, so a single from-scratch-re-extraction
+        # blip can't force a false close -- only genuine silence (no arc
+        # activity anywhere near `now`) still ends it.
+        strict_live = any(r.end_t > self._now - freeze for r in session.runs)
+        if self._run_start is None:
+            live = strict_live
+        else:
+            recent_activity = any(a.t_end > self._now - freeze for a in session.arcs)
+            live = strict_live or recent_activity
+
         if live:
             # Live again: cancel any pending close outright. run_start is
             # left untouched when one was already open (the debounce below
@@ -162,7 +252,7 @@ class RealtimeAnalyzer:
                 1 for ct in self._confirmed["catch"]
                 if self._run_start is not None and ct >= self._run_start
             ),
-            hand_line_y=session.hand_line_y,
+            hand_line_y=hand_line,
             window_arcs=session.arcs,
             last_analysis_ms=(time.perf_counter() - t0) * 1000.0,
         )
