@@ -5,17 +5,18 @@ from collections import defaultdict
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 from juggletrack.arcs.extract import assign_detections
 from juggletrack.events.catches import derive_events
+from juggletrack.pipeline.draw import (
+    draw_arc_tails,
+    draw_detections,
+    draw_drop_marker,
+    draw_hand_line,
+    draw_hud,
+)
 from juggletrack.types import Detection, SessionResult
 from juggletrack.video.reader import VideoReader
-
-_GREEN = (0, 200, 0)
-_YELLOW = (0, 220, 220)
-_RED = (0, 0, 255)
-_WHITE = (240, 240, 240)
 
 
 def render_overlay(
@@ -65,23 +66,10 @@ def render_overlay(
         if not writer.isOpened():
             raise RuntimeError(f"cv2.VideoWriter failed to open: {out_path}")
 
-        hand_y_px = int(session.hand_line_y * h)
         for idx, t, frame in reader.frames():
-            cv2.line(frame, (0, hand_y_px), (w, hand_y_px), _YELLOW, 1)
-
-            for d in dets_by_frame.get(idx, []):
-                cv2.circle(frame, (int(d.x * w), int(d.y * h)), 4, _WHITE, 1)
-
-            for arc in session.arcs:
-                if not (arc.t_start <= t <= arc.t_end + 0.1):
-                    continue
-                t0 = max(arc.t_start, t - tail_s)
-                ts = np.arange(t0, min(t, arc.t_end) + 1e-9, 1 / 60)
-                pts = np.array(
-                    [[int(arc.x_at(tt) * w), int(arc.y_at(tt) * h)] for tt in ts]
-                )
-                if len(pts) >= 2:
-                    cv2.polylines(frame, [pts], False, _GREEN, 2)
+            draw_hand_line(frame, session.hand_line_y)
+            draw_detections(frame, dets_by_frame.get(idx, []))
+            draw_arc_tails(frame, session.arcs, t, tail_s=tail_s)
 
             active = next(
                 (i for i, r in enumerate(session.runs) if r.start_t - 0.5 <= t <= r.end_t + 0.5),
@@ -93,7 +81,7 @@ def render_overlay(
                 hud = f"run {active + 1}/{len(session.runs)}  catches {caught}  drops {drops_so_far}"
             else:
                 hud = f"runs {len(session.runs)}  drops {drops_so_far}"
-            cv2.putText(frame, hud, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, _WHITE, 2)
+            draw_hud(frame, hud)
 
             for drop in session.drops:
                 if drop.t <= t <= drop.t + 0.5:
@@ -102,8 +90,7 @@ def render_overlay(
                     # falling back to the hand line if the arc is unknown.
                     drop_arc = arcs_by_id.get(drop.arc_id)
                     y_frac = drop_arc.y_at(drop.t) if drop_arc is not None else session.hand_line_y
-                    x, y = int(drop.x * w), int(y_frac * h)
-                    cv2.drawMarker(frame, (x, y), _RED, cv2.MARKER_TILTED_CROSS, 24, 3)
+                    draw_drop_marker(frame, drop.x, y_frac)
 
             writer.write(frame)
         writer.release()
