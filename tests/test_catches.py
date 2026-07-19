@@ -121,3 +121,38 @@ def test_bounce_arc_apex_witnessed_still_rejected():
     throws, catches = derive_events([arc], hand_line)
     assert throws == []
     assert catches == []
+
+
+def test_truncated_bounce_fragment_yields_no_phantom_events():
+    """A truncated sub-hand-line fragment must not mint phantom throw/catch
+    events just because its apex happens to be unwitnessed.
+
+    This arc (``ay=1.0, by=-0.3, cy=0.70``) is rising but its parabola never
+    actually reaches the hand line (0.65): the discriminant
+    ``by**2 - 4*ay*(cy - hand_line) = 0.09 - 0.44 = -0.35`` is negative, so
+    ``hand_line_crossings`` falls back to ``(t_start, t_end)`` rather than
+    real roots. The observed window is also truncated well before the
+    parabola's own vertex (``apex_t = t_start + 0.15`` vs. ``t_end =
+    t_start + 0.1``), so the apex is unwitnessed too -- exactly the
+    combination that used to let the witnessed-apex bypass skip the guard
+    for a fragment that never got anywhere near the hands (apex_y=0.6775 is
+    only 0.0275 above the hand line, well under min_apex_above=0.02 below
+    it). A genuinely truncated real throw always crosses the hand line
+    (disc >= 0), so this fallback case is never a real throw: the apex
+    guard must apply regardless of witnessing when disc < 0, and both the
+    phantom throw (minted at t_start) and phantom catch (minted at t_end,
+    since y_at(t_end)=0.68 <= hand_line + FLOOR_MARGIN) must be suppressed.
+    """
+    hand_line = 0.65
+    arc = Arc(
+        id=5, t_start=10.0, t_end=10.1,
+        ay=1.0, by=-0.3, cy=0.70, bx=0.0, cx=0.5,
+        n_points=5, rmse=0.01,
+    )
+    apex_t = arc.apex_t()
+    assert not (arc.t_start <= apex_t <= arc.t_end), "fixture must have an unwitnessed apex"
+    disc = arc.by**2 - 4.0 * arc.ay * (arc.cy - hand_line)
+    assert disc < 0, "fixture parabola must never reach the hand line"
+    throws, catches = derive_events([arc], hand_line)
+    assert throws == []
+    assert catches == []

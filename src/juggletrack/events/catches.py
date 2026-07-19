@@ -57,9 +57,23 @@ def derive_events(
         # turn-4-diagnosed failure). An unwitnessed apex still gets a throw:
         # the witnessed-catch gate below already guards against manufacturing
         # phantom events from truncated arcs, same as it does for catches.
+        #
+        # BUT that bypass is only sound when `crossings` are real hand-line
+        # roots. hand_line_crossings falls back to (t_start, t_end) when the
+        # arc's parabola never reaches the hand line at all (disc < 0) -- and
+        # for that fallback case an unwitnessed apex is never a truncated
+        # real throw (a genuinely truncated real throw always crosses the
+        # hand line, i.e. disc >= 0), it's a sub-hand-line fragment (bounce/
+        # noise) whose vertex simply falls outside the observed window. So
+        # when disc < 0 the apex guard must apply regardless of witnessing,
+        # or such fragments mint phantom throw+catch pairs at their own
+        # (t_start, t_end) boundaries. Computed locally (not threaded through
+        # hand_line_crossings) to keep that helper's public contract stable.
+        disc = arc.by**2 - 4.0 * arc.ay * (arc.cy - hand_line)
         apex_t = arc.apex_t()
         apex_witnessed = arc.t_start <= apex_t <= arc.t_end
-        if apex_witnessed and arc.apex_y() > hand_line - min_apex_above:
+        guard_applies = apex_witnessed or disc < 0
+        if guard_applies and arc.apex_y() > hand_line - min_apex_above:
             continue
         t_throw, t_catch = crossings
         throws.append(ThrowEvent(t=t_throw, x=arc.x_at(t_throw), arc_id=arc.id))
