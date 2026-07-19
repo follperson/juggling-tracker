@@ -27,16 +27,21 @@ def workspace(tmp_path):
 def workspace_with_junk(tmp_path):
     """Same as `workspace`, plus a persistent background false positive (see
     tests/test_autolabel.py's `_persistent_junk_cascade`) parked at (0.91,
-    0.71) for the whole video -- gives the `--negatives` export something to
-    mine (a pre-first-throw lead-in stretch of pure-junk frames).
+    0.71) for the whole video, AND a junk-only idle tail well past the run
+    (activity windows exclude near-run frames from negative mining, so the
+    lead-in junk alone no longer yields candidates -- the idle tail is what
+    `--negatives` mines).
     """
     sim = simulate_cascade(n_throws=12, fps=30.0, seed=1)
     real = list(sim.detections)
     fps = 30.0
-    n_frames = max(d.frame_idx for d in real) + 1
+    run_frames = max(d.frame_idx for d in real) + 1
+    # idle tail: junk continues 2s after the run ends, for 30 frames
+    tail_start = run_frames + int(2.0 * fps)
+    n_frames = tail_start + 30
     rng = np.random.default_rng(11)
     junk = []
-    for i in range(n_frames):
+    for i in list(range(run_frames)) + list(range(tail_start, n_frames)):
         t = i / fps
         for _ in range(2):
             x = 0.91 + float(rng.uniform(-0.005, 0.005))

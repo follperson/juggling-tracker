@@ -163,6 +163,7 @@ def export_hard_negatives(
     min_junk: int = 2,
     seed: int = 0,
     jpeg_quality: int = 90,
+    pad: float = 1.0,
 ) -> dict:
     """Mine arc-rejected detections into zero-box negative training images.
 
@@ -180,21 +181,38 @@ def export_hard_negatives(
     zero-box negative there would leave that real ball unlabeled, which
     actively teaches the model to miss balls -- worse than not training on
     the frame at all.
+
+    Field-diagnosed leak (turn 4): HELD balls are arc-unassigned by design
+    (no parabola while stationary in a hand), so "all detections unassigned"
+    alone let held-ball frames leak into negatives and taught v4 to miss
+    balls in that environment. Fix: negatives may only come from frames
+    temporally OUTSIDE all activity -- a candidate frame's time must not
+    fall within `pad` seconds of any arc's [t_start, t_end]. Held balls
+    exist only around flights, while junk objects persist through idle
+    segments, so idle-only mining loses little junk yield and eliminates
+    the leak. Such frames are counted in `n_skipped_active`.
     """
     from juggletrack.video.reader import VideoReader
 
     assignment = assign_detections(dets, arcs)
     by_frame: dict[int, list[Detection]] = {}
     assigned_by_frame: dict[int, list[bool]] = {}
+    frame_t: dict[int, float] = {}
     for d, arc_id in zip(dets, assignment):
         by_frame.setdefault(d.frame_idx, []).append(d)
         assigned_by_frame.setdefault(d.frame_idx, []).append(arc_id != -1)
+        frame_t.setdefault(d.frame_idx, d.t)
 
+    windows = [(a.t_start - pad, a.t_end + pad) for a in arcs]
     n_skipped_ambiguous = 0
+    n_skipped_active = 0
     candidates: dict[int, list[Detection]] = {}
     for frame_idx, flags in assigned_by_frame.items():
         if any(flags):
             n_skipped_ambiguous += 1
+            continue
+        if any(lo <= frame_t[frame_idx] <= hi for lo, hi in windows):
+            n_skipped_active += 1
             continue
         if len(flags) >= min_junk:
             candidates[frame_idx] = by_frame[frame_idx]
@@ -247,4 +265,5 @@ def export_hard_negatives(
         "n_images": len(images),
         "n_candidate_frames": n_candidate_frames,
         "n_skipped_ambiguous": n_skipped_ambiguous,
+        "n_skipped_active": n_skipped_active,
     }
