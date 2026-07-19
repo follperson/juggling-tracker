@@ -5,7 +5,7 @@ import pytest
 
 from juggletrack.analyze import AnalyzeConfig, analyze_detections
 from juggletrack.sim import CascadeParams, simulate_cascade
-from juggletrack.types import SessionResult
+from juggletrack.types import Detection, SessionResult
 
 
 def test_end_to_end_clean_run():
@@ -26,6 +26,58 @@ def test_end_to_end_drop_run():
     assert sr.runs[0].end_reason == "drop"
     assert len(sr.drops) == 1
     assert sr.drops[0].t == pytest.approx(r.missed_catch_t, abs=0.1)
+
+
+def test_drift_cohort_gate_runs_before_drop_detection():
+    """A rejected drift-cohort run must not leak a DropEvent into sr.drops.
+
+    Reuses the turn-4 drift-cohort fixture (tests/test_extract.py::
+    test_slow_drift_junk_cohort_known_gap: 3 spatially-separated, briskly
+    drifting paths that each fit as a plausible arc but are structurally
+    not-juggling as a run -- unidirectional, monotonic, never alternating).
+    That test already confirms ``sr.runs == []``. The bug this fixture adds
+    on top: give the LAST path a longer tail so it keeps being "detected"
+    well past its own hand-line crossing, ending far below hand height
+    (``y`` far past ``hand_line + FLOOR_MARGIN``) while still descending
+    (``vy_at(t_end) > 0``) and with no later arc to continue the pattern --
+    exactly the two-signal combination (``floor_descent`` +
+    ``periodicity_collapse``) ``detect_drops`` mints a DropEvent for. Before
+    the fix, ``_events_from_arcs`` ran ``detect_drops`` on the ungated runs
+    and only filtered ``runs`` afterward, so this junk run's drop survived
+    into ``sr.drops`` even though the run itself was correctly rejected.
+    Gating before drop detection means the junk run's arcs never reach
+    ``detect_drops`` at all.
+
+    The control (reusing ``test_end_to_end_drop_run``'s real cascade-drop
+    scenario) confirms the fix doesn't just suppress drops outright: a
+    genuine drop in a genuine (non-drift-cohort) run is still detected.
+    """
+    fps = 30.0
+    dets = []
+    for k in range(3):
+        t0 = 0.5 + k * 0.7
+        v0, a = 0.12, 0.1
+        # Paths 0 and 1 keep the original 1.2s window (they end back near
+        # the hand line, same as test_slow_drift_junk_cohort_known_gap).
+        # Path 2 (the last -- no later path's detections to collide with in
+        # time) gets a longer window so its tail keeps falling well past
+        # its own hand-line crossing instead of stopping right at it.
+        dur = 2.0 if k == 2 else 1.2
+        for i in range(int(dur * fps)):
+            dt = i / fps
+            dets.append(Detection(
+                frame_idx=int((t0 + dt) * fps), t=t0 + dt,
+                x=0.15 + 0.22 * k + 0.15 * dt,
+                y=0.6 - v0 * dt + a * dt * dt,
+            ))
+    sr_junk = analyze_detections(dets)
+    assert sr_junk.runs == [], "drift-cohort run gate must still reject this cohort's run"
+    assert sr_junk.drops == [], "a gated-out junk run must not leak a DropEvent"
+
+    r = simulate_cascade(n_throws=20, fps=30.0, drop_at_throw=8, seed=1)
+    sr_control = analyze_detections(r.detections)
+    assert len(sr_control.runs) == 1
+    assert len(sr_control.drops) == 1, "a real drop in a real run must still be detected"
 
 
 def test_video_end_run():

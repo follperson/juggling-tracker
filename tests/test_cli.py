@@ -174,6 +174,10 @@ def test_label_command_negatives_option(workspace_with_junk):
     for im in coco["images"]:
         assert (negatives / "images" / im["file_name"]).exists()
     assert "negatives" in result.output.lower()
+    # the CLI echo must surface n_skipped_active too, not just
+    # n_skipped_ambiguous -- both are useful diagnostics for why a
+    # candidate frame count came out lower than expected.
+    assert "skipped active" in result.output.lower()
 
 
 def test_label_command_without_negatives_skips_export(workspace):

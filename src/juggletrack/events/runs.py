@@ -77,7 +77,12 @@ def segment_runs(
         # true period (Meschke ground truth: period 1.19-2.89s, outside the
         # fixed default (0.2, 1.2)); falls back to that fixed default only
         # when the run has too few throws for its own period estimate.
-        arc_span = (min(a.t_start for a in group), max(a.t_end for a in group))
+        # `arc_end(a)` (the hand-line crossing), not the raw `a.t_end`: a
+        # real detection stream can keep tracking an arc past its own
+        # analytic flight end (e.g. an uncaught ball still visible falling
+        # toward the floor), and that extra tail is not part of "the arc's
+        # own [flight] span" this comment means to bound the window by.
+        arc_span = (min(a.t_start for a in group), max(arc_end(a) for a in group))
         lag_range = (max(0.1, 0.5 * p), 1.5 * p) if p else (0.2, 1.2)
         score, _ = periodicity_score(group, *arc_span, lag_range=lag_range)
         # periodicity_score returns None when the window can't be judged at

@@ -204,7 +204,8 @@ def label(
         typer.echo(
             f"negatives: {neg_stats['n_images']} images "
             f"({neg_stats['n_candidate_frames']} candidates, "
-            f"{neg_stats['n_skipped_ambiguous']} skipped ambiguous) -> {negatives}"
+            f"{neg_stats['n_skipped_ambiguous']} skipped ambiguous, "
+            f"{neg_stats['n_skipped_active']} skipped active) -> {negatives}"
         )
 
 

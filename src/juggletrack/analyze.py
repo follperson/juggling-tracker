@@ -70,7 +70,6 @@ def _events_from_arcs(
         arcs, throws, catches, hand_line,
         gap_factor=cfg.gap_factor, min_arcs=cfg.min_arcs,
     )
-    drops, runs = detect_drops(arcs, runs, hand_line)
 
     # Drift-cohort run gate (spec §4 validator, turn-4 cascade-structure-gate
     # bake-off clause A): a self-consistent slow-drift junk cohort can pass
@@ -79,11 +78,21 @@ def _events_from_arcs(
     # unidirectional, monotonically marching across the frame, never
     # alternating hands. Reject the run outright; its arcs stay in `arcs`
     # (and in any other surviving run's arc_ids) untouched.
+    #
+    # This must run BEFORE detect_drops: a rejected run's arcs can still look
+    # like a floor-descending "drop" in isolation (e.g. a drift path that
+    # never returns to hand height), and detect_drops has no way to know the
+    # run it belongs to was just thrown out. Gating first means a junk run's
+    # arcs never reach detect_drops at all, so they can't mint a DropEvent
+    # that would otherwise leak into SessionResult.drops even though the
+    # corresponding run is absent from SessionResult.runs.
     by_id = {a.id: a for a in arcs}
     runs = [
         run for run in runs
         if not is_drift_cohort([by_id[i] for i in run.arc_ids if i in by_id])
     ]
+
+    drops, runs = detect_drops(arcs, runs, hand_line)
 
     final: list[Run] = []
     for run in runs:
