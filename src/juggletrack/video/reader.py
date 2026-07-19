@@ -67,15 +67,27 @@ class VideoReader:
         with idx > 0 reports ``msec <= previous_msec`` (non-monotonic) or
         ``msec == 0`` (a common "unsupported" sentinel on some backends).
         idx == 0 reporting msec == 0 is normal/expected and never breaks
-        trust. Once broken, every remaining frame in this iteration falls
-        back to idx/fps -- mixing time bases within one clip would be worse
-        than using either consistently.
+        trust. Once broken, timestamps are REBASED off the last known-good
+        (idx, t) pair -- ``t = last_good_t + (idx - last_good_idx) / fps`` --
+        rather than jumping to the absolute ``idx / fps`` clock. PTS can
+        already have drifted away from ``idx / fps`` (that's the whole point
+        of preferring it -- VFR footage's real per-frame duration isn't the
+        container's average fps), so jumping to the absolute clock at the
+        seam can go backward in time relative to the last trusted
+        timestamp. Continuing on the last-good-anchored offset clock for the
+        rest of the iteration keeps every timestamp strictly increasing
+        across the seam, at the cost of a small constant offset from
+        ``idx / fps`` for the remainder of the clip -- still far better than
+        a non-monotonic jump, which downstream parabola fits can't tolerate
+        at all.
         """
         self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         idx = 0
         pts_ok = True
         first_msec = 0.0
         prev_msec = 0.0
+        last_good_t = 0.0
+        last_good_idx = 0
         while True:
             ok, frame = self._cap.read()
             if not ok:
@@ -85,19 +97,21 @@ class VideoReader:
                 if idx == 0:
                     if msec < 0:
                         pts_ok = False
-                        t = idx / self.info.fps
+                        t = last_good_t + (idx - last_good_idx) / self.info.fps
                     else:
                         first_msec = msec
                         prev_msec = msec
                         t = 0.0
+                        last_good_t, last_good_idx = t, idx
                 elif msec <= prev_msec or msec == 0.0:
                     pts_ok = False
-                    t = idx / self.info.fps
+                    t = last_good_t + (idx - last_good_idx) / self.info.fps
                 else:
                     t = (msec - first_msec) / 1000.0
                     prev_msec = msec
+                    last_good_t, last_good_idx = t, idx
             else:
-                t = idx / self.info.fps
+                t = last_good_t + (idx - last_good_idx) / self.info.fps
             yield idx, t, frame
             idx += 1
 
