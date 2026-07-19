@@ -58,6 +58,25 @@ class RealtimeAnalyzer:
     # false close: RealtimeState.runs_completed is exposed every frame and
     # must stay monotonic (test_counters_are_monotonic), so the close itself
     # is deferred rather than committed-and-rolled-back.
+    #
+    # THE TRADE, STATED PLAINLY: this fixes the flicker-overshoot direction
+    # (test_counters_are_monotonic and the parity tests would otherwise
+    # occasionally see runs_completed tick up one extra) but it KNOWINGLY
+    # merges two REAL runs when the silence between them is inside roughly
+    # freeze_s's own horizon (~0.6-1.5s band, empirically) -- see
+    # test_debounce_merges_narrow_gap_runs_known_tradeoff, which pins that
+    # exact under-count as current behavior, and
+    # test_two_runs_with_wide_gap_counted_separately, which pins the
+    # (correct) count once the gap is comfortably outside that band. This
+    # happens because `freeze_s` is doing double duty here: it is both the
+    # event-confirmation lag (how long before a throw/catch is trusted) and
+    # the run-liveness horizon (`live = ... r.end_t > self._now - freeze` in
+    # _analyze) that this debounce is measured against. A short real gap and
+    # a same-run dropout look identical to the debounce because both drain
+    # from the same clock. Revisit this constant (and likely split it in
+    # two) once run-liveness has its own horizon decoupled from
+    # event-confirmation lag -- until then, flipping either pinning test's
+    # assertion is a deliberate, visible decision, not a drive-by fix.
     RUN_CLOSE_DEBOUNCE_S = 0.5
 
     def __init__(self, config: RealtimeConfig | None = None):

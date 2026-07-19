@@ -5,6 +5,15 @@ from collections import defaultdict
 from juggletrack.analyze import analyze_detections
 from juggletrack.pipeline.realtime import RealtimeAnalyzer, RealtimeConfig
 from juggletrack.sim import simulate_cascade
+from juggletrack.types import Detection
+
+
+def shift(dets, dt_s, dframes):
+    return [
+        Detection(frame_idx=d.frame_idx + dframes, t=d.t + dt_s, x=d.x, y=d.y,
+                  w=d.w, h=d.h, confidence=d.confidence)
+        for d in dets
+    ]
 
 
 def frames_of(dets):
@@ -14,12 +23,16 @@ def frames_of(dets):
     return [(idx / 30.0, by.get(idx, [])) for idx in range(max(by) + 1)]
 
 
-def stream(r, analyzer):
+def stream_dets(dets, analyzer):
     states = []
-    for t, dets in frames_of(r.detections):
-        states.append(analyzer.feed(dets, t))
+    for t, frame_dets in frames_of(dets):
+        states.append(analyzer.feed(frame_dets, t))
     states.append(analyzer.finalize())
     return states
+
+
+def stream(r, analyzer):
+    return stream_dets(r.detections, analyzer)
 
 
 def test_parity_short_clean_stream():
@@ -86,6 +99,56 @@ def test_analysis_stays_fast_and_reports_timing():
     assert timings, "no analysis timings recorded"
     mean_ms = sum(timings) / len(timings)
     assert mean_ms < 50, f"mean re-analysis {mean_ms:.1f}ms exceeds loose CI bound"
+
+
+def _two_run_stream(gap_s):
+    """Concatenate two independent 10-throw cascades with `gap_s` of silence
+    between run 1's end and run 2's start (test_runs.py::shift pattern:
+    absolute time-shift the second sim's detections/frame indices)."""
+    a = simulate_cascade(n_throws=10, fps=30.0, noise=0.003, dropout=0.1, seed=29)
+    b = simulate_cascade(n_throws=10, fps=30.0, noise=0.003, dropout=0.1, seed=30)
+    dt_s = gap_s + a.run_end - b.run_start
+    dframes = round(dt_s * 30.0)
+    return a.detections + shift(b.detections, dt_s, dframes)
+
+
+def test_two_runs_with_wide_gap_counted_separately():
+    """A ~3.0s silence between two real runs sits well outside the run-close
+    debounce's merge band (RUN_CLOSE_DEBOUNCE_S combined with freeze_s):
+    live and offline must agree on 2 runs."""
+    dets = _two_run_stream(gap_s=3.0)
+    offline = analyze_detections(dets)
+    assert len(offline.runs) == 2, "fixture must offline-segment into 2 runs"
+
+    analyzer = RealtimeAnalyzer()
+    final = stream_dets(dets, analyzer)[-1]
+    assert final.runs_completed == 2
+
+
+def test_debounce_merges_narrow_gap_runs_known_tradeoff():
+    """KNOWN TRADE-OFF, not desired behavior (see RUN_CLOSE_DEBOUNCE_S's
+    docstring in realtime.py): a ~1.0s silence between two real runs sits
+    inside the debounce's merge band, so the live analyzer under-counts them
+    as a single run even though they are genuinely separate (offline agrees
+    there are 2). This pins the CURRENT behavior so a future change to the
+    debounce/freeze horizons is a deliberate, visible decision -- flip this
+    assertion (to == 2) when freeze_s and the run-close horizon are
+    decoupled, not before.
+
+    Pre-condition asserted inline so the pin can't rot silently: if the
+    fixture ever stops offline-segmenting into 2 runs, this test's premise is
+    gone and it must be revisited rather than trusted at face value.
+    """
+    dets = _two_run_stream(gap_s=1.0)
+    offline = analyze_detections(dets)
+    assert len(offline.runs) == 2, "fixture must offline-segment into 2 runs"
+
+    analyzer = RealtimeAnalyzer()
+    final = stream_dets(dets, analyzer)[-1]
+    assert final.runs_completed == 1, (
+        "this pins a documented trade-off (debounce merges narrow real "
+        "gaps), not desired behavior"
+    )
 
 
 def test_realtime_module_is_cv2_free():
