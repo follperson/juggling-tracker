@@ -202,3 +202,18 @@ def test_coverage_command(workspace):
     assert result.exit_code == 0, result.output
     assert f"detections {len(sim.detections)}" in result.output
     assert ">=2:" in result.output and ">=3:" in result.output
+
+
+def test_live_command_file_replay(workspace):
+    from juggletrack.cli import app
+
+    sim, video, dets, tmp = workspace
+    out = tmp / "live_out"
+    result = runner.invoke(app, [
+        "live", str(video), "--detections", str(dets),
+        "--no-display", "--out", str(out),
+    ])
+    assert result.exit_code == 0, result.output
+    assert "catches" in result.output and "fps" in result.output
+    saved = json.loads((out / "live_session.json").read_text())
+    assert saved["catches_total"] == 12

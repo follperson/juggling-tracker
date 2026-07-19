@@ -266,5 +266,63 @@ def train(
     typer.echo(f"best weights: {best}")
 
 
+@app.command()
+def export(
+    weights: Path = typer.Argument(..., exists=True, dir_okay=False),
+    imgsz: int = typer.Option(640),
+    half: bool = typer.Option(True, "--half/--no-half"),
+) -> None:
+    """Export detector weights to CoreML (.mlpackage) for the Mac live path."""
+    from juggletrack.train.export import export_coreml
+
+    typer.echo(f"exported: {export_coreml(weights, imgsz=imgsz, half=half)}")
+
+
+@app.command()
+def live(
+    source: str = typer.Argument("0", help="Webcam index (digits) or video file path"),
+    model: str = typer.Option(
+        "/Users/andrew.follmann/personal-projects/juggling/models/juggletrack-v3/best.pt",
+        help="Detector weights (.pt or .mlpackage)",
+    ),
+    detections: Path | None = typer.Option(
+        None, exists=True, dir_okay=False,
+        help="Replay saved detections.jsonl (file sources only; no detector run)",
+    ),
+    conf: float = typer.Option(0.05),
+    imgsz: int = typer.Option(640),
+    device: str | None = typer.Option(None),
+    display: bool = typer.Option(True, "--display/--no-display"),
+    max_frames: int | None = typer.Option(None),
+    out: Path | None = typer.Option(None, help="Write live_session.json here"),
+) -> None:
+    """Live juggling tracker: webcam or file, realtime HUD."""
+    from juggletrack.pipeline.live import run_live
+    from juggletrack.pipeline.realtime import RealtimeConfig
+
+    src: int | str = int(source) if source.isdigit() else source
+    if detections is not None:
+        from juggletrack.detect.fake import FakeDetector
+        from juggletrack.pipeline.offline import load_detections_jsonl
+
+        detector = FakeDetector(load_detections_jsonl(detections))
+    else:
+        from juggletrack.detect.yolo import YOLODetector
+
+        detector = YOLODetector(model_path=model, conf=conf, imgsz=imgsz, device=device)
+
+    final, fps = run_live(
+        src, detector, config=RealtimeConfig(),
+        display=display, max_frames=max_frames,
+    )
+    if out is not None:
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "live_session.json").write_text(final.model_dump_json(indent=2))
+    typer.echo(
+        f"{final.runs_completed} runs, {final.catches_total} catches, "
+        f"{final.drops_total} drops @ {fps:.0f} fps"
+    )
+
+
 if __name__ == "__main__":
     app()
