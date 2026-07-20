@@ -205,3 +205,54 @@ Given the fps floor/goal are cleared with wide margin (§2) and compute is not t
 on exactly the sessions a live demo is meant to showcase. This bench's recommendation: don't ship
 the current window_s=8s default as "parity with offline" without a caveat, and treat the Kalman
 (or persistent-state) rewrite as the next priority ahead of further CoreML/perf work.
+
+## 8. Addendum — two in-architecture fix waves, and where the leak actually lives
+
+Two fix attempts were run against §3's failure before accepting the contingency verdict. Together
+they closed two of the three divergence mechanisms exactly and isolated the third to a stage
+neither architecture can reach. All numbers below are the same-input ss3_id_016 replay
+(offline reference **9 runs / 39 catches / 0 drops**).
+
+**Wave 1 — left-edge window guard (committed, `dd01055`).** The freeze horizon guarded the
+buffer's *right* edge but nothing guarded the *left*: arcs whose history was truncated by the
+trailing edge of the 8s buffer look like catchless run-enders, manufacturing phantom drops and
+churning run segmentation. The fix discards events/drops derived from arcs starting within
+`edge_pad=0.5s` of the buffer's oldest sample, adds sticky-open liveness for `run_active`
+(a recent arc keeps an open run open without re-clearing `min_arcs`), and smooths the hand line
+with an EMA (α=0.2; inter-cycle swings >0.1 in `hand_line_y` were measured before it).
+Result: **46/306/42 → 9/209/32 — runs now match offline exactly.** A new pinned test
+(`test_parity_very_long_stream`, a 27s three-run sim spanning >3× `window_s`) holds runs and
+drops exact against offline with a +4 catch allowance.
+
+**Wave 2 — persistent arc registry + global symbolic replay (built, measured, reverted; not
+committed).** Attribution from wave 1 showed the remaining catch leak was duplicate
+confirmation: every ~100ms re-analysis re-derives arcs from scratch, refit event times jitter
+past `event_match_tol=0.15s`, and one physical catch was observed confirmed 7 times across the
+~60 cycles that see it. The candidate fix gave arcs persistent identity — matched across cycles
+by apex signature (|Δapex_t|<0.12s, |Δapex_x|<0.08), confirmed once when fully interior to the
+trustworthy region — and re-ran the cheap symbolic stages (events → runs → drops) over the
+*entire* confirmed-arc history each cycle (~+1ms/cycle at 200 arcs; cost is not a constraint).
+Result: **1/191/0 — drops now match offline exactly and duplicate confirmation is closed**, but
+catches barely moved (209 → 191) and global replay over the denser registry bridged offline's
+run gaps (9 → 1 runs). Neither wave's output dominates the other.
+
+**Where the leak actually lives: windowed extraction itself.** The registry exposed the real
+mechanism. On identical detections, whole-video `extract_arcs` produces 56 arcs on ss3; the
+windowed path confirmed **194** — with ~85 of the excess in one t=16–69s stretch, and these are
+*well-witnessed* fits (n_points 62–91), not noise the registry could gate out. Growing the
+window doesn't converge to the offline answer: sweeping `window_s` 8→60s over that stretch moves
+its catch count 83→51 against offline's 18 — asymptotically wrong. The reason is that
+extraction's junk suppression is built on **global statistics**: static-cell occupancy computed
+over the whole video and gravity-cohort pruning against the median of all arcs. A bounded window
+re-derives both from local context, so dense in-hand/near-hand detections that whole-video
+statistics would kill instead mint extra physically-plausible arcs — and no downstream registry,
+dedup, or gating can repair a wrong arc decomposition (four such mitigations were measured; none
+moved catches materially).
+
+**Sharpened verdict.** The contingency is no longer optional hardening. Closing the residual gap
+requires replacing windowed re-extraction with persistent online arc identity — the documented
+Kalman/per-ball-tracker contingency — or making extraction's global statistics streaming-native
+(incremental static-cell occupancy and gravity-cohort state maintained across the whole session).
+Both are new scope beyond this plan. What ships today is honest about its envelope: exact parity
+on short-to-moderate streams (the pinned sim holds runs/drops exact), exact run segmentation plus
+a documented catch/drop over-count on multi-minute dense footage, and 2–3× the required fps.
