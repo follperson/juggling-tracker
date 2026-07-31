@@ -153,6 +153,97 @@ def export_video_labels(
             "n_review_frames": len(set(review_frames or []))}
 
 
+def detect_person_boxes(
+    video_path: str | Path,
+    frame_indices: list[int],
+    *,
+    model: str = "yolo11n.pt",
+    conf: float = 0.25,
+) -> dict[int, list[tuple[float, float, float, float]]]:
+    """Normalized-xyxy person boxes (COCO class 0) for the requested frames.
+
+    Feeds `export_hard_negatives`'s person-region veto. Runs the stock COCO
+    model only on `frame_indices` (candidate negatives are a few dozen frames
+    per video, so this stays cheap). Frames with no detected person are
+    simply absent from the result.
+    """
+    from ultralytics import YOLO  # lazy: torch loads only when actually mining
+
+    from juggletrack.video.reader import VideoReader
+
+    wanted = set(frame_indices)
+    yolo = YOLO(model)
+    out: dict[int, list[tuple[float, float, float, float]]] = {}
+    with VideoReader(video_path) as reader:
+        for idx, _t, frame in reader.frames():
+            if idx not in wanted:
+                continue
+            result = yolo.predict(frame, conf=conf, classes=[0], verbose=False)[0]
+            boxes = result.boxes
+            if boxes is None or len(boxes) == 0:
+                continue
+            out[idx] = [tuple(float(v) for v in row)
+                        for row in boxes.xyxyn.cpu().numpy()]
+    return out
+
+
+def _trusted_static_clusters(
+    idle_dets: list[Detection],
+    all_unassigned: list[Detection],
+    total_span: float,
+    *,
+    radius: float,
+    min_frac: float,
+    min_count: int,
+) -> tuple[list[int], list[dict]]:
+    """Greedy nearest-centroid clustering of idle-frame junk, plus trust.
+
+    Returns (trusted flag per idle det, in input order; trusted clusters as
+    manifest dicts). A cluster is trusted junk iff its idle membership has
+    >= `min_count` detections AND the time span of ALL unassigned detections
+    within `radius` of its centroid (any frame -- a wall picture's
+    during-run firings are evidence too) covers >= `min_frac` of
+    `total_span`.
+    """
+    # deterministic processing order regardless of caller's det ordering
+    order = sorted(range(len(idle_dets)),
+                   key=lambda i: (idle_dets[i].frame_idx, idle_dets[i].x, idle_dets[i].y))
+    sums: list[list[float]] = []  # [sum_x, sum_y, n] per cluster
+    cluster_of = [0] * len(idle_dets)
+    for i in order:
+        d = idle_dets[i]
+        best, best_dist = -1, radius
+        for ci, (sx, sy, n) in enumerate(sums):
+            dist = math.hypot(sx / n - d.x, sy / n - d.y)
+            if dist < best_dist:
+                best, best_dist = ci, dist
+        if best == -1:
+            best = len(sums)
+            sums.append([d.x, d.y, 1])
+        else:
+            sums[best][0] += d.x
+            sums[best][1] += d.y
+            sums[best][2] += 1
+        cluster_of[i] = best
+
+    trusted: list[dict] = []
+    trusted_ids: set[int] = set()
+    for ci, (sx, sy, n) in enumerate(sums):
+        if n < min_count:
+            continue
+        cx, cy = sx / n, sy / n
+        ts = [d.t for d in all_unassigned
+              if math.hypot(d.x - cx, d.y - cy) < radius]
+        if not ts:  # running centroid drifted past every evidence point
+            continue
+        span = max(ts) - min(ts)
+        if total_span > 0 and span >= min_frac * total_span:
+            trusted_ids.add(ci)
+            trusted.append({"x": cx, "y": cy, "n": n,
+                            "t_min": min(ts), "t_max": max(ts)})
+    return [ci in trusted_ids for ci in cluster_of], trusted
+
+
 def export_hard_negatives(
     video_path: str | Path,
     dets: list[Detection],
@@ -164,33 +255,69 @@ def export_hard_negatives(
     seed: int = 0,
     jpeg_quality: int = 90,
     pad: float = 1.0,
+    persist_radius: float = 0.04,
+    min_persist_frac: float = 0.5,
+    min_persist_count: int = 8,
+    floor_band_y: float = 0.85,
+    person_margin: float = 0.02,
+    person_boxes: dict[int, list[tuple[float, float, float, float]]] | None = None,
+    person_model: str | None = None,
 ) -> dict:
     """Mine arc-rejected detections into zero-box negative training images.
 
     The arc gate (`assign_detections`) already tells the pipeline which
-    detections are junk -- physics-implausible false positives (e.g. an eye
-    pupil the detector keeps firing on outdoor footage). That knowledge never
-    made it back into training before this: negative (zero-box) images teach
+    detections are junk -- physics-implausible false positives (e.g. framed
+    wall pictures the detector keeps firing on). That knowledge never made
+    it back into training before this: negative (zero-box) images teach
     YOLO what NOT to detect, and `assemble_dataset` already passes
     zero-annotation images through untouched with empty label files, so all
     that was missing was generating them.
 
-    A frame only qualifies if EVERY detection on it is unassigned (pure
-    junk) and there are at least `min_junk` of them. A frame where a real,
-    arc-verified ball also appears is ambiguous and is skipped entirely: a
-    zero-box negative there would leave that real ball unlabeled, which
-    actively teaches the model to miss balls -- worse than not training on
-    the frame at all.
+    But "arc-unassigned" is NOT "not a ball", and a zero-box negative
+    containing a real ball actively teaches the model to miss balls -- worse
+    than not training on the frame at all. The turn-4 postmortem (v4 trained
+    on contaminated negatives and lost outdoor recall; not promoted) found
+    every leak class in the field, and each gate below rejects one of them.
+    A frame must pass ALL gates to export; every gate fails safe (rejects
+    yield, never admits contamination):
 
-    Field-diagnosed leak (turn 4): HELD balls are arc-unassigned by design
-    (no parabola while stationary in a hand), so "all detections unassigned"
-    alone let held-ball frames leak into negatives and taught v4 to miss
-    balls in that environment. Fix: negatives may only come from frames
-    temporally OUTSIDE all activity -- a candidate frame's time must not
-    fall within `pad` seconds of any arc's [t_start, t_end]. Held balls
-    exist only around flights, while junk objects persist through idle
-    segments, so idle-only mining loses little junk yield and eliminates
-    the leak. Such frames are counted in `n_skipped_active`.
+    0. No arcs at all -> no negatives (`n_skipped_no_arcs`). Junk-ness is
+       defined by arc rejection; a no-arc juggling video is exactly the
+       maximum-contamination case (extraction failed everywhere).
+    1. Any arc-assigned detection on the frame -> `n_skipped_ambiguous`
+       (a zero-box negative would un-teach that verified ball).
+    2. Frame time within `pad` s of any arc's [t_start, t_end] ->
+       `n_skipped_active`. HELD balls are arc-unassigned by design (no
+       parabola in a hand) and exist around flights, so near-activity
+       frames can't be trusted at all.
+    3. Any detection outside every trusted static cluster ->
+       `n_skipped_transient`. Rejects MOVING unassigned objects: real
+       flights the linker failed to stitch (turn-4: a ball crossing the
+       juggler's face, frames 108/630, mistaken for "pupil FPs"). Trusted
+       junk must be a persistent static scene feature: see
+       `_trusted_static_clusters` (`persist_radius`, `min_persist_frac`,
+       `min_persist_count`).
+    4. Any detection with y > `floor_band_y` -> `n_skipped_floor`. A ball
+       RESTING on the floor is static and persistent -- geometrically
+       indistinguishable from background junk (turn-4: clusters at y~0.96
+       spanning 82-100% of the video) -- so the floor band is excluded
+       wholesale. Genuine floor clutter is sacrificed; camera angles where
+       the floor sits higher in frame are a documented residual risk.
+    5. Any detection inside a person box (expanded by `person_margin`) ->
+       `n_skipped_person`. Rejects balls held in hands or crossing the
+       body/face during idle stretches beyond `pad` (turn-4 frame 87: two
+       balls held at the hip 2.3 s before the first arc). Those clusters
+       are persistent (hands dwell at the same spots all video), so only
+       person geometry can reject them. Boxes come injected
+       (`person_boxes`, normalized xyxy per frame) or from the stock COCO
+       model (`person_model`, run only on frames that survived gates 0-4
+       plus `min_junk`). Frames with no detected person pass: held/face
+       balls require a person by definition, and an empty scene is the
+       safest yield there is -- but it does mean a person-detector miss
+       fails open for this gate (gates 3-4 still apply).
+
+    `min_junk` stays what it always was: at least that many junk detections
+    on the frame, applied after gate 4, uncounted.
     """
     from juggletrack.video.reader import VideoReader
 
@@ -206,16 +333,65 @@ def export_hard_negatives(
     windows = [(a.t_start - pad, a.t_end + pad) for a in arcs]
     n_skipped_ambiguous = 0
     n_skipped_active = 0
+    n_skipped_transient = 0
+    n_skipped_floor = 0
+    n_skipped_person = 0
+    n_skipped_no_arcs = 0
+    trusted_clusters: list[dict] = []
     candidates: dict[int, list[Detection]] = {}
-    for frame_idx, flags in assigned_by_frame.items():
-        if any(flags):
-            n_skipped_ambiguous += 1
-            continue
-        if any(lo <= frame_t[frame_idx] <= hi for lo, hi in windows):
-            n_skipped_active += 1
-            continue
-        if len(flags) >= min_junk:
-            candidates[frame_idx] = by_frame[frame_idx]
+
+    if not arcs:
+        n_skipped_no_arcs = len(by_frame)
+    else:
+        idle_frames = []
+        for frame_idx, flags in assigned_by_frame.items():
+            if any(flags):
+                n_skipped_ambiguous += 1
+                continue
+            if any(lo <= frame_t[frame_idx] <= hi for lo, hi in windows):
+                n_skipped_active += 1
+                continue
+            idle_frames.append(frame_idx)
+
+        idle_dets = [d for fi in idle_frames for d in by_frame[fi]]
+        all_unassigned = [d for d, a in zip(dets, assignment) if a == -1]
+        t_all = [d.t for d in dets]
+        total_span = max(t_all) - min(t_all) if dets else 0.0
+        trusted_flags, trusted_clusters = _trusted_static_clusters(
+            idle_dets, all_unassigned, total_span,
+            radius=persist_radius, min_frac=min_persist_frac,
+            min_count=min_persist_count,
+        )
+        det_trusted = {id(d): ok for d, ok in zip(idle_dets, trusted_flags)}
+
+        for frame_idx in idle_frames:
+            frame_dets = by_frame[frame_idx]
+            if not all(det_trusted[id(d)] for d in frame_dets):
+                n_skipped_transient += 1
+                continue
+            if any(d.y > floor_band_y for d in frame_dets):
+                n_skipped_floor += 1
+                continue
+            if len(frame_dets) >= min_junk:
+                candidates[frame_idx] = frame_dets
+
+        if person_model is not None and person_boxes is None:
+            person_boxes = detect_person_boxes(
+                video_path, sorted(candidates), model=person_model,
+            )
+        if person_boxes:
+            kept: dict[int, list[Detection]] = {}
+            for frame_idx, frame_dets in candidates.items():
+                boxes = person_boxes.get(frame_idx, [])
+                if any(
+                    x0 - person_margin <= d.x <= x1 + person_margin
+                    and y0 - person_margin <= d.y <= y1 + person_margin
+                    for d in frame_dets for (x0, y0, x1, y1) in boxes
+                ):
+                    n_skipped_person += 1
+                    continue
+                kept[frame_idx] = frame_dets
+            candidates = kept
 
     n_candidate_frames = len(candidates)
     frame_list = sorted(candidates)
@@ -259,6 +435,7 @@ def export_hard_negatives(
     (out / "negatives_manifest.json").write_text(json.dumps({
         "video": str(video_path),
         "frames": manifest_frames,
+        "trusted_clusters": trusted_clusters,
     }, indent=2))
 
     return {
@@ -266,4 +443,8 @@ def export_hard_negatives(
         "n_candidate_frames": n_candidate_frames,
         "n_skipped_ambiguous": n_skipped_ambiguous,
         "n_skipped_active": n_skipped_active,
+        "n_skipped_transient": n_skipped_transient,
+        "n_skipped_floor": n_skipped_floor,
+        "n_skipped_person": n_skipped_person,
+        "n_skipped_no_arcs": n_skipped_no_arcs,
     }

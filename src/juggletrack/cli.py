@@ -159,6 +159,14 @@ def label(
         help="Also mine arc-rejected junk detections into zero-box hard-negative "
         "images (COCO, same dets/arcs, no extra detection pass) at this dir",
     ),
+    neg_person_model: str = typer.Option(
+        "yolo11n.pt",
+        help="Stock COCO model for the hard-negative person-region veto "
+        "(rejects candidate frames whose 'junk' sits on the juggler -- held "
+        "balls and unstitched face/body crossings; turn-4 contamination "
+        "postmortem). Runs only on the few frames that survive the pure "
+        "gates. 'none' disables the veto (NOT recommended for training data).",
+    ),
 ) -> None:
     """Auto-label a video: arc-verified detections become COCO 'ball' boxes."""
     from juggletrack.arcs.extract import extract_arcs
@@ -200,12 +208,21 @@ def label(
         f"{stats['n_review_frames']} review frames -> {out_dir}"
     )
     if negatives is not None:
-        neg_stats = export_hard_negatives(video, dets, arcs, negatives)
+        neg_stats = export_hard_negatives(
+            video, dets, arcs, negatives,
+            person_model=None if neg_person_model.lower() == "none" else neg_person_model,
+        )
         typer.echo(
             f"negatives: {neg_stats['n_images']} images "
             f"({neg_stats['n_candidate_frames']} candidates, "
             f"{neg_stats['n_skipped_ambiguous']} skipped ambiguous, "
-            f"{neg_stats['n_skipped_active']} skipped active) -> {negatives}"
+            f"{neg_stats['n_skipped_active']} skipped active, "
+            f"{neg_stats['n_skipped_transient']} skipped transient, "
+            f"{neg_stats['n_skipped_floor']} skipped floor, "
+            f"{neg_stats['n_skipped_person']} skipped person"
+            + (f", {neg_stats['n_skipped_no_arcs']} skipped no-arcs"
+               if neg_stats["n_skipped_no_arcs"] else "")
+            + f") -> {negatives}"
         )
 
 

@@ -397,6 +397,237 @@ def test_export_hard_negatives_excludes_active_windows_despite_held_balls(tmp_pa
     assert manifest_frames.isdisjoint(real_frames)
 
 
+def _idle_hold_cascade(
+    *, junk_seed: int = 11, junk_density: int = 2, junk_jitter: float = 0.005,
+    tail_frames: int = 30, hold_frames: int = 18,
+):
+    """The turn-4 field-leak shape (PXL_20260716_191622045 frame 87): a juggler
+    HOLDING real balls during an idle stretch farther than `pad` from any arc.
+
+    Layout on one timeline (fps 30): a 2-ball held cascade (same params as
+    `_persistent_junk_cascade_with_held`, so hands genuinely dwell), persistent
+    junk at (0.91, 0.71) on every content frame, a junk-only idle tail 2 s
+    after `run_end`, then -- after a further 1 s gap -- an idle HOLD segment
+    where each frame has the junk plus two ball detections sitting in the
+    hands at (0.41, 0.65) / (0.59, 0.65).
+
+    The hold segment is the leak: its frames are outside every activity
+    window, all detections on them are arc-unassigned, and the held-ball
+    clusters are even *persistent* (the same hand spots accumulate held
+    detections throughout the run), so the temporal and persistence gates
+    both pass them by design -- only the person-region veto can reject them.
+
+    Returns (dets, arcs, total_frames, fps, tail_set, hold_set, person_box)
+    where person_box is a normalized xyxy box covering the juggler (hands
+    included, junk excluded).
+    """
+    fps = 30.0
+    params = CascadeParams(n_balls=2, period_s=0.8, dwell_s=0.5)
+    r = simulate_cascade(
+        n_throws=8, fps=fps, noise=0.002, seed=3, include_held=True, params=params,
+    )
+    real = list(r.detections)
+    n_frames = max(d.frame_idx for d in real) + 1
+    rng = np.random.default_rng(junk_seed)
+
+    def _junk_frame(i: int) -> list[Detection]:
+        t = i / fps
+        return [Detection(
+            frame_idx=i, t=t,
+            x=0.91 + float(rng.uniform(-junk_jitter, junk_jitter)),
+            y=0.71 + float(rng.uniform(-junk_jitter, junk_jitter)),
+        ) for _ in range(junk_density)]
+
+    junk = [d for i in range(n_frames) for d in _junk_frame(i)]
+
+    tail_start = int(round((r.run_end + 2.0) * fps))
+    tail_set = set(range(tail_start, tail_start + tail_frames))
+    tail = [d for i in sorted(tail_set) for d in _junk_frame(i)]
+
+    hold_start = tail_start + tail_frames + int(fps)  # 1 s gap after the tail
+    hold_set = set(range(hold_start, hold_start + hold_frames))
+    hold = []
+    for i in sorted(hold_set):
+        t = i / fps
+        hold.extend(_junk_frame(i))
+        for hand_x in (params.hand_x(0), params.hand_x(1)):
+            hold.append(Detection(
+                frame_idx=i, t=t,
+                x=hand_x + float(rng.uniform(-0.003, 0.003)),
+                y=params.hand_y + float(rng.uniform(-0.003, 0.003)),
+            ))
+
+    dets = real + junk + tail + hold
+    arcs = extract_arcs(dets)
+    total_frames = hold_start + hold_frames
+    person_box = (0.35, 0.20, 0.65, 0.95)
+    return dets, arcs, total_frames, fps, tail_set, hold_set, person_box
+
+
+def test_export_hard_negatives_person_veto_rejects_idle_held_balls(tmp_path):
+    dets, arcs, n_frames, fps, tail_set, hold_set, person_box = _idle_hold_cascade()
+    assert arcs, "sanity: extraction must actually verify some real throws"
+
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+    out = tmp_path / "negatives"
+    # person boxes supplied for every idle frame: hold frames get vetoed
+    # (held balls sit inside the box), tail frames must NOT (their junk is
+    # outside the box) -- a person merely being present is not a veto.
+    person_boxes = {f: [person_box] for f in sorted(tail_set | hold_set)}
+    stats = export_hard_negatives(
+        video, dets, arcs, out, max_frames=100, min_junk=2, seed=0,
+        person_boxes=person_boxes,
+    )
+
+    assert stats["n_skipped_person"] == len(hold_set)
+    assert stats["n_skipped_transient"] == 0
+    assert stats["n_skipped_floor"] == 0
+    assert stats["n_candidate_frames"] == len(tail_set)
+    assert stats["n_images"] == len(tail_set)
+
+    coco = json.loads((out / "annotations.json").read_text())
+    exported = {int(im["file_name"][6:12]) for im in coco["images"]}
+    assert exported == tail_set
+    assert exported.isdisjoint(hold_set)
+
+
+def test_export_hard_negatives_rejects_transient_unstitched_flight(tmp_path):
+    """Field leak #2 (frames 108/630): a real ball in flight the linker never
+    stitched into an arc. Modeled as a 5-point ballistic fragment (below
+    extract_arcs' min_points=6) crossing the first 5 idle-tail frames: fast
+    per-frame motion means no persistent static cluster, so the frames it
+    touches must be rejected as transient."""
+    dets, arcs, n_frames, fps, tail_set, hold_set, person_box = _idle_hold_cascade(
+        hold_frames=0,
+    )
+    assert arcs
+    ghost_set = set(sorted(tail_set)[:5])
+    ghost = [Detection(
+        frame_idx=f, t=f / fps, x=0.20 + 0.03 * i, y=0.50 - 0.08 * i,
+    ) for i, f in enumerate(sorted(ghost_set))]
+    dets = dets + ghost
+    arcs2 = extract_arcs(dets)
+    assert len(arcs2) == len(arcs), "sanity: the 5-point ghost must not fit an arc"
+
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+    out = tmp_path / "negatives"
+    stats = export_hard_negatives(
+        video, dets, arcs2, out, max_frames=100, min_junk=2, seed=0,
+    )
+
+    assert stats["n_skipped_transient"] == len(ghost_set)
+    assert stats["n_candidate_frames"] == len(tail_set) - len(ghost_set)
+
+    coco = json.loads((out / "annotations.json").read_text())
+    exported = {int(im["file_name"][6:12]) for im in coco["images"]}
+    assert exported == tail_set - ghost_set
+
+    # trusted persistent clusters are recorded for future audits
+    manifest = json.loads((out / "negatives_manifest.json").read_text())
+    clusters = manifest["trusted_clusters"]
+    assert any(
+        abs(c["x"] - 0.91) < 0.02 and abs(c["y"] - 0.71) < 0.02 and c["n"] >= 8
+        for c in clusters
+    )
+    for c in clusters:
+        assert c["t_min"] <= c["t_max"]
+
+
+def test_export_hard_negatives_floor_band_rejects_resting_ball(tmp_path):
+    """A ball resting on the floor is static and persistent -- geometrically
+    indistinguishable from background junk (turn-4 audit: clusters at y~0.96
+    spanning 82-100% of the video). The floor band must reject it even though
+    the persistence gate trusts it."""
+    dets, arcs, n_frames, fps, tail_set, hold_set, person_box = _idle_hold_cascade(
+        hold_frames=0,
+    )
+    assert arcs
+    rng = np.random.default_rng(5)
+    floor_set = set(sorted(tail_set)[:15])
+    max_content = max(d.frame_idx for d in dets if d.frame_idx not in tail_set)
+    floor_frames = sorted(set(range(max_content + 1)) | floor_set)
+    floor = [Detection(
+        frame_idx=f, t=f / fps,
+        x=0.305 + float(rng.uniform(-0.003, 0.003)),
+        y=0.952 + float(rng.uniform(-0.003, 0.003)),
+    ) for f in floor_frames]
+    dets = dets + floor
+    arcs2 = extract_arcs(dets)
+
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+    out = tmp_path / "negatives"
+    stats = export_hard_negatives(
+        video, dets, arcs2, out, max_frames=100, min_junk=2, seed=0,
+    )
+
+    assert stats["n_skipped_floor"] == len(floor_set)
+    assert stats["n_skipped_transient"] == 0
+    assert stats["n_candidate_frames"] == len(tail_set) - len(floor_set)
+
+    coco = json.loads((out / "annotations.json").read_text())
+    exported = {int(im["file_name"][6:12]) for im in coco["images"]}
+    assert exported == tail_set - floor_set
+
+
+def test_export_hard_negatives_no_arcs_exports_nothing(tmp_path):
+    """Zero extracted arcs = zero physics evidence the pipeline understood the
+    video -- the maximum-contamination case (e.g. juggling footage where the
+    linker failed everywhere). Nothing may be exported."""
+    fps = 30.0
+    rng = np.random.default_rng(11)
+    dets = [Detection(
+        frame_idx=i, t=i / fps,
+        x=0.91 + float(rng.uniform(-0.005, 0.005)),
+        y=0.71 + float(rng.uniform(-0.005, 0.005)),
+    ) for i in range(60) for _ in range(2)]
+    arcs = extract_arcs(dets)
+    assert arcs == [], "sanity: static junk alone must not extract arcs"
+
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=60, fps=fps)
+    out = tmp_path / "negatives"
+    stats = export_hard_negatives(video, dets, arcs, out, max_frames=40, seed=0)
+
+    assert stats["n_images"] == 0
+    assert stats["n_candidate_frames"] == 0
+    assert stats["n_skipped_no_arcs"] == 60
+    coco = json.loads((out / "annotations.json").read_text())
+    assert coco["images"] == [] and coco["annotations"] == []
+
+
+def test_export_hard_negatives_person_model_wires_detected_boxes(tmp_path, monkeypatch):
+    """`person_model=` computes boxes via detect_person_boxes on exactly the
+    frames that survived the pure gates, then applies the same veto as
+    injected `person_boxes`."""
+    import juggletrack.data.autolabel as autolabel_mod
+
+    dets, arcs, n_frames, fps, tail_set, hold_set, person_box = _idle_hold_cascade()
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+
+    seen: dict = {}
+
+    def fake_detect(video_path, frame_indices, *, model, conf=0.25):
+        seen["frames"] = sorted(frame_indices)
+        seen["model"] = model
+        return {f: [person_box] for f in frame_indices}
+
+    monkeypatch.setattr(autolabel_mod, "detect_person_boxes", fake_detect)
+    out = tmp_path / "negatives"
+    stats = export_hard_negatives(
+        video, dets, arcs, out, max_frames=100, min_junk=2, seed=0,
+        person_model="stub.pt",
+    )
+
+    assert seen["model"] == "stub.pt"
+    assert seen["frames"] == sorted(tail_set | hold_set)
+    assert stats["n_skipped_person"] == len(hold_set)
+    assert stats["n_images"] == len(tail_set)
+
+
 def test_export_hard_negatives_still_mines_genuinely_idle_tail(tmp_path):
     r, dets, arcs, n_frames, fps, tail_start = _persistent_junk_cascade_with_held()
     assert arcs, "sanity: extraction must actually verify some real throws"
