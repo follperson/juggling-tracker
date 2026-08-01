@@ -40,18 +40,19 @@ class RealtimeConfig(BaseModel):
     # floor-descent signals) reflect a tail-only fit, not the ball's real
     # trajectory. See _analyze's left-edge guard for the mechanism this
     # fixes (docs/superpowers/plans/2026-07-19-plan4-bench-findings.md §3,
-    # .superpowers/sdd/task-5b-report.md).
+    # §9 evidence appendix).
     edge_pad: float = 0.5
     # Hand-line EMA smoothing factor. MEASURED (not assumed) before adding:
     # a raw per-cycle hand-line re-estimate can swing >0.1 in normalized y
     # between consecutive 0.1s cadence ticks on real, arc-sparse footage
-    # (trace evidence in task-5b-report.md), which shifts every
-    # hand-line-relative computation (crossings, catch/drop witnessing)
-    # enough to manufacture duplicate event confirmations. Smoothing alone
-    # measured a ~14% reduction in duplicate catches on the ss3_id_016
-    # field-gate replay -- real but partial; see the report for the
-    # remaining, larger, out-of-scope mechanism (local-window vs
-    # whole-video arc-segmentation instability) this does not reach.
+    # (trace evidence in the findings doc's §9 evidence appendix), which
+    # shifts every hand-line-relative computation (crossings, catch/drop
+    # witnessing) enough to manufacture duplicate event confirmations.
+    # Smoothing alone measured a ~14% reduction in duplicate catches on the
+    # ss3_id_016 field-gate replay -- real but partial; see the findings
+    # doc's §8/§9 for the remaining, larger, out-of-scope mechanism
+    # (local-window vs whole-video arc-segmentation instability) this does
+    # not reach.
     hand_line_ema_alpha: float = 0.2
     analyze: AnalyzeConfig = Field(default_factory=AnalyzeConfig)
 
@@ -231,8 +232,8 @@ class RealtimeAnalyzer:
         # re-derivation of one that already landed.
         #
         # Deliberately NOT implemented as "drop the arc and re-run
-        # segment_runs/detect_drops on what's left": measured (see
-        # .superpowers/sdd/task-5b-report.md) that this footage can have as
+        # segment_runs/detect_drops on what's left": measured (see the
+        # findings doc's §9 evidence appendix) that this footage can have as
         # few as 2-5 arcs in a full 8s window (a slow real cascade, not this
         # module's fast synthetic-test cadence), so removing even one arc
         # routinely drops the group below segment_runs' min_arcs=3 gate and
@@ -314,8 +315,8 @@ class RealtimeAnalyzer:
         # Run liveness: the naive `end_t > now - freeze` check is exactly
         # right for deciding whether to OPEN a new tracked run (it's
         # segment_runs' own, min_arcs-gated notion of "a real run exists").
-        # But measured evidence (task-5b-report.md) shows this same check
-        # can flap false on an ALREADY-open run purely from re-extraction
+        # But measured evidence (findings doc §9 evidence appendix) shows
+        # this same check can flap false on an ALREADY-open run purely from re-extraction
         # noise at low arc density -- segment_runs re-derives the whole
         # arc/run graph from scratch every cadence tick, and at 2-5 arcs per
         # window (slow real cascades), losing or regrouping even one arc

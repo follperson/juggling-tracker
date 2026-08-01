@@ -52,6 +52,10 @@ once analysis/drawing overhead is added.
 
 ## 2. Live file-mode fps (the demo rehearsal)
 
+*Run/catch/drop counts below are as measured at `c901c66`, pre-wave-1 (§8) — superseded by §8's
+fix waves for run/catch/drop accuracy. fps figures are unaffected by the later waves (no
+per-cycle cost regression was measured; see §8) and still stand.*
+
 Fresh detection, MPS, `--no-display`, one run per video (`juggletrack live <video> --model
 models/juggletrack-v3/best.pt --no-display --out .../live/<stem>`):
 
@@ -69,6 +73,9 @@ this demo on this machine. (Run/catch/drop counts in this table are the fresh-de
 see §3 for why several of these numbers do not match offline `analyze` on the same clip.)
 
 ## 3. Parity table — and a material finding
+
+*As measured at `c901c66`, pre-wave-1 — superseded; see §8 for the fix waves and this branch's
+CURRENT (post-final-review-wave) numbers for both ss3_id_016 and af2.*
 
 The brief's exact-parity method: run `juggletrack analyze --save-intermediates` fresh (v3,
 stride 1, imgsz 640) to get `detections.jsonl` + `analysis.json`, then replay that **same**
@@ -132,6 +139,12 @@ dominated by the **freeze horizon**, not analysis time: catches/throws are confi
 (~2.5–2.6s total) — inherent to the design's stability/latency trade, and a separate concern
 from the run/catch-count parity bug in §3.
 
+The plan's own target (spec header, Task 5 brief) was **<5ms per re-analysis** — measured 27–43ms
+is 5–8× over that budget, but it doesn't bite on this desktop machine because cadence=3 (~100ms
+between analyses) leaves ~2–3× headroom even at the measured cost; a phone-class CPU with less
+per-core throughput (the spec's stated v1-vs-phase-2 target split) would need this budget
+re-checked before shipping the realtime path there.
+
 ## 5. Webcam smoke (best-effort)
 
 `uv run juggletrack live 0 --max-frames 300 --out .../webcam-smoke` failed exactly as expected
@@ -184,7 +197,9 @@ Press `q` to quit; drop `--max-frames` for an open-ended session; add `--out <di
 but the realtime engine's input is a truncated, sliding 8-second buffer, not the whole session
 the offline pass sees. Any run — or any drop signal needing lookback/lookahead — that spans more
 than `window_s` diverges, and steady real-world juggling sessions routinely run longer than 8
-seconds (this bench's own af2 run and all of ss3_id_016's 9 runs qualify). The failure mode is
+seconds (this bench's own af2 run 2 qualifies, and 3 of ss3_id_016's 9 offline runs do:
+17.35s, 12.24s, and 14.4s — corrected from an earlier draft of this section that overstated this
+as "all 9"). The failure mode is
 not marginal: 4 vs 2 runs on a 36-second clip, 46 vs 9 runs and **42 phantom drops** on a
 3.4-minute clip.
 
@@ -221,8 +236,8 @@ churning run segmentation. The fix discards events/drops derived from arcs start
 (a recent arc keeps an open run open without re-clearing `min_arcs`), and smooths the hand line
 with an EMA (α=0.2; inter-cycle swings >0.1 in `hand_line_y` were measured before it).
 Result: **46/306/42 → 9/209/32 — runs now match offline exactly.** A new pinned test
-(`test_parity_very_long_stream`, a 27s three-run sim spanning >3× `window_s`) holds runs and
-drops exact against offline with a +4 catch allowance.
+(`test_parity_very_long_stream`, a ~24s three-run sim (measured 24.13s) spanning >3× `window_s`)
+holds runs and drops exact against offline with a +4 catch allowance.
 
 **Wave 2 — persistent arc registry + global symbolic replay (built, measured, reverted; not
 committed).** Attribution from wave 1 showed the remaining catch leak was duplicate
@@ -253,6 +268,89 @@ moved catches materially).
 requires replacing windowed re-extraction with persistent online arc identity — the documented
 Kalman/per-ball-tracker contingency — or making extraction's global statistics streaming-native
 (incremental static-cell occupancy and gravity-cohort state maintained across the whole session).
-Both are new scope beyond this plan. What ships today is honest about its envelope: exact parity
-on short-to-moderate streams (the pinned sim holds runs/drops exact), exact run segmentation plus
-a documented catch/drop over-count on multi-minute dense footage, and 2–3× the required fps.
+Both are new scope beyond this plan. What ships today is honest about its envelope: exact run
+segmentation on both clips tested, and a catch/drop over-count whose presence tracks **run length
+relative to `window_s`, not clip duration** — af2 (35.6s total, just one run longer than
+`window_s`) over-counts on that one run just as ss3_id_016 (205s total, three such runs)
+over-counts on its three; a clip with no run exceeding `window_s` shows none of this regardless of
+its total length. (An earlier draft of this sentence attributed the over-count to "multi-minute
+dense footage" specifically — corrected here, since af2 is neither multi-minute nor was clip
+duration itself the distinguishing factor; see Wave 3 below for af2's own before/after numbers.)
+Also notable but structurally separate: runs separated by less than roughly `freeze_s`'s liveness
+horizon (~0.6–1.5s of silence, empirically) merge into one by design — a documented trade-off, not
+part of this over-count mechanism, pinned in both directions by
+`test_two_runs_with_wide_gap_counted_separately` (correctly separate outside the band) and
+`test_debounce_merges_narrow_gap_runs_known_tradeoff` (merged inside it).
+
+**Wave 3 — final-review fix wave (this branch's HEAD).** A subsequent adversarial code review
+found and fixed eight further engine defects (E1–E8; see this branch's commit history and
+`tests/test_realtime.py` for the full list) independent of Waves 1–2 above — sticky-open liveness
+gated to event-bearing arcs only (not any arc, closing a domain-plausible run-merge case: a
+dropped ball bouncing on the floor between two real runs), one hand line driving every
+derivation per cycle instead of a raw/EMA split between catches and drops/runs, live catch
+confirmation gated to run membership (matching offline's parity reference), a `RealtimeConfig`
+validator, and several smaller correctness/robustness fixes. Re-measured both same-input replays
+from Wave 1 at this wave's HEAD (`uv run juggletrack live <video> --detections
+outputs/plan4-bench/analyze-v3/<name>/detections.jsonl --no-display --out ...`):
+
+| Video | Offline (runs/catches/drops) | Wave 1 (`dd01055`) | This wave (HEAD) |
+|---|---|---|---|
+| ss3_id_016.MP4 | 9 / 39 / 0 | 9 / 209 / 32 | **9 / 207 / 5** |
+| af2.mp4 | 2 / 20 / 1 | 2 / 32 / 4 | **2 / 32 / 2** |
+
+Runs continue to match offline exactly on both clips. Drops improved sharply on both — ss3_id_016
+32→5 (an 84% reduction) and af2 4→2 (50%) — consistent with E2 (one hand line for every
+derivation) directly closing the mechanism where an arc could be a catch per one line and an
+independent drop candidate per the other. Catches are essentially unchanged (ss3_id_016 209→207,
+af2 32→32): E1–E3 do not touch the separately-diagnosed re-extraction-instability mechanism (see
+Wave 2 above and the evidence appendix, §9) that accounts for the residual catch gap on both
+clips — this wave's fixes targeted different, confirmed bugs (bounce-junk run merging, dual-line
+mis-classification, sub-min-arcs catch leakage), not that one. The Kalman/persistent-tracker
+contingency verdict above is unchanged by this wave: it targets exactly the mechanism this wave
+did not touch.
+
+## 9. Evidence appendix (D8) — measurements cited from the working-notes session
+
+`.superpowers/sdd/task-5b-report.md` (Wave 1's running notes) is a session working-notes file,
+not committed to this repo (nothing under `.superpowers/` is tracked). Six places in committed
+code/tests cited it by path for specific measurements — a dangling reference for anyone else
+checking out this branch. This section folds those specific measurements into this (tracked)
+document; the source/test comments now point here instead.
+
+- **Hand-line jitter (`RealtimeConfig.hand_line_ema_alpha`'s docstring, `realtime.py`):** on
+  ss3_id_016, `hand_line_y`'s raw per-cycle estimate was observed swinging 0.804 → 0.706 → 0.784 →
+  0.780 → 0.779 → 0.697 → 0.718 across seven consecutive ~0.1s cadence ticks at t≈82–86s — swings
+  >0.1 in normalized y, well above `FLOOR_MARGIN=0.10`, confirming the catch/drop straddle band
+  (Wave 1's motivation for adding the EMA) is reachable on real footage, not just in theory.
+- **Low arc density defeating a naive left-edge fix (`_analyze`'s left-edge-guard comment,
+  `realtime.py`):** ss3_id_016 has as few as 2–5 total arcs in an entire 8-second window (a much
+  slower real cascade than this suite's fast synthetic sims) — the first left-edge-guard attempt
+  (drop the truncated arc and recompute `runs`/`drops` on what's left) took ss3_id_016 from 43
+  pre-fix runs to **70**, because removing even one "at risk" arc routinely dropped a group below
+  `segment_runs`' `min_arcs=3` gate, erasing run recognition entirely — a bigger, self-inflicted
+  version of the bug it was meant to fix. This is why the shipped guard filters the DERIVED
+  events/drops list instead of removing arcs from `segment_runs`' input.
+- **Sticky-open liveness's own motivating measurement (run-liveness comment, `realtime.py`):**
+  traced (unmodified code, no left-edge logic at all) that `session.runs` flaps between a
+  clearly-live 4–5-arc group and an empty/`min_arcs`-failing 2-arc group from one 0.1s cadence
+  tick to the next, WITHIN a single offline-confirmed continuous run, at ss3_id_016's low arc
+  density — zero left-edge truncation involved. Sticky-open liveness alone took ss3_id_016 from
+  43/70 (pre-fix / naive-recompute) runs to 9 (exact, matching offline) — the single
+  highest-leverage fix in Wave 1.
+- **Why `_three_run_stream` needs footage-realistic noise, not the suite's clean default
+  (`test_parity_very_long_stream`'s docstring, `test_realtime.py`):** verified that the brief's
+  literal clean levels (noise=0.003, dropout=0.1, used by most other fixtures in this file)
+  reproduce ZERO pre-fix divergence on this fixture shape — three clean gapped runs never give the
+  sliding window a reason to misbehave. noise=0.015/dropout=0.15 is the level empirically needed
+  to exercise the same re-derivation-instability class as the real ss3_id_016 bug, at unit-test
+  scale/speed.
+- **The residual, out-of-scope re-extraction-instability mechanism (`test_parity_very_long_
+  stream`'s docstring, `test_realtime.py`, and §8 Wave 2/3 above):** on the real ss3_id_016
+  field-gate replay, the best Wave-1-family variant achieved catches 306→209 (32% reduction) and
+  drops 42→32 (24% reduction) — real, measured improvement, but nowhere near the ±4/±1 parity
+  gate. Root cause (confirmed via the arc registry in Wave 2): one real catch was independently
+  "confirmed" 7 times across ~60 cycles that saw it, from 2–5 different, mutually
+  time-overlapping arc candidates extracted per cycle for what offline recognizes as one physical
+  flight — a consequence of re-deriving the whole arc/run structure from scratch every ~100ms on a
+  low-density, real-noise point cloud, not of left-edge truncation (this cluster sits well inside
+  the window, nowhere near either edge).

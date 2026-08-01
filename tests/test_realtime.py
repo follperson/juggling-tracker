@@ -268,7 +268,8 @@ def _three_run_stream(gap_s, noise, dropout):
     near-noiseless levels `_two_run_stream` uses (0.003/0.1), this fixture
     reproduces NO divergence at all pre-fix (verified) -- three short,
     clean, gapped runs never give the sliding window a reason to
-    misbehave. Measured (see .superpowers/sdd/task-5b-report.md) that
+    misbehave. Measured (see docs/superpowers/plans/
+    2026-07-19-plan4-bench-findings.md's §9 evidence appendix) that
     noise=0.015/dropout=0.15 is enough real-detector-like jitter to
     reproduce the same class of window-boundary run-churn the field bench
     found on ss3_id_016 (offline 9 runs vs live 46), just at a much
@@ -289,7 +290,7 @@ def _three_run_stream(gap_s, noise, dropout):
 
 def test_parity_very_long_stream():
     """The field-bench failure (docs/superpowers/plans/
-    2026-07-19-plan4-bench-findings.md, .superpowers/sdd/task-5-report.md):
+    2026-07-19-plan4-bench-findings.md §3, §8):
     ss3_id_016 (205s of real footage, runs up to ~14s) turned 9 offline
     runs/39 catches/0 drops into 46 runs/306 catches/42 phantom drops live.
     This reproduces the same class of failure -- window-boundary run churn
@@ -312,8 +313,8 @@ def test_parity_very_long_stream():
     band is signed, not absolute: live has only ever been measured
     OVER-counting on this fixture, never under, across both fix waves --
     an absolute-value band would silently accept a live UNDER-count that
-    would actually be a new, different regression. See
-    task-5b-report.md's field-gate section for the much larger version of
+    would actually be a new, different regression. See the findings doc's
+    §8 (Wave 2/3) and §9 evidence appendix for the much larger version of
     this same gap on real ss3_id_016 footage and why it's out of scope for
     this design."""
     dets = _three_run_stream(gap_s=3.0, noise=0.015, dropout=0.15)
