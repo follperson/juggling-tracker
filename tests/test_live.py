@@ -94,17 +94,90 @@ def test_hud_lines_includes_run_history_when_present():
     assert lines[1] == "history: 8, 9, 15, 4, 10"
 
 
-def test_run_live_hud_run_history_tracks_completed_runs(sim_video):
+def test_run_live_hud_run_history_tracks_completed_runs(tmp_path, monkeypatch):
     """S2 integration: live.py's own run-history bookkeeping (comparing
     consecutive states' runs_completed/catches_current_run) records the
-    right per-run catch count as runs close during a real session."""
-    sim, video = sim_video
-    states = []
-    final, _ = run_live(str(video), FakeDetector(sim.detections), display=False,
-                         on_state=lambda s, f: states.append(s))
-    # single 12-throw cascade -> exactly one run closes, with 12 catches.
-    assert final.runs_completed == 1
-    assert final.catches_total == 12
+    right per-run catch count as runs close DURING the loop.
+
+    Re-review follow-up (fixed properly, not renamed): the original version
+    of this test used a single 12-throw cascade whose only run closes
+    inside finalize() -- called AFTER the loop returns, with on_state (and
+    therefore _hud_lines, run_history's only consumer) never invoked again
+    for the finalized state -- so run_history stayed empty for the entire
+    test and the `state.runs_completed > prev_runs_completed` bookkeeping
+    branch in run_live's loop (live.py) was never exercised. The test only
+    ever checked final totals, which finalize()'s own force-close logic
+    (already covered by
+    test_finalize_clears_run_active_and_catches_current_run in
+    test_realtime.py) satisfies regardless of whether run_history
+    bookkeeping works at all.
+
+    This builds a genuine two-run detection stream (same shift/gap pattern
+    as test_realtime.py's _two_run_stream) with gap_s=3.0s -- comfortably
+    above freeze_s(1.5) + RUN_CLOSE_DEBOUNCE_S(0.5) = 2.0s, so run 1's close
+    is not a merge-band edge case (mirrors
+    test_two_runs_with_wide_gap_counted_separately) -- over a video spanning
+    both runs. Run 1 closes mid-loop, well before run 2 even starts, so this
+    reaches the loop's run_history bookkeeping directly rather than only
+    finalize()'s force-close path. `_hud_lines` (the only consumer of
+    `run_history` inside the loop) is monkeypatched to a thin recording spy
+    (still delegating to the real implementation, so HUD rendering itself
+    is unchanged) so the test can assert on the actual `run_history` list
+    `run_live` built, rather than inferring it from rendered pixels.
+    """
+    import juggletrack.pipeline.live as live_module
+    from juggletrack.types import Detection
+
+    def shift(dets, dt_s, dframes):
+        return [
+            Detection(frame_idx=d.frame_idx + dframes, t=d.t + dt_s, x=d.x, y=d.y,
+                      w=d.w, h=d.h, confidence=d.confidence)
+            for d in dets
+        ]
+
+    a = simulate_cascade(n_throws=10, fps=30.0, noise=0.003, dropout=0.1, seed=29)
+    b = simulate_cascade(n_throws=10, fps=30.0, noise=0.003, dropout=0.1, seed=30)
+    gap_s = 3.0
+    dt_s = gap_s + a.run_end - b.run_start
+    dframes = round(dt_s * 30.0)
+    dets = a.detections + shift(b.detections, dt_s, dframes)
+
+    offline = analyze_detections(dets)
+    assert len(offline.runs) == 2, "fixture must offline-segment into 2 runs"
+    off_catches = [r.catches for r in offline.runs]
+
+    n_frames = max(d.frame_idx for d in dets) + 1
+    video = tmp_path / "two_run_live.mp4"
+    write_test_video(video, n_frames=n_frames, fps=30.0)
+
+    recorded: list[tuple[int, list[int]]] = []
+    real_hud_lines = live_module._hud_lines
+
+    def spy(state, run_history, fps):
+        recorded.append((state.runs_completed, list(run_history)))
+        return real_hud_lines(state, run_history, fps)
+
+    monkeypatch.setattr(live_module, "_hud_lines", spy)
+
+    final, _ = run_live(str(video), FakeDetector(dets), display=False)
+
+    assert final.runs_completed == 2
+
+    # The mid-loop bookkeeping this test exists to exercise: run_history
+    # must have picked up run 1's catch count WHILE the loop was still
+    # running -- before run 2 even starts, let alone before finalize().
+    mid_loop_with_history = [(rc, hist) for rc, hist in recorded if hist]
+    assert mid_loop_with_history, (
+        "run_history stayed empty for the whole loop -- the "
+        "runs_completed > prev_runs_completed bookkeeping in run_live's "
+        "loop was never exercised"
+    )
+    first_rc, first_hist = mid_loop_with_history[0]
+    assert first_rc == 1, f"run_history first appeared at runs_completed={first_rc}, want 1"
+    assert first_hist == [off_catches[0]], (
+        f"run_history={first_hist} right after run 1 closed; want "
+        f"[{off_catches[0]}] (offline run 1's own catch count)"
+    )
 
 
 def test_run_live_file_source_pts_seam_rebases_like_videoreader(sim_video, monkeypatch):

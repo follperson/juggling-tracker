@@ -354,3 +354,18 @@ document; the source/test comments now point here instead.
   flight — a consequence of re-deriving the whole arc/run structure from scratch every ~100ms on a
   low-density, real-noise point cloud, not of left-edge truncation (this cluster sits well inside
   the window, nowhere near either edge).
+- **E8 dedup margin: measured closest real inter-event spacing vs `event_match_tol=0.15`
+  (plan step 4(c); `_confirm`'s docstring in `test_realtime.py` has the full per-fixture table):**
+  a one-off scratch run of offline `analyze_detections` + `derive_events` over this suite's own
+  realtime-parity fixtures (the 12-throw sim, both `_two_run_stream` gaps, `_three_run_stream`)
+  found the closest real SAME-KIND pair (the comparison `_confirm` actually makes, since it dedups
+  "throw"/"catch"/"drop" against independent lists) at throw-throw spacing 0.415s on
+  `_three_run_stream` — a ~0.265s (~2.8x) margin over `event_match_tol`, comfortably clear on
+  every fixture measured (catch-catch minimum 0.430s, same fixture). The pooled (cross-kind,
+  throw-vs-catch) minimum does dip below tol on that same noisy fixture (0.139s < 0.15s), but that
+  pairing never enters the same per-kind dedup comparison, so it doesn't threaten a real collision
+  under E8's mechanism. This directly informed softening the E8 comment in `realtime.py` from an
+  assumed "one pass never emits two synthetic times for the same physical event" (contradicted by
+  the mutually-overlapping-arc-candidates measurement immediately above) to the narrower, measured
+  claim: no same-cycle duplicate inflation observed on the field replays this wave re-measures
+  (ss3_id_016 catches 209→207, not up).

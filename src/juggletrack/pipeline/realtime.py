@@ -80,6 +80,17 @@ class RealtimeConfig(BaseModel):
             raise ValueError(f"freeze_s must be >= 0 (got {self.freeze_s})")
         if self.drop_freeze_s < 0:
             raise ValueError(f"drop_freeze_s must be >= 0 (got {self.drop_freeze_s})")
+        if self.edge_pad < 0:
+            raise ValueError(
+                f"edge_pad must be >= 0 (got {self.edge_pad}) -- a negative value silently "
+                "shrinks or empties truncated_ids in _analyze, disabling the left-edge guard"
+            )
+        if self.event_match_tol < 0:
+            raise ValueError(
+                f"event_match_tol must be >= 0 (got {self.event_match_tol}) -- a negative "
+                "value makes _confirm's `abs(et - k) <= tol` check unsatisfiable, silently "
+                "disabling cross-cycle dedup"
+            )
         if not (0.0 < self.hand_line_ema_alpha <= 1.0):
             raise ValueError(
                 f"hand_line_ema_alpha must be in (0, 1] (got {self.hand_line_ema_alpha})"
@@ -400,14 +411,30 @@ class RealtimeAnalyzer:
         # this same call appends as it goes. `times` is the FULL set of
         # currently-derived event times for this window (re-derived from
         # scratch every cycle, so it naturally re-includes already-known
-        # events alongside any new ones); one derive_events()/detect_drops()
-        # pass never emits two synthetic times for the same physical event
-        # (each is tied to a distinct arc id), so two same-cycle times within
-        # event_match_tol of EACH OTHER are genuinely distinct events, not a
-        # dedup collision. Checking against `known` as it mutated in-place
-        # used to treat the second of two real, closely-spaced events as a
-        # "duplicate" of the first (added moments earlier in the same call)
-        # and silently drop it.
+        # events alongside any new ones). Checking against `known` as it
+        # mutated in-place used to treat the second of two real,
+        # closely-spaced events as a "duplicate" of the first (added moments
+        # earlier in the same call) and silently drop it -- snapshotting
+        # `prior` fixes that specific same-call ordering bug regardless of
+        # how same-cycle event times relate to each other.
+        #
+        # NOT asserted "by construction" that a single derive_events()/
+        # detect_drops() pass never emits two synthetic times for the same
+        # physical event: the findings doc's §9 evidence appendix measured
+        # the opposite on real footage -- 2-5 mutually time-overlapping arc
+        # candidates extracted per cycle for what offline recognizes as ONE
+        # physical flight, each with a distinct arc id, so a single pass CAN
+        # emit near-duplicate times for one physical event. What this fix
+        # (and the measurement in tests/test_realtime.py's
+        # test_confirm_does_not_dedup_within_same_cycle docstring, plan step
+        # 4(c)) actually supports is the measured, narrower claim: no
+        # same-cycle duplicate INFLATION has been observed attributable to
+        # this ordering bug on the field replays this branch re-measures
+        # (ss3_id_016 catches 209 -> 207 across this wave, not up) --
+        # closely-spaced real catches/throws sit well clear of
+        # event_match_tol on every fixture measured. The residual
+        # cross-cycle over-count from overlapping arc candidates (§9) is a
+        # separate, out-of-scope mechanism this snapshot fix does not reach.
         prior = list(known)
         for et in sorted(times):
             if et > horizon:

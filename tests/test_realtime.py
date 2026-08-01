@@ -456,11 +456,23 @@ def test_config_accepts_default():
     {"drop_freeze_s": -1.0},
     {"hand_line_ema_alpha": 0.0},
     {"hand_line_ema_alpha": 1.5},
+    {"edge_pad": -5.0},
+    {"event_match_tol": -0.01},
 ])
 def test_config_rejects_invalid_fields(kwargs):
     """E4: the remaining individual field constraints from the finding's
     suggested fix (window_s > 0, cadence_frames >= 1, freeze_s/
-    drop_freeze_s >= 0, 0 < hand_line_ema_alpha <= 1)."""
+    drop_freeze_s >= 0, 0 < hand_line_ema_alpha <= 1).
+
+    Re-review follow-up (MINOR): a negative `edge_pad` silently empties
+    `truncated_ids` in `_analyze` (every arc's `t_start` trivially satisfies
+    `t_start < left_edge + edge_pad` less often, or for a large-enough
+    negative value, never) -- disabling the left-edge guard with no error;
+    a negative `event_match_tol` would make `_confirm`'s `abs(et - k) <=
+    tol` comparison never match anything with `tol < 0` (an always-false
+    dedup gate), silently disabling dedup entirely. RED repro:
+    `RealtimeConfig(edge_pad=-5.0)` constructed with no error before this
+    fix (verified: `pydantic.ValidationError` was NOT raised)."""
     with pytest.raises(ValidationError):
         RealtimeConfig(**kwargs)
 
@@ -525,12 +537,41 @@ def test_buffer_prune_evicts_even_when_first_det_has_large_t():
 
 def test_confirm_does_not_dedup_within_same_cycle():
     """E8: two distinct events derived in the SAME analysis cycle that land
-    within event_match_tol of each other must both be kept -- one
-    derive_events()/detect_drops() pass never emits two synthetic times for
-    the same physical event (each is tied to a distinct arc id), so
-    same-cycle proximity is real, not a dedup artifact. Pre-fix, `_confirm`
-    treated the second's closeness to the first (added earlier in the SAME
-    call) as a duplicate and dropped it."""
+    within event_match_tol of each other must both be kept. Pre-fix,
+    `_confirm` treated the second's closeness to the first (added earlier in
+    the SAME call, since it checked the mutating `known` list instead of a
+    prior-cycle snapshot) as a duplicate and dropped it.
+
+    NOT claimed "by construction" that one derive_events()/detect_drops()
+    pass never emits two synthetic times for the same physical event (the
+    findings doc's §9 evidence appendix measured the opposite: 2-5 mutually
+    time-overlapping arc candidates per cycle for one physical flight, each
+    with a distinct arc id) -- this is a narrower, MEASURED claim about
+    real inter-event spacing clearing event_match_tol, plus a fix to a
+    same-call ordering bug that holds regardless.
+
+    MEASURED closest real inter-event spacing (plan step 4(c); a one-off,
+    not-committed scratch script ran offline analyze_detections +
+    derive_events over this file's own realtime-parity fixtures -- the
+    12-throw sim, both _two_run_stream gaps, and _three_run_stream -- and
+    took the minimum consecutive gap between sorted event times):
+
+        fixture                                    throw-throw  catch-catch  pooled
+        12-throw sim (seed=1, no noise)             0.450s       0.450s       0.167s
+        12-throw sim (noise=0.003/dropout=0.1)      0.447s       0.447s       0.166s
+        two-run stream, gap_s=3.0                   0.447s       0.446s       0.165s
+        two-run stream, gap_s=1.0                   0.447s       0.446s       0.165s
+        _three_run_stream (noise=0.015/dropout=0.15) 0.415s      0.430s       0.139s
+
+    `_confirm` dedups each kind ("throw"/"catch"/"drop") against its OWN
+    list independently, so the load-bearing comparison is the SAME-KIND
+    (throw-throw / catch-catch) minimum, not pooled: the closest real
+    same-kind pair measured across all these fixtures is 0.415s
+    (_three_run_stream throw-throw) against event_match_tol=0.15 -- a
+    ~0.265s (~2.8x) margin, comfortably clear. The pooled (throw-vs-catch)
+    minimum does dip below tol on the noisiest fixture (0.139s < 0.15s), but
+    that pairing is cross-kind and never enters the same dedup comparison,
+    so it does not threaten a real collision under this mechanism."""
     analyzer = RealtimeAnalyzer()
     analyzer._confirm("catch", [1.000, 1.100], horizon=10.0)
     assert analyzer._confirmed["catch"] == [1.000, 1.100]
