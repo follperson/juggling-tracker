@@ -183,6 +183,7 @@ def test_merge_does_not_fuse_crossing_balls():
     )
 
 
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 def test_dense_same_timestamp_clusters_do_not_crash():
     """Regression: extract_arcs used to crash end-to-end with
     numpy.linalg.LinAlgError on real dense footage.
@@ -199,6 +200,14 @@ def test_dense_same_timestamp_clusters_do_not_crash():
     The exact output (arcs may legitimately be empty; this slice is too
     short/sparse to pass the usual min_points/min_duration gates) doesn't
     matter here -- only that the call completes without raising.
+
+    T9 (final-review fix wave): this fixture's dense, near-degenerate
+    point clusters are EXPECTED to poorly-condition np.polyfit (that's
+    what "same-timestamp cluster" means numerically) -- np.polyfit's own
+    RankWarning firing here is the well-conditioned-input assumption
+    correctly not holding, not a bug this test is checking for. Suppressed
+    at the source (this one test, via a marker) rather than globally, so a
+    RankWarning anywhere else in the suite still surfaces normally.
     """
     dets = [
         Detection(frame_idx=860, t=28.620932, x=0.758729, y=0.596699, confidence=0.255003),

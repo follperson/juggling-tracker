@@ -3,7 +3,9 @@ import json
 import numpy as np
 import pytest
 
-from juggletrack.analyze import AnalyzeConfig, analyze_detections
+from juggletrack.analyze import AnalyzeConfig, _events_from_arcs, analyze_detections
+from juggletrack.arcs.extract import extract_arcs
+from juggletrack.events.handline import estimate_hand_line
 from juggletrack.sim import CascadeParams, simulate_cascade
 from juggletrack.types import Detection, SessionResult
 
@@ -155,3 +157,35 @@ def test_low_gravity_framing_recovers_events():
     sr = analyze_detections(r.detections)
     assert len(sr.runs) == 1
     assert abs(sr.runs[0].catches - 12) <= 1
+
+
+def test_events_from_arcs_hand_line_override():
+    """E2 (realtime.py): `_events_from_arcs`'s `hand_line_override` lets a
+    caller skip re-estimating the hand line from `arcs` and force every
+    downstream derivation (throws/catches/runs/drops) onto one supplied
+    value instead. RealtimeAnalyzer uses this so its EMA-smoothed hand
+    line drives every derivation in a cycle, not just derive_events -- see
+    pipeline/realtime.py's module docstring for the bug an unpatched split
+    (EMA for catches, raw for drops/runs) caused. Three things to prove:
+    (1) omitting the override is unaffected (offline parity untouched);
+    (2) passing the SAME value the natural estimate would give reproduces
+    the natural result exactly; (3) passing a genuinely different value
+    changes the derivation (proves it's actually threaded through, not
+    silently ignored)."""
+    r = simulate_cascade(n_throws=12, fps=30.0, seed=1)
+    arcs = extract_arcs(r.detections)
+    t_last = max(d.t for d in r.detections)
+    natural = estimate_hand_line(arcs)
+
+    default = _events_from_arcs(arcs, t_last, AnalyzeConfig())
+    assert default.hand_line_y == natural
+
+    same = _events_from_arcs(arcs, t_last, AnalyzeConfig(), hand_line_override=natural)
+    assert same.hand_line_y == natural
+    assert [run.catches for run in same.runs] == [run.catches for run in default.runs]
+
+    shifted = _events_from_arcs(arcs, t_last, AnalyzeConfig(), hand_line_override=natural + 0.2)
+    assert shifted.hand_line_y == pytest.approx(natural + 0.2)
+    assert [run.catches for run in shifted.runs] != [run.catches for run in default.runs], (
+        "a meaningfully different override must change the derivation"
+    )

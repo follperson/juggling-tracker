@@ -50,7 +50,8 @@ class AnalyzeConfig(BaseModel):
 
 
 def _events_from_arcs(
-    arcs: list[Arc], dets_t_last: float, cfg: AnalyzeConfig
+    arcs: list[Arc], dets_t_last: float, cfg: AnalyzeConfig, *,
+    hand_line_override: float | None = None,
 ) -> SessionResult:
     """Post-extraction tail shared by every arc-set consumer (spec §3 data flow).
 
@@ -63,8 +64,17 @@ def _events_from_arcs(
     the last real observation (``dets_t_last``) — never off how the arcs
     were produced. Extracted so both callers share one code path instead of
     two copies that could drift out of sync.
+
+    ``hand_line_override``: when given, skip re-estimating the hand line
+    from ``arcs`` and use this value for every downstream derivation
+    instead (throw/catch derivation, run segmentation, drop detection).
+    RealtimeAnalyzer uses this so its EMA-smoothed hand line drives EVERY
+    derivation in a cycle, not just ``derive_events`` — see
+    ``pipeline/realtime.py``'s module docstring (E2 fix) for the bug this
+    closes: without a single shared line, the same arc could be counted as
+    a catch per one line and a drop per the other.
     """
-    hand_line = estimate_hand_line(arcs)
+    hand_line = hand_line_override if hand_line_override is not None else estimate_hand_line(arcs)
     throws, catches = derive_events(arcs, hand_line)
     runs = segment_runs(
         arcs, throws, catches, hand_line,
