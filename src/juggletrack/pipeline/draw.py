@@ -46,10 +46,13 @@ def draw_arc_tails(frame: np.ndarray, arcs: list[Arc], t: float, *, tail_s: floa
             cv2.polylines(frame, [pts], False, GREEN, 2)
 
 
-def draw_hud(frame: np.ndarray, text: str) -> None:
+def draw_hud(frame: np.ndarray, text: str, *, y: int = 24) -> None:
+    """Draw one line of HUD text at baseline row ``y`` (default: the
+    original single-line position). ``y`` lets callers stack multiple HUD
+    lines (e.g. live.py's run-history line below the main status line)."""
     import cv2
 
-    cv2.putText(frame, text, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, WHITE, 2)
+    cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, WHITE, 2)
 
 
 def draw_drop_marker(frame: np.ndarray, x: float, y: float) -> None:

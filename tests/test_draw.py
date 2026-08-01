@@ -36,3 +36,18 @@ def test_arc_tails_skip_inactive_arcs():
     frame = blank()
     draw_arc_tails(frame, [arc], t=1.0)  # long before the arc
     assert frame.sum() == 0
+
+
+def test_draw_hud_y_offset_stacks_lines_without_overlap():
+    """S2: draw_hud's y parameter lets live.py stack a second HUD line
+    (run history) below the first without the two overlapping."""
+    frame = blank()
+    draw_hud(frame, "line one", y=24)
+    frame_two_lines = frame.copy()
+    draw_hud(frame_two_lines, "line two", y=48)
+
+    assert frame_two_lines.sum() > frame.sum(), "the second line must add pixels"
+    # Pixels well above line two's row (y=48's text extends up from its
+    # baseline, but not past ~y=30) are identical between the two frames
+    # -- adding the second line must not have touched the first.
+    assert np.array_equal(frame[:28], frame_two_lines[:28])

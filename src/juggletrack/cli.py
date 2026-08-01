@@ -300,7 +300,19 @@ def live(
     from juggletrack.pipeline.live import run_live
     from juggletrack.pipeline.realtime import RealtimeConfig
 
-    src: int | str = int(source) if source.isdigit() else source
+    # S4: str.isdigit() is true for various non-ASCII digit characters
+    # (e.g. superscripts like '²', circled digits like '①', full-width
+    # digits like '１'), some of which int() then rejects (ValueError) and
+    # some of which int() silently converts (e.g. '３' -> 3) -- neither is
+    # the intended "webcam index" parse for a CLI argument. Require ASCII
+    # digits first so `source` only ever takes the int() branch for what a
+    # user actually typed as an ordinary webcam index.
+    src: int | str = int(source) if source.isascii() and source.isdigit() else source
+    # S7: --detections replays a saved detections.jsonl keyed by frame_idx
+    # against file-source frame timestamps (see FakeDetector); a webcam
+    # index has no frames to replay against.
+    if detections is not None and isinstance(src, int):
+        raise typer.BadParameter("--detections requires a file source")
     if detections is not None:
         from juggletrack.detect.fake import FakeDetector
         from juggletrack.pipeline.offline import load_detections_jsonl

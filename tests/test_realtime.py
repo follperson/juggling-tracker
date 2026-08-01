@@ -1,6 +1,7 @@
 import sys
 import subprocess
 from collections import defaultdict
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -246,9 +247,13 @@ def test_debounce_absorbs_genuine_mid_run_detection_gap():
 
 
 def test_realtime_module_is_cv2_free():
+    # T8: cwd="src" was relative to whatever directory pytest happened to be
+    # invoked FROM, not this test file's location -- fragile (silently
+    # wrong, not a clean failure) if the suite is ever run from elsewhere.
+    src_dir = Path(__file__).resolve().parents[1] / "src"
     code = ("import sys; import juggletrack.pipeline.realtime; "
             "sys.exit(1 if 'cv2' in sys.modules else 0)")
-    proc = subprocess.run([sys.executable, "-c", code], cwd="src")
+    proc = subprocess.run([sys.executable, "-c", code], cwd=src_dir)
     assert proc.returncode == 0, "importing realtime pulled in cv2"
 
 

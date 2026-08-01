@@ -217,3 +217,42 @@ def test_live_command_file_replay(workspace):
     assert "catches" in result.output and "fps" in result.output
     saved = json.loads((out / "live_session.json").read_text())
     assert saved["catches_total"] == 12
+
+
+def test_live_command_detections_with_webcam_index_rejected(workspace):
+    """S7: --detections replays a saved detections.jsonl keyed by frame_idx
+    against FILE-source frame timestamps (see FakeDetector); a webcam
+    index has no frames to replay against."""
+    from juggletrack.cli import app
+
+    _, _, dets, _ = workspace
+    result = runner.invoke(app, ["live", "0", "--detections", str(dets), "--no-display"])
+    assert result.exit_code != 0
+    assert "file source" in result.output.lower()
+
+
+def test_live_command_non_ascii_digit_source_stays_a_string(workspace, monkeypatch):
+    """S4: '²' (superscript 2) is str.isdigit()==True but not ASCII;
+    requiring isascii() too keeps it as a file-path-shaped string instead
+    of either crashing int() or (for other non-ASCII digits int() accepts,
+    like full-width '３') silently misinterpreting it as a webcam
+    index. run_live is monkeypatched here purely to avoid actually trying
+    to open a bogus source -- this test is about argument parsing, not
+    video I/O."""
+    import juggletrack.pipeline.live as live_module
+    from juggletrack.cli import app
+    from juggletrack.pipeline.realtime import RealtimeState
+
+    _, _, dets, _ = workspace
+    captured = {}
+
+    def fake_run_live(src, detector, **kwargs):
+        captured["src"] = src
+        return RealtimeState(t=0.0), 0.0
+
+    monkeypatch.setattr(live_module, "run_live", fake_run_live)
+    result = runner.invoke(app, [
+        "live", "²", "--detections", str(dets), "--no-display",
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["src"] == "²"
