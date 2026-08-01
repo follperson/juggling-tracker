@@ -122,3 +122,18 @@ before any v4b/v5 retrain.
 - Camera angles with floor above y=0.85 (param exposed).
 - Person-detector misses reduce gate 5 to a no-op on those frames (fail-open for that gate;
   gates 3–4 still apply).
+- A ball momentarily *colocated* with a trusted junk cluster's own footprint (within
+  `persist_radius / 2` of recurring junk detections) is geometrically indistinguishable
+  from that junk and passes gate 3. Adversarial review demonstrated the wider variant —
+  a slow drifter merely *near* a trusted cluster inheriting its trust via greedy
+  membership — which is now closed by per-detection tight-neighborhood evidence
+  (`_trusted_static_clusters`); only exact colocation remains.
+- The library-level defaults run without gate 5 (`person_boxes=None, person_model=None`);
+  the CLI defaults it on. Any script mining training data via the library API must pass
+  `person_model=` explicitly (docstring carries a WARNING).
+
+## Deviation from plan (recorded post-implementation)
+
+The `_expected_candidates` test helper mirrors gates 0–2 only; gates 3–5 are pinned by
+dedicated fixtures/tests with exact stat counts instead of a full parallel implementation
+(which would just duplicate the algorithm and dilute the reference value).

@@ -535,6 +535,41 @@ def test_export_hard_negatives_rejects_transient_unstitched_flight(tmp_path):
         assert c["t_min"] <= c["t_max"]
 
 
+def test_export_hard_negatives_rejects_slow_drift_through_junk_neighborhood(tmp_path):
+    """Adversarial-review reproduction: a slow-moving arc-unassigned ball whose
+    path passes within `persist_radius` of a trusted junk cluster must NOT
+    inherit that cluster's trust. Greedy cluster membership alone would accept
+    it (running centroid within 0.04); trust must be per-detection -- junk
+    evidence recurring in a tight neighborhood of the detection's OWN position
+    across a long span. A ball momentarily colocated with the junk core is the
+    irreducible residual and is out of scope here: this drifter stays >= 0.02
+    from the junk's own footprint at all times."""
+    dets, arcs, n_frames, fps, tail_set, hold_set, person_box = _idle_hold_cascade(
+        hold_frames=0,
+    )
+    assert arcs
+    drift_set = set(sorted(tail_set)[:8])
+    drift = [Detection(
+        frame_idx=f, t=f / fps, x=0.870 + 0.002 * i, y=0.700,
+    ) for i, f in enumerate(sorted(drift_set))]
+    dets = dets + drift
+    arcs2 = extract_arcs(dets)
+    assert len(arcs2) == len(arcs), "sanity: the slow drifter must not fit an arc"
+
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+    out = tmp_path / "negatives"
+    stats = export_hard_negatives(
+        video, dets, arcs2, out, max_frames=100, min_junk=2, seed=0,
+    )
+
+    assert stats["n_skipped_transient"] == len(drift_set)
+    assert stats["n_candidate_frames"] == len(tail_set) - len(drift_set)
+    coco = json.loads((out / "annotations.json").read_text())
+    exported = {int(im["file_name"][6:12]) for im in coco["images"]}
+    assert exported == tail_set - drift_set
+
+
 def test_export_hard_negatives_floor_band_rejects_resting_ball(tmp_path):
     """A ball resting on the floor is static and persistent -- geometrically
     indistinguishable from background junk (turn-4 audit: clusters at y~0.96

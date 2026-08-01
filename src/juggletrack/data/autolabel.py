@@ -172,10 +172,15 @@ def detect_person_boxes(
     from juggletrack.video.reader import VideoReader
 
     wanted = set(frame_indices)
+    if not wanted:
+        return {}
+    last_wanted = max(wanted)
     yolo = YOLO(model)
     out: dict[int, list[tuple[float, float, float, float]]] = {}
     with VideoReader(video_path) as reader:
         for idx, _t, frame in reader.frames():
+            if idx > last_wanted:
+                break
             if idx not in wanted:
                 continue
             result = yolo.predict(frame, conf=conf, classes=[0], verbose=False)[0]
@@ -204,6 +209,18 @@ def _trusted_static_clusters(
     within `radius` of its centroid (any frame -- a wall picture's
     during-run firings are evidence too) covers >= `min_frac` of
     `total_span`.
+
+    Cluster membership alone is NOT enough to trust a detection: greedy
+    radius membership would let a real, slowly-moving ball inherit a trusted
+    cluster's status just by drifting through its neighborhood
+    (adversarial-review finding, demonstrated live). So each member must
+    ALSO carry its own staticness evidence -- unassigned detections
+    recurring within `radius / 2` of the detection's OWN position across
+    >= `min_frac` of `total_span` (and >= `min_count` of them). A moving
+    object's tight neighborhood only ever spans its crossing moment. The
+    irreducible residual is a ball momentarily colocated with the junk's
+    own footprint: geometrically indistinguishable, accepted and documented
+    in the design spec.
     """
     # deterministic processing order regardless of caller's det ordering
     order = sorted(range(len(idle_dets)),
@@ -241,7 +258,21 @@ def _trusted_static_clusters(
             trusted_ids.add(ci)
             trusted.append({"x": cx, "y": cy, "n": n,
                             "t_min": min(ts), "t_max": max(ts)})
-    return [ci in trusted_ids for ci in cluster_of], trusted
+
+    tight = radius / 2.0
+    flags: list[bool] = []
+    for d, ci in zip(idle_dets, cluster_of):
+        if ci not in trusted_ids:
+            flags.append(False)
+            continue
+        ts = [e.t for e in all_unassigned
+              if math.hypot(e.x - d.x, e.y - d.y) < tight]
+        flags.append(
+            len(ts) >= min_count
+            and total_span > 0
+            and max(ts) - min(ts) >= min_frac * total_span
+        )
+    return flags, trusted
 
 
 def export_hard_negatives(
@@ -294,9 +325,11 @@ def export_hard_negatives(
        `n_skipped_transient`. Rejects MOVING unassigned objects: real
        flights the linker failed to stitch (turn-4: a ball crossing the
        juggler's face, frames 108/630, mistaken for "pupil FPs"). Trusted
-       junk must be a persistent static scene feature: see
+       junk must be a persistent static scene feature, evidenced both at
+       cluster level and in each detection's own tight neighborhood: see
        `_trusted_static_clusters` (`persist_radius`, `min_persist_frac`,
-       `min_persist_count`).
+       `min_persist_count`). Residual: a ball momentarily colocated with a
+       trusted junk spot is geometrically indistinguishable and passes.
     4. Any detection with y > `floor_band_y` -> `n_skipped_floor`. A ball
        RESTING on the floor is static and persistent -- geometrically
        indistinguishable from background junk (turn-4: clusters at y~0.96
@@ -318,6 +351,11 @@ def export_hard_negatives(
 
     `min_junk` stays what it always was: at least that many junk detections
     on the frame, applied after gate 4, uncounted.
+
+    WARNING: the library defaults (`person_boxes=None, person_model=None`)
+    run WITHOUT gate 5 -- held-ball frames like turn-4's frame 87 then pass
+    gates 0-4 by construction. Any mining whose output feeds training must
+    pass `person_model=` (the CLI default does) or inject `person_boxes`.
     """
     from juggletrack.video.reader import VideoReader
 
