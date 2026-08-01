@@ -471,24 +471,34 @@ def test_export_hard_negatives_person_veto_rejects_idle_held_balls(tmp_path):
     video = tmp_path / "v.mp4"
     write_test_video(video, n_frames=n_frames, fps=fps)
     out = tmp_path / "negatives"
-    # person boxes supplied for every idle frame: hold frames get vetoed
-    # (held balls sit inside the box), tail frames must NOT (their junk is
-    # outside the box) -- a person merely being present is not a veto.
-    person_boxes = {f: [person_box] for f in sorted(tail_set | hold_set)}
+    # Person PRESENCE is the veto, not box-overlap with junk: the final-audit
+    # field case (183035587 frame 221) had the carried balls produce NO
+    # detection at all (motion blur), so detection-space reasoning is blind
+    # to them -- the person box is the only visible evidence. And presence
+    # DILATES +-person_dilate_frames: the same field case showed the person
+    # detector itself missing the blurred entry frame (conf 0.246 vs even a
+    # lowered threshold) while nailing its neighbors, and a person cannot
+    # teleport. The hold frames all get boxes, plus ONE tail frame whose junk
+    # is far outside the box: that frame AND its dilation neighborhood must
+    # be rejected anyway.
+    person_tail_frame = sorted(tail_set)[0]
+    person_boxes = {f: [person_box] for f in sorted(hold_set) + [person_tail_frame]}
     stats = export_hard_negatives(
         video, dets, arcs, out, max_frames=100, min_junk=2, seed=0,
-        person_boxes=person_boxes,
+        person_boxes=person_boxes, person_dilate_frames=5,
     )
 
-    assert stats["n_skipped_person"] == len(hold_set)
+    vetoed_tail = {f for f in tail_set if abs(f - person_tail_frame) <= 5}
+    assert len(vetoed_tail) == 6  # the box frame plus 5 dilation neighbors
+    assert stats["n_skipped_person"] == len(hold_set) + len(vetoed_tail)
     assert stats["n_skipped_transient"] == 0
     assert stats["n_skipped_floor"] == 0
-    assert stats["n_candidate_frames"] == len(tail_set)
-    assert stats["n_images"] == len(tail_set)
+    assert stats["n_candidate_frames"] == len(tail_set) - len(vetoed_tail)
+    assert stats["n_images"] == len(tail_set) - len(vetoed_tail)
 
     coco = json.loads((out / "annotations.json").read_text())
     exported = {int(im["file_name"][6:12]) for im in coco["images"]}
-    assert exported == tail_set
+    assert exported == tail_set - vetoed_tail
     assert exported.isdisjoint(hold_set)
 
 
@@ -648,7 +658,7 @@ def test_export_hard_negatives_person_model_wires_detected_boxes(tmp_path, monke
     def fake_detect(video_path, frame_indices, *, model, conf=0.25):
         seen["frames"] = sorted(frame_indices)
         seen["model"] = model
-        return {f: [person_box] for f in frame_indices}
+        return {f: [person_box] for f in frame_indices if f in hold_set}
 
     monkeypatch.setattr(autolabel_mod, "detect_person_boxes", fake_detect)
     out = tmp_path / "negatives"
@@ -658,7 +668,12 @@ def test_export_hard_negatives_person_model_wires_detected_boxes(tmp_path, monke
     )
 
     assert seen["model"] == "stub.pt"
-    assert seen["frames"] == sorted(tail_set | hold_set)
+    # the query set is the candidates dilated by +-person_dilate_frames, so
+    # boxes found on a blurred candidate's neighbors can veto it
+    expected_query = sorted({
+        f + off for f in (tail_set | hold_set) for off in range(-5, 6) if f + off >= 0
+    })
+    assert seen["frames"] == expected_query
     assert stats["n_skipped_person"] == len(hold_set)
     assert stats["n_images"] == len(tail_set)
 

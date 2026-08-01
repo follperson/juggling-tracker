@@ -62,13 +62,15 @@ contamination). Order (cheap/pure first):
    (indistinguishable from junk by gates 0–3). Any detection with y > `floor_band_y` (0.85) →
    `n_skipped_floor`. Sacrifices genuine floor-clutter junk; camera angles where the floor
    appears higher in frame are a documented residual risk.
-5. **Person-region veto** (new) — rejects held balls and face/body-crossing balls. If person
-   boxes are available for a frame, any detection inside a person box expanded by
-   `person_margin` (0.02) → `n_skipped_person`. Frames with no detected person pass (held/face
-   balls require a person by definition; empty-scene junk is the safest yield there is).
-   Person boxes come from the stock COCO model (`yolo11n.pt`, class 0 = person), already a
-   repo dependency via ultralytics — run only on frames that survived gates 0–4, so the cost
-   is a few dozen single-frame inferences per video.
+5. **Person-presence veto** (new; hardened after the final audit) — rejects held balls and
+   face/body-crossing balls. Any person detected on the frame → `n_skipped_person`. Presence,
+   not junk-inside-box overlap, is the veto: the final audit caught a frame (183035587 frame
+   221) where a person carried balls that produced NO detection (motion blur) — invisible to
+   every detection-space gate, with the frame's junk sitting far from the person box. Frames
+   with no detected person pass (empty-scene junk is the safest yield there is). Person boxes
+   come from the stock COCO model (`yolo11n.pt`, class 0 = person), already a repo dependency
+   via ultralytics — run only on frames that survived gates 0–4, so the cost is a few dozen
+   single-frame inferences per video.
 
 Gates 3–5 divide the evidence cleanly: 3 rejects what *moves*, 4–5 reject what is *static but
 on the person or floor*. The wall-picture junk that motivated mining passes everything
@@ -131,6 +133,10 @@ before any v4b/v5 retrain.
 - The library-level defaults run without gate 5 (`person_boxes=None, person_model=None`);
   the CLI defaults it on. Any script mining training data via the library API must pass
   `person_model=` explicitly (docstring carries a WARNING).
+- A real ball in frame that produced NO detection AND has no person nearby (e.g. resting
+  on furniture above the floor band, missed by the detector) is invisible to every
+  detection-space gate. Detection-space reasoning cannot close this; it is why any change
+  to the mining knobs must be followed by a fresh visual audit of the frames it admits.
 
 ## Deviation from plan (recorded post-implementation)
 

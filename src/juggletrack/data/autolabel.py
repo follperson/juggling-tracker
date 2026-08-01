@@ -158,9 +158,14 @@ def detect_person_boxes(
     frame_indices: list[int],
     *,
     model: str = "yolo11n.pt",
-    conf: float = 0.25,
+    conf: float = 0.15,
 ) -> dict[int, list[tuple[float, float, float, float]]]:
     """Normalized-xyxy person boxes (COCO class 0) for the requested frames.
+
+    conf=0.15 is deliberately permissive: a false-positive person only costs
+    negative-mining yield (fail-safe), while a missed person can pass a frame
+    whose real balls the ball detector also missed (the 183035587 frame-221
+    field case sat at conf 0.246 -- under the usual 0.25).
 
     Feeds `export_hard_negatives`'s person-region veto. Runs the stock COCO
     model only on `frame_indices` (candidate negatives are a few dozen frames
@@ -290,9 +295,9 @@ def export_hard_negatives(
     min_persist_frac: float = 0.5,
     min_persist_count: int = 8,
     floor_band_y: float = 0.85,
-    person_margin: float = 0.02,
     person_boxes: dict[int, list[tuple[float, float, float, float]]] | None = None,
     person_model: str | None = None,
+    person_dilate_frames: int = 5,
 ) -> dict:
     """Mine arc-rejected detections into zero-box negative training images.
 
@@ -336,18 +341,25 @@ def export_hard_negatives(
        spanning 82-100% of the video) -- so the floor band is excluded
        wholesale. Genuine floor clutter is sacrificed; camera angles where
        the floor sits higher in frame are a documented residual risk.
-    5. Any detection inside a person box (expanded by `person_margin`) ->
-       `n_skipped_person`. Rejects balls held in hands or crossing the
-       body/face during idle stretches beyond `pad` (turn-4 frame 87: two
-       balls held at the hip 2.3 s before the first arc). Those clusters
-       are persistent (hands dwell at the same spots all video), so only
-       person geometry can reject them. Boxes come injected
+    5. Any person detected on the frame OR within `person_dilate_frames`
+       of it -> `n_skipped_person`. Rejects balls held in hands or
+       crossing the body/face during idle stretches beyond `pad` (turn-4
+       frame 87: two balls held at the hip 2.3 s before the first arc).
+       PRESENCE is the veto, not junk-inside-box overlap: the final-audit
+       field case (183035587 frame 221) had a person carrying balls that
+       produced NO detection at all (motion blur), so detection-space
+       geometry is blind to them -- the person box is the only visible
+       evidence, wherever the frame's junk sits. And presence is dilated
+       in time because the same field case showed the person detector
+       itself missing the blurred entry frame (conf 0.246) while nailing
+       its neighbors (0.57-0.86) -- a person cannot teleport, so a
+       detection within +-5 frames vetoes too. Boxes come injected
        (`person_boxes`, normalized xyxy per frame) or from the stock COCO
-       model (`person_model`, run only on frames that survived gates 0-4
-       plus `min_junk`). Frames with no detected person pass: held/face
-       balls require a person by definition, and an empty scene is the
-       safest yield there is -- but it does mean a person-detector miss
-       fails open for this gate (gates 3-4 still apply).
+       model (`person_model`, run on the dilated neighborhood of frames
+       that survived gates 0-4 plus `min_junk`). Frames with no detected
+       person anywhere nearby pass: an empty scene is the safest yield
+       there is -- but a person-detector miss across the whole window
+       still fails open for this gate (gates 3-4 still apply).
 
     `min_junk` stays what it always was: at least that many junk detections
     on the frame, applied after gate 4, uncounted.
@@ -413,19 +425,18 @@ def export_hard_negatives(
             if len(frame_dets) >= min_junk:
                 candidates[frame_idx] = frame_dets
 
+        dilate = range(-person_dilate_frames, person_dilate_frames + 1)
         if person_model is not None and person_boxes is None:
+            query = sorted({f + off for f in candidates for off in dilate
+                            if f + off >= 0})
             person_boxes = detect_person_boxes(
-                video_path, sorted(candidates), model=person_model,
+                video_path, query, model=person_model,
             )
         if person_boxes:
+            person_frames = {f for f, boxes in person_boxes.items() if boxes}
             kept: dict[int, list[Detection]] = {}
             for frame_idx, frame_dets in candidates.items():
-                boxes = person_boxes.get(frame_idx, [])
-                if any(
-                    x0 - person_margin <= d.x <= x1 + person_margin
-                    and y0 - person_margin <= d.y <= y1 + person_margin
-                    for d in frame_dets for (x0, y0, x1, y1) in boxes
-                ):
+                if any(frame_idx + off in person_frames for off in dilate):
                     n_skipped_person += 1
                     continue
                 kept[frame_idx] = frame_dets
