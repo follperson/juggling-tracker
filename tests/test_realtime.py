@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from juggletrack.analyze import analyze_detections
 from juggletrack.pipeline.realtime import RealtimeAnalyzer, RealtimeConfig
-from juggletrack.sim import simulate_cascade
+from juggletrack.sim import CascadeParams, simulate_cascade
 from juggletrack.types import Detection
 
 
@@ -256,6 +256,25 @@ def test_debounce_absorbs_genuine_mid_run_detection_gap():
     balls tied at confidence=1.0 never merge, so clustering is a no-op on
     this fixture at the AnalyzeConfig default. Verified directly; reverted
     the transient cluster_merge_dist=0.0 override.
+
+    Task 3b UPDATE (re-verified, not just re-asserted): re-ran both
+    assertions above against the actual post-task-3 code and they still
+    hold -- for THIS fixture's specific shape, task 3's end_t fix (not the
+    debounce) is what prevents the false split, and the debounce is
+    provably a no-op here. That does NOT generalize to "the debounce is
+    dead code": it isolates one structural rescue (a 3-ball OVERLAPPING
+    cascade always has a second ball mid-flight during the gap, whose own
+    arc_end extrapolates past it) that this fixture happens to have and a
+    slower, non-overlapping cascade does not. Two independent lines of
+    evidence show the debounce is still load-bearing once that rescue is
+    absent: (1) `test_debounce_absorbs_gap_in_no_overlap_cascade` below,
+    a deliberately non-overlapping fixture (period_s > flight_s, one ball
+    airborne at a time) where killing the debounce still flips a genuine
+    single run to a false 2, post-task-3; (2) field replays on real
+    footage with the debounce killed (task-3b report,
+    .superpowers/sdd/task-3b-report.md): ss3_id_016 runs_completed
+    9 (matches offline) -> 70; af2 2 (matches offline) -> 3; catches/drops
+    totals unchanged in both cases, isolating the effect to run-counting.
     """
     r = simulate_cascade(n_throws=20, fps=30.0, noise=0.003, dropout=0.1, seed=5)
     cfg = RealtimeConfig()
@@ -283,6 +302,88 @@ def test_debounce_absorbs_genuine_mid_run_detection_gap():
         "3's end_t protection has regressed for this mechanism, not that the "
         "debounce needs restoring"
     )
+
+
+def test_debounce_absorbs_gap_in_no_overlap_cascade():
+    """Task 3b: re-isolates RUN_CLOSE_DEBOUNCE_S under CORRECT (post-task-3)
+    span semantics, after the review found the debounce delete-proof again
+    on `test_debounce_absorbs_genuine_mid_run_detection_gap`'s own fixture
+    (see that test's Task 3b UPDATE paragraph). That fixture's rescue is
+    structural to any OVERLAPPING cascade: a second ball is always
+    mid-flight during the gap, and task 3's fix lets its arc_end extrapolate
+    past the gap, so liveness never actually goes false there -- the
+    debounce never gets a chance to matter. This fixture removes that
+    rescue by construction: `CascadeParams(period_s=2.0, dwell_s=4.5)` makes
+    `flight_s = 3*period_s - dwell_s = 1.5s < period_s`, so at most ONE ball
+    is ever airborne at a time (verified: `p.period_s > p.flight_s`) -- there
+    is no second, still-flying arc anywhere near the gap whose extrapolated
+    end could rescue liveness. With the single flight that straddles the cut
+    evicted along with everything else in [gap0, gap0+gap_dur), liveness
+    genuinely has nothing to hold onto for the gap's own ~2s duration.
+
+    gap_dur=1.9s sits in (freeze_s=1.5, freeze_s+RUN_CLOSE_DEBOUNCE_S+1.0)
+    as the task specified, and (verified by direct sweep, not assumed) in
+    the middle of a comfortably wide plateau (1.75-1.92s at this exact
+    gap0) where this fixture's premise holds -- not a knife-edge: gap_dur
+    below ~1.93s gives offline=1/on=1/off=2 consistently; above it the
+    picture changes (both on and off give 2, a separate live/offline
+    disagreement unrelated to the debounce, out of scope here).
+
+    Offline (single whole-video pass over the identical gapped detections)
+    still recognizes ONE continuous run -- catches=7, throws=7, matching
+    every real throw/catch in this 7-throw fixture, 0 drops -- because
+    segment_runs' own gap tolerance (`gap_factor * period`, computed from
+    the run's own ~2s period once all arcs are visible) comfortably exceeds
+    this gap once both sides of it are in view. Live has to decide whether
+    to close the run WHILE still inside the gap, before the far side's arcs
+    exist to prove that same bridging -- that timing gap is exactly what
+    the debounce buys: enough delay to let live-and-recover cancel a
+    premature close instead of committing it.
+
+    MEASURED, both directions: WITH the debounce (`on`, current code, RED
+    would mean this regresses) matches offline at runs_completed=1. WITHOUT
+    it (`off`, RUN_CLOSE_DEBOUNCE_S=-1.0) false-splits to 2 -- confirming the
+    debounce, not task 3's fix, is what's load-bearing for THIS shape.
+    catches_total/drops_total are identical (7/0) in both variants, isolating
+    the divergence to run-counting alone, same as the sibling fixture above.
+    """
+    p = CascadeParams(period_s=2.0, dwell_s=4.5, n_balls=3)
+    assert p.period_s > p.flight_s, (
+        "fixture must be non-overlapping (at most one ball airborne at a "
+        f"time); got period_s={p.period_s} <= flight_s={p.flight_s}"
+    )
+    r = simulate_cascade(n_throws=7, fps=30.0, params=p, seed=7)
+    cfg = RealtimeConfig()
+    gap_dur = 1.9
+    assert cfg.freeze_s < gap_dur < cfg.freeze_s + RealtimeAnalyzer.RUN_CLOSE_DEBOUNCE_S + 1.0, (
+        "gap_dur must sit inside (freeze_s, freeze_s + debounce + 1.0) per "
+        "the task-3b flap-hunt brief"
+    )
+    gap0 = r.run_start + (r.run_end - r.run_start) * 0.4
+    dets = [d for d in r.detections if not (gap0 <= d.t < gap0 + gap_dur)]
+
+    offline = analyze_detections(dets)
+    assert len(offline.runs) == 1, "fixture must offline-segment into 1 continuous run"
+    off_catches = sum(run.catches for run in offline.runs)
+
+    with_debounce = stream_dets(dets, RealtimeAnalyzer(cfg))[-1]
+    assert with_debounce.runs_completed == 1, (
+        f"debounce must absorb this genuine no-overlap detection gap; got "
+        f"{with_debounce.runs_completed}"
+    )
+    assert with_debounce.catches_total == off_catches
+
+    class _NoDebounce(RealtimeAnalyzer):
+        RUN_CLOSE_DEBOUNCE_S = -1.0
+
+    without_debounce = stream_dets(dets, _NoDebounce(cfg))[-1]
+    assert without_debounce.runs_completed == 2, (
+        "without the debounce this genuine single run must false-split -- if "
+        f"this now gives 1, the debounce has become dead code for this "
+        f"mechanism too and this test's premise needs revisiting; got "
+        f"{without_debounce.runs_completed}"
+    )
+    assert without_debounce.catches_total == off_catches
 
 
 def test_realtime_module_is_cv2_free():
