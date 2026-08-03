@@ -233,3 +233,44 @@ def test_oracle_events_empty_csv_returns_empty_session(tmp_path):
     sr = oracle_events(csv_path, fps=30.0, width=200, height=400)
 
     assert sr.runs == [] and sr.arcs == [] and sr.drops == []
+
+
+def test_float_coordinate_rows_parse(tmp_path):
+    """Float coordinate strings in CSV should parse and round to nearest int."""
+    csv_path = tmp_path / "float_coords.csv"
+    # Use _write_csv helper pattern but with float string values
+    # to test the parser fix: float strings should round to nearest int
+    header = "0,1,2,3"  # junk header (skipped)
+    # rows have interleaved x,y pairs: (x1, y1, x2, y2, ...)
+    # Write raw CSV text with float strings
+    lines = [
+        header,
+        "200.8888888888889,101.2,300.5555555555556,50.4",
+        "203.1111111111111,98.7,303.3333333333333,52.1",
+    ]
+    csv_path.write_text("\n".join(lines) + "\n")
+
+    trajs = load_meschke_trajectories(csv_path, fps=30.0, width=480, height=848)
+
+    assert len(trajs) == 2
+    ball1, ball2 = trajs
+    assert len(ball1) == 2
+    assert len(ball2) == 2
+
+    # Verify coordinates are rounded to nearest int
+    # 200.8888... rounds to 201, 101.2 rounds to 101
+    d0 = ball1[0]
+    assert d0.frame_idx == 0
+    assert d0.x == pytest.approx(201 / 480)
+    assert d0.y == pytest.approx(101 / 848)
+
+    # 203.1111... rounds to 203, 98.7 rounds to 99
+    d1 = ball1[1]
+    assert d1.frame_idx == 1
+    assert d1.x == pytest.approx(203 / 480)
+    assert d1.y == pytest.approx(99 / 848)
+
+    # ball2: 300.5555... rounds to 301, 50.4 rounds to 50
+    d2_0 = ball2[0]
+    assert d2_0.x == pytest.approx(301 / 480)
+    assert d2_0.y == pytest.approx(50 / 848)

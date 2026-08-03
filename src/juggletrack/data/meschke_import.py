@@ -60,7 +60,7 @@ def _read_csv_rows(csv_path: str | Path) -> list[list[int]]:
     with path.open(newline="") as f:
         all_rows = list(csv.reader(f))
     data_rows = all_rows[1:]
-    return [[int(v) for v in row] for row in data_rows if row]
+    return [[int(round(float(v))) for v in row] for row in data_rows if row]
 
 
 def _is_sentinel(px: int, py: int) -> bool:
