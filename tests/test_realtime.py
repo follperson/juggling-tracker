@@ -828,7 +828,13 @@ def test_duplicate_injection_inherits_clustering_via_analyze_detections():
     realtime window path too, not just offline. Measured on this exact
     fixture with the shipped strict-lower-confidence absorption +
     merge_dist=0.023: clean=12, dirty=12 -- passing with margin, matching
-    the offline measurement in test_cluster.py."""
+    the offline measurement in test_cluster.py.
+
+    Plan 5 task 2b: cluster_merge_dist's shipped default moved to 0.0;
+    arcs/extract.py's dedup_parallel_arcs (also inherited for free through
+    analyze_detections) now carries this fixture's duplicate-collapsing
+    work instead. Verified directly at the new default: clean=12, dirty=11
+    -- still comfortably within the +/-1 band."""
     import numpy as np
     r = simulate_cascade(n_throws=12, fps=30.0, seed=3)
     rng = np.random.default_rng(7)

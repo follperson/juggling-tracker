@@ -1,10 +1,10 @@
 import numpy as np
 import pytest
 
-from juggletrack.arcs.extract import extract_arcs, filter_static_detections
+from juggletrack.arcs.extract import dedup_parallel_arcs, extract_arcs, filter_static_detections
 from juggletrack.arcs.fit import points_array
 from juggletrack.sim import simulate_cascade
-from juggletrack.types import Detection
+from juggletrack.types import Arc, Detection
 
 
 def match_arcs_to_flights(arcs, result, tol):
@@ -495,3 +495,68 @@ def test_split_stitch_does_not_fuse_crossing_balls():
     assert not any(a.t_start < 0.4 and a.t_end > 0.53 for a in arcs), (
         "a single arc spans both fragments -- opposite-direction balls were fused"
     )
+
+
+def _mk_arc(id, t_start, t_end, *, ay=0.0, by=0.0, cy=0.5, bx=0.0, cx=0.5,
+            n_points=10, rmse=0.005):
+    return Arc(id=id, t_start=t_start, t_end=t_end, ay=ay, by=by, cy=cy,
+               bx=bx, cx=cx, n_points=n_points, rmse=rmse)
+
+
+def test_dedup_parallel_arcs_keeps_better_witnessed_near_duplicate():
+    """Plan 5 task 2b: two arcs tracing near-identical trajectories (offset
+    0.01 in both x and y) over a fully-overlapping window are the same
+    physical flight seen through duplicate detection boxes -- exactly the
+    box-clustering scenario this stage moves to the arc/trajectory level,
+    since on REAL footage duplicate echoes and genuine crossings can't be
+    told apart from box confidence alone (see
+    docs/superpowers/plans/2026-08-03-meschke-validation-findings.md).
+    The better-witnessed arc (higher n_points) must be the one that
+    survives, not merely 'one of them'."""
+    a = _mk_arc(0, 0.0, 1.0, ay=1.0, by=-1.0, cy=0.60, bx=0.1, cx=0.40,
+                n_points=20, rmse=0.005)
+    b = _mk_arc(1, 0.0, 1.0, ay=1.0, by=-1.0, cy=0.61, bx=0.1, cx=0.41,
+                n_points=8, rmse=0.01)
+    out = dedup_parallel_arcs([a, b], overlap_frac=0.5, traj_tol=0.03)
+    assert [o.id for o in out] == [0]
+
+
+def test_dedup_parallel_arcs_keeps_both_crossing_arcs():
+    """Two arcs whose x(t) lines cross once mid-window but diverge sharply
+    at the edges are two distinct real balls that happened to cross paths,
+    not duplicate boxes of one ball -- the mean separation over the WHOLE
+    overlap window stays large even though it is ~0 at the single crossing
+    instant, so neither may be dropped even though the pair fully overlaps
+    in time."""
+    a = _mk_arc(0, 0.0, 2.0, bx=0.2, cx=0.3, n_points=20, rmse=0.01)
+    b = _mk_arc(1, 0.0, 2.0, bx=-0.2, cx=0.7, n_points=15, rmse=0.01)
+    out = dedup_parallel_arcs([a, b], overlap_frac=0.5, traj_tol=0.02)
+    assert {o.id for o in out} == {0, 1}
+
+
+def test_dedup_parallel_arcs_keeps_sequential_non_overlapping_arcs():
+    """Two arcs from the same ball on different throws, back to back with
+    no temporal overlap, must both survive regardless of trajectory shape
+    -- dedup only ever compares arcs that are actually airborne at the same
+    time (an identical-shape check here would be meaningless: sequential
+    throws of the same juggling pattern legitimately retrace similar
+    parabolas)."""
+    a = _mk_arc(0, 0.0, 1.0, ay=1.0, by=-1.0, cy=0.6, bx=0.1, cx=0.4,
+                n_points=20, rmse=0.005)
+    b = _mk_arc(1, 1.5, 2.5, ay=1.0, by=-1.0, cy=0.6, bx=0.1, cx=0.4,
+                n_points=20, rmse=0.005)
+    out = dedup_parallel_arcs([a, b], overlap_frac=0.5, traj_tol=0.03)
+    assert {o.id for o in out} == {0, 1}
+
+
+def test_dedup_parallel_arcs_validates_knobs():
+    a = _mk_arc(0, 0.0, 1.0)
+    with pytest.raises(ValueError, match="overlap_frac"):
+        dedup_parallel_arcs([a], overlap_frac=-0.01, traj_tol=0.02)
+    with pytest.raises(ValueError, match="overlap_frac"):
+        dedup_parallel_arcs([a], overlap_frac=1.01, traj_tol=0.02)
+    with pytest.raises(ValueError, match="traj_tol"):
+        dedup_parallel_arcs([a], overlap_frac=0.5, traj_tol=-0.01)
+    # boundary values stay valid
+    assert dedup_parallel_arcs([a], overlap_frac=0.0, traj_tol=0.0) == [a]
+    assert dedup_parallel_arcs([a], overlap_frac=1.0, traj_tol=0.0) == [a]

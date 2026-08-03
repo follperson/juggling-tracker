@@ -463,6 +463,91 @@ def _stitch_splits(dets: list[Detection], arcs: list[Arc], resid_tol: float) -> 
     return arcs
 
 
+def dedup_parallel_arcs(
+    arcs: list[Arc], *, overlap_frac: float = 0.75, traj_tol: float = 0.15, samples: int = 5,
+) -> list[Arc]:
+    """Collapse arcs that trace the same physical flight (Plan 5 task 2b).
+
+    Field motivation: per-frame duplicate-box clustering (detect/cluster.py)
+    turns duplicate/crossing discrimination into a box-confidence question --
+    but on REAL footage two crossing balls virtually always differ in
+    confidence, so the box-level strict-lower-confidence guard that protects
+    genuine crossings cannot also collapse duplicate storms without a large
+    enough merge_dist to start swallowing real crossings too (measured:
+    ss531_id_005 40->16 catches against an oracle of 63, see
+    docs/superpowers/plans/2026-08-03-meschke-validation-findings.md).
+    Box-level geometry in one frame simply lacks the discriminating
+    information; full arc TRAJECTORIES have it -- a duplicate-box storm
+    mints two (or more) arcs that trace nearly the same parabola over their
+    ENTIRE shared time window (one physical flight seen through jittered
+    duplicate boxes), while two crossing balls trace different trajectories
+    that merely intersect briefly (near-zero separation at one instant, but
+    large separation everywhere else in the window). Run AFTER extract_arcs
+    and BEFORE the event-derivation tail (analyze.py's ``_events_from_arcs``)
+    so both offline and realtime callers share the fix (same integration
+    point clustering already uses).
+
+    Only pairs whose temporal overlap exceeds ``overlap_frac`` of the
+    SHORTER arc's own span are even compared -- a real crossing's brief
+    intersection is not "overlap" in this sense; the two arcs' full spans
+    need not coincide at all for two crossing balls. For a qualifying pair,
+    both trajectories are sampled at ``samples`` evenly spaced times across
+    the OVERLAP window (``Arc.x_at``/``Arc.y_at``); if the mean per-sample
+    ``|dx| + |dy|`` is under ``traj_tol``, they are judged the same flight
+    and only the better-witnessed one survives (higher ``n_points``, ties
+    broken by lower ``rmse`` -- mirrors detect/cluster.py's own tie-break
+    preference for "more real evidence wins").
+
+    Applied greedily best-witnessed-first, mirroring detect/cluster.py's
+    confidence-first greedy absorption: arcs are visited in
+    ``(n_points desc, rmse asc)`` order, and a visited, still-surviving arc
+    drops every later (worse-witnessed), still-surviving arc that duplicates
+    it. A duplicate CLUSTER of 3+ parallel arcs therefore collapses directly
+    to its one best-witnessed member (every member is compared against the
+    best when the best is visited), not just pairwise-adjacent ones.
+    """
+    if not 0.0 <= overlap_frac <= 1.0:
+        raise ValueError(f"overlap_frac must be in [0, 1] (got {overlap_frac})")
+    if traj_tol < 0.0:
+        raise ValueError(f"traj_tol must be >= 0 (got {traj_tol})")
+    if len(arcs) < 2:
+        return list(arcs)
+
+    order = sorted(range(len(arcs)), key=lambda i: (-arcs[i].n_points, arcs[i].rmse))
+    dropped = [False] * len(arcs)
+    for oi in range(len(order)):
+        i = order[oi]
+        if dropped[i]:
+            continue
+        a = arcs[i]
+        for oj in range(oi + 1, len(order)):
+            j = order[oj]
+            if dropped[j]:
+                continue
+            if _same_flight(a, arcs[j], overlap_frac, traj_tol, samples):
+                dropped[j] = True
+    return [a for a, d in zip(arcs, dropped) if not d]
+
+
+def _same_flight(
+    a: Arc, b: Arc, overlap_frac: float, traj_tol: float, samples: int,
+) -> bool:
+    ov_start = max(a.t_start, b.t_start)
+    ov_end = min(a.t_end, b.t_end)
+    ov_dur = ov_end - ov_start
+    if ov_dur <= 0.0:
+        return False
+    shorter_span = min(a.duration(), b.duration())
+    if shorter_span <= 0.0 or ov_dur <= overlap_frac * shorter_span:
+        return False
+    if samples <= 1:
+        ts = [ov_start + 0.5 * ov_dur]
+    else:
+        ts = [ov_start + k * ov_dur / (samples - 1) for k in range(samples)]
+    total = sum(abs(a.x_at(t) - b.x_at(t)) + abs(a.y_at(t) - b.y_at(t)) for t in ts)
+    return (total / len(ts)) < traj_tol
+
+
 def assign_detections(
     dets: list[Detection],
     arcs: list[Arc],

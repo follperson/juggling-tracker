@@ -9,6 +9,26 @@ same space, minting parallel "ghost" arcs that inflate downstream catch counts
 (measured: ss3_id_086 went from an oracle-matched 24 catches to 57 with
 duplicate storms in the raw detections).
 
+Plan 5 task 2b update: AnalyzeConfig.cluster_merge_dist's shipped default
+moved from 0.023 (below) to 0.0 -- this per-frame box-level mechanism
+stays available (and still fires whenever merge_dist > 0) but is no longer
+relied on by default: real ball crossings almost always differ in
+confidence, so no merge_dist here can collapse duplicate-box storms
+without also risking real crossings, on some videos measurably regressing
+them (ss531_id_005/989, ss50505_id_012 -- see AnalyzeConfig's own comment
+and docs/superpowers/plans/2026-08-03-meschke-validation-findings.md).
+arcs/extract.py's dedup_parallel_arcs now carries that job at the ARC/
+trajectory level instead, where duplicate storms and genuine crossings are
+measurably separable. Not a strict improvement on every video, though: at
+least one out-of-scope high-pattern video (ss50505_id_093) depended on
+THIS mechanism's pre-extraction cleanup and regresses when merge_dist is
+0.0 (arc-level dedup cannot recover information this stage would have
+kept raw detections from losing in the first place) -- callers with
+similarly messy footage can still pass a nonzero cluster_merge_dist
+explicitly; see AnalyzeConfig's own comment for the measured trade-off.
+The rest of this docstring documents the mechanism and its ORIGINAL 0.023
+tuning history, preserved for context.
+
 Default justification (merge_dist, see AnalyzeConfig.cluster_merge_dist =
 0.023): measured duplicate offsets on real footage are 0.01-0.03 in
 normalized units on w~=0.065 boxes (ss3_id_086 frame 194). Distinct cascade

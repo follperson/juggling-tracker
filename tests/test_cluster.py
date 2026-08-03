@@ -77,9 +77,15 @@ def test_duplicate_injection_does_not_inflate_catches():
     original merge_dist=0.03: dirty=10 (crossing-merge fixed, but a distinct
     cross-contamination effect -- a clone landing closer to the OTHER real
     ball's anchor than its own true source -- costs 2 catches). Tuned to
-    merge_dist=0.023 (see AnalyzeConfig.cluster_merge_dist's comment for the
-    full sweep): dirty=12, exactly matching clean -- the current, shipped
-    measurement, passing with margin rather than at the ±1 band edge."""
+    merge_dist=0.023: dirty=12, exactly matching clean -- passing with
+    margin rather than at the ±1 band edge.
+
+    Plan 5 task 2b: cluster_merge_dist's shipped default moved to 0.0 (box-
+    level clustering retired to a no-op by default; see AnalyzeConfig's own
+    comment) with arcs/extract.py's dedup_parallel_arcs now doing this
+    fixture's duplicate-collapsing work at the arc level instead. Verified
+    directly on this exact fixture at the new default: clean=12, dirty=11 --
+    still comfortably within the ±1 band, just via a different mechanism."""
     import numpy as np
     from juggletrack.analyze import AnalyzeConfig, analyze_detections
     from juggletrack.sim import simulate_cascade

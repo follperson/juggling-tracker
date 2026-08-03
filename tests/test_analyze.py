@@ -118,6 +118,55 @@ def test_cluster_merge_dist_rejects_negative():
     AnalyzeConfig(cluster_merge_dist=0.0)  # 0.0 (disables clustering) stays valid
 
 
+def test_arc_dedup_knobs_reject_out_of_range():
+    """Plan 5 task 2b: arc_dedup_overlap_frac must be a fraction in [0, 1]
+    (it's compared against a temporal-overlap ratio) and arc_dedup_traj_tol
+    must be >= 0 (it's a normalized-distance threshold) -- same validation
+    pattern as cluster_merge_dist above."""
+    with pytest.raises(ValidationError):
+        AnalyzeConfig(arc_dedup_overlap_frac=-0.01)
+    with pytest.raises(ValidationError):
+        AnalyzeConfig(arc_dedup_overlap_frac=1.01)
+    with pytest.raises(ValidationError):
+        AnalyzeConfig(arc_dedup_traj_tol=-0.01)
+    AnalyzeConfig(arc_dedup_overlap_frac=0.0, arc_dedup_traj_tol=0.0)  # boundary, valid
+    AnalyzeConfig(arc_dedup_overlap_frac=1.0)  # boundary, valid
+
+
+def test_dedup_parallel_arcs_wired_into_analyze_detections():
+    """analyze_detections must run dedup_parallel_arcs AFTER extract_arcs and
+    BEFORE the event tail: two arcs that trace the same flight (near-
+    identical trajectory over a fully-overlapping window) must collapse to
+    one before throw/catch derivation, or the duplicate mints an extra
+    catch. Build a duplicate-storm-shaped detection stream directly (two
+    near-identical sets of detections for one flight) with clustering
+    disabled (cluster_merge_dist=0.0) so only arc-level dedup can be
+    responsible for the fix -- isolates this stage from the box-clustering
+    stage above it."""
+    from juggletrack.sim import simulate_cascade
+
+    r = simulate_cascade(n_throws=12, fps=30.0, seed=1)
+    clean = analyze_detections(r.detections, AnalyzeConfig(cluster_merge_dist=0.0))
+    clean_catches = sum(run.catches for run in clean.runs)
+
+    # Duplicate every detection with a tiny offset (well under traj_tol),
+    # at a DIFFERENT confidence so box-level clustering (disabled here
+    # anyway via cluster_merge_dist=0.0) could never be the one absorbing
+    # them -- only dedup_parallel_arcs's trajectory comparison can.
+    dupes = [
+        d.model_copy(update={"x": d.x + 0.002, "y": d.y + 0.002, "confidence": 0.3})
+        for d in r.detections
+    ]
+    dirty = analyze_detections(
+        r.detections + dupes, AnalyzeConfig(cluster_merge_dist=0.0)
+    )
+    dirty_catches = sum(run.catches for run in dirty.runs)
+    assert dirty_catches == clean_catches, (
+        "duplicate-flight arcs must be deduped before event derivation, "
+        f"not inflate catches (clean={clean_catches}, dirty={dirty_catches})"
+    )
+
+
 def test_config_plumbs_linker_knobs():
     """AnalyzeConfig's link_max_dist/link_max_dt must actually reach extract_arcs.
 
