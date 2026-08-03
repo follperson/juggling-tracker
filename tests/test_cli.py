@@ -160,6 +160,9 @@ def test_label_command_negatives_option(workspace_with_junk):
     result = runner.invoke(app, [
         "label", str(video), "--out", str(out), "--detections", str(dets),
         "--negatives", str(negatives),
+        # 'none' keeps the test hermetic (no stock-model download); the CLI
+        # default is yolo11n.pt so field mining gets the person veto for free
+        "--neg-person-model", "none",
     ])
     assert result.exit_code == 0, result.output
     # the normal label export still happens
@@ -178,6 +181,11 @@ def test_label_command_negatives_option(workspace_with_junk):
     # n_skipped_ambiguous -- both are useful diagnostics for why a
     # candidate frame count came out lower than expected.
     assert "skipped active" in result.output.lower()
+    # ...and the contamination-gate counters (transient/floor/person), so a
+    # mining run that rejected real-ball frames says so instead of silently
+    # yielding fewer images.
+    assert "transient" in result.output.lower()
+    assert "person" in result.output.lower()
 
 
 def test_label_command_without_negatives_skips_export(workspace):
