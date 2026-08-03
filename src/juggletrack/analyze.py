@@ -1,9 +1,10 @@
 """Detections -> SessionResult: the full event core in one call (spec §3 data flow)."""
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from juggletrack.arcs.extract import extract_arcs
+from juggletrack.detect.cluster import cluster_detections
 from juggletrack.events import CATCH_EXTRAPOLATION_MARGIN
 from juggletrack.events.catches import derive_events
 from juggletrack.events.drops import detect_drops
@@ -47,6 +48,24 @@ class AnalyzeConfig(BaseModel):
     # "confirmed by real data": a run's end_t comes from the same falling
     # hand-line crossing a catch would need to be witnessed at.
     video_end_margin: float = CATCH_EXTRAPOLATION_MARGIN
+    # Per-frame duplicate-box clustering radius (see detect/cluster.py's
+    # module docstring for the full measured justification): a detector
+    # firing 2-3 overlapping boxes for one physical ball mints parallel
+    # "ghost" arcs downstream that inflate catch counts (measured:
+    # ss3_id_086 went from an oracle-matched 24 to 57 with duplicate storms
+    # in the raw detections). 0.03 in normalized units, applied BEFORE
+    # filter_static_detections/extract_arcs so every downstream stage --
+    # offline and the realtime window path alike -- sees clustered
+    # detections. 0.0 disables clustering entirely.
+    cluster_merge_dist: float = 0.03
+
+    @model_validator(mode="after")
+    def _validate_cluster_merge_dist(self) -> "AnalyzeConfig":
+        if self.cluster_merge_dist < 0:
+            raise ValueError(
+                f"cluster_merge_dist must be >= 0 (got {self.cluster_merge_dist})"
+            )
+        return self
 
 
 def _events_from_arcs(
@@ -129,6 +148,8 @@ def analyze_detections(
     cfg = config or AnalyzeConfig()
     if not dets:
         return SessionResult()
+
+    dets = cluster_detections(dets, merge_dist=cfg.cluster_merge_dist)
 
     arcs = extract_arcs(
         dets, g_range=cfg.g_range, resid_tol=cfg.resid_tol,

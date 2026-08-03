@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from juggletrack.analyze import AnalyzeConfig, _events_from_arcs, analyze_detections
 from juggletrack.arcs.extract import extract_arcs
@@ -105,6 +106,18 @@ def test_empty_input():
     assert sr.runs == [] and sr.arcs == [] and sr.drops == []
 
 
+def test_cluster_merge_dist_rejects_negative():
+    """Plan 5 task 2: cluster_merge_dist feeds cluster_detections' merge_dist
+    directly -- a negative value has no sane meaning there (euclidean
+    distance is never negative) and would either silently disable
+    clustering in a confusing way or blow up downstream; reject it at
+    config construction, matching the existing AnalyzeConfig/RealtimeConfig
+    validation pattern (see RealtimeConfig._validate_envelope)."""
+    with pytest.raises(ValidationError):
+        AnalyzeConfig(cluster_merge_dist=-0.01)
+    AnalyzeConfig(cluster_merge_dist=0.0)  # 0.0 (disables clustering) stays valid
+
+
 def test_config_plumbs_linker_knobs():
     """AnalyzeConfig's link_max_dist/link_max_dt must actually reach extract_arcs.
 
@@ -120,13 +133,23 @@ def test_config_plumbs_linker_knobs():
     downsampling to every 4th frame (~7.5fps, per-sample dy > 0.08) is what's
     needed to make the default linker fail outright (0 arcs) while wider
     knobs still recover all 6 throws.
+
+    cluster_merge_dist=0.0 in both configs: this test isolates the linker
+    knobs, not clustering, but at this fixture's every-4th-frame density two
+    of the three balls have a genuine crossing (frame 52/92, measured
+    min_dist=0.008 -- well inside the 0.03 default) where each ball already
+    has as few as 8-9 total detection points. Losing one point per ball
+    there (Plan 5 task 2's clustering, default-on in AnalyzeConfig) drops one
+    arc below the linker's reach at these sparse counts -- a real cost of
+    clustering, but orthogonal to what THIS test checks (see
+    detect/cluster.py's module docstring for the general trade-off).
     """
     r = simulate_cascade(n_throws=6, fps=30.0, seed=1)
     sparse = [d for d in r.detections if d.frame_idx % 4 == 0]
 
-    sr_default = analyze_detections(sparse, AnalyzeConfig())
+    sr_default = analyze_detections(sparse, AnalyzeConfig(cluster_merge_dist=0.0))
     sr_wide = analyze_detections(
-        sparse, AnalyzeConfig(link_max_dist=0.2, link_max_dt=0.35)
+        sparse, AnalyzeConfig(link_max_dist=0.2, link_max_dt=0.35, cluster_merge_dist=0.0)
     )
 
     assert len(sr_wide.arcs) >= 4
