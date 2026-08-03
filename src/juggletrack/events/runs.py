@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 from juggletrack.events.catches import hand_line_crossings
+from juggletrack.events.drops import is_floor_bound
 from juggletrack.events.periodicity import periodicity_score
 from juggletrack.types import Arc, CatchEvent, Run, ThrowEvent
 
@@ -55,15 +56,29 @@ def segment_runs(
         run_throws = sorted(e.t for e in throws if e.arc_id in ids)
         run_catches = [e for e in catches if e.arc_id in ids]
         start_t = run_throws[0]
-        # A thrown arc with no matching catch is a missed catch: everything
-        # after it in this group is either the ball still descending past the
-        # hand line (uncaught) or arcs from throws the juggler made before
-        # noticing the drop. Either way, the run itself ended at that first
-        # missed catch's scheduled (falling-crossing) time, not at whatever
-        # later arc happens to have the largest arc_end. Only fall back to the
-        # max over all arcs when every throw in the group was caught.
+        # A thrown arc with no matching catch AND that is floor-bound (kept
+        # descending toward the floor rather than ending near the hands,
+        # per `is_floor_bound`) is a real miss: everything after it in this
+        # group is either the ball still descending past the hand line
+        # (uncaught) or arcs from throws the juggler made before noticing
+        # the drop. The run itself ended at that first floor-bound miss's
+        # scheduled (falling-crossing) time, not at whatever later arc
+        # happens to have the largest arc_end.
+        #
+        # An uncaught arc that is NOT floor-bound is merely unwitnessed --
+        # an extraction miss or occlusion cut its catch out of the
+        # detection stream while it was still airborne, not evidence the
+        # run actually ended there -- and must not truncate the span
+        # (measured at scale, ss42_id_011: one unwitnessed catch mid-run
+        # truncated a reported end_t to 38.7s while the run's 95 arcs, and
+        # its 93 counted catches, span 0..200s). Only fall back to the max
+        # over all arcs when no floor-bound miss exists in the group (every
+        # throw was caught, or every uncaught arc was merely unwitnessed).
         ordered = sorted(group, key=lambda a: a.t_start)
-        first_miss = next((a for a in ordered if a.id not in catch_arc_ids), None)
+        first_miss = next(
+            (a for a in ordered if a.id not in catch_arc_ids and is_floor_bound(a, hand_line)),
+            None,
+        )
         end_t = arc_end(first_miss) if first_miss is not None else max(arc_end(a) for a in group)
         p = float(np.median(np.diff(run_throws))) if len(run_throws) >= 3 else None
         # Score periodicity over the arcs' OWN span (min t_start .. max

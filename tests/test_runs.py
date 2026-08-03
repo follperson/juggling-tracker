@@ -1,7 +1,9 @@
 import pytest
 
+from juggletrack.analyze import AnalyzeConfig, analyze_detections
 from juggletrack.arcs.extract import extract_arcs
 from juggletrack.events.catches import derive_events
+from juggletrack.events.drops import is_floor_bound
 from juggletrack.events.handline import estimate_hand_line
 from juggletrack.events.periodicity import periodicity_score
 from juggletrack.events.runs import estimate_period, segment_runs
@@ -61,6 +63,72 @@ def test_drop_run_ends_at_missed_catch():
     assert runs[0].catches == len(r.catch_times)
 
 
+def test_unwitnessed_miss_does_not_truncate_run_span():
+    """Plan-5 task 3 (carried forward from plan 3), measured at scale
+    (ss42_id_011): one unwitnessed catch mid-run truncated end_t to 38.7s
+    while the run's 95 arcs (and its 93 counted catches) span 0..200s. An
+    uncaught arc that is NOT floor-bound (i.e. an extraction miss / occlusion,
+    not a real drop) must not truncate the span.
+
+    Reproduces the mechanism directly: take a full, cleanly periodic 12-throw
+    run and erase every detection belonging to ONE mid-run flight's second
+    half (apex through its would-be catch), mirroring the windowed-dropout
+    construction in tests/test_realtime.py::
+    test_debounce_absorbs_genuine_mid_run_detection_gap. Matched against the
+    flight's own analytic trajectory (not just a bare time window) so only
+    that one ball's points are removed -- other balls airborne at the same
+    moment are untouched. The truncated arc still gets extracted (from its
+    surviving ascending half) and still yields a throw, but its fitted
+    falling crossing only exists by extrapolating far past its last real
+    detection, so derive_events correctly withholds a CatchEvent (see
+    catches.py's witnessed-catch gate) -- exactly an "unwitnessed miss", not
+    a drop. It ends near its own apex (well above the hand line), so
+    is_floor_bound is False.
+
+    Before this fix, segment_runs treated ANY uncaught arc as first_miss and
+    truncated end_t to its (extrapolated) hand-line crossing (~3.83s here)
+    even though the run's real arcs run to ~6.53s -- a >40% truncation from
+    a single unwitnessed miss, matching the measured ss42_id_011 mechanism.
+    """
+    sim = simulate_cascade(n_throws=12, fps=30.0, seed=1)
+    sr = analyze_detections(sim.detections, config=AnalyzeConfig())
+    assert len(sr.runs) == 1
+    full = sr.runs[0]
+
+    p = sim.params
+    target_idx = 5  # a mid-run throw, well clear of both run boundaries
+    t0 = sim.throw_times[target_idx]
+    hand = target_idx % 2
+    x0, x1 = p.hand_x(hand), p.hand_x(1 - hand)
+    dur = p.flight_s
+
+    def target_xy(t: float) -> tuple[float, float]:
+        dt = t - t0
+        y = p.hand_y - p.v0 * dt + 0.5 * p.g * dt * dt
+        x = x0 + (x1 - x0) * dt / dur
+        return x, y
+
+    # Second half of the flight (apex through the would-be catch, plus a
+    # small margin past landing) -- erasing only this ball's points there,
+    # not the whole time window, so other simultaneously-airborne balls'
+    # arcs are untouched.
+    gap_start, gap_end = t0 + dur * 0.5, t0 + dur + 0.05
+    gapped = [
+        d for d in sim.detections
+        if not (
+            gap_start <= d.t <= gap_end
+            and abs(d.x - target_xy(d.t)[0]) < 1e-6
+            and abs(d.y - target_xy(d.t)[1]) < 1e-6
+        )
+    ]
+    assert len(gapped) < len(sim.detections), "fixture must actually remove points"
+
+    sr2 = analyze_detections(gapped, config=AnalyzeConfig())
+    assert len(sr2.runs) == 1
+    assert sr2.runs[0].catches == full.catches - 1  # exactly the one unwitnessed catch is lost
+    assert sr2.runs[0].end_t > 0.9 * full.end_t  # span survives the miss
+
+
 def test_min_arcs_filters_stray_tosses():
     r = simulate_cascade(n_throws=2, fps=30.0, seed=3)
     _, _, _, _, runs = pipeline(r.detections)
@@ -68,15 +136,28 @@ def test_min_arcs_filters_stray_tosses():
 
 
 def test_quality_scored_over_arc_span_not_truncated_end_t():
-    """A single missed-catch DETECTION (not a real drop) truncates the
-    reported end_t to that miss's crossing time, but the group's arcs can
-    keep going well past it if the pattern actually continued -- lane 1
-    measured a real case (af1 run 2) scoring 0.004 on [start_t, end_t] vs
-    0.351 on the arcs' own span. Reproduce the mechanism directly: take a
-    full, cleanly periodic 16-throw run and strip the catch event for one
-    arc in the middle (simulating an extraction miss) without touching the
-    arcs themselves. end_t truncates hard; quality must still reflect the
-    real periodic structure across the whole arc span.
+    """A genuine floor-bound miss truncates the reported end_t to that
+    miss's crossing time, but the group's arcs can keep going well past it
+    if the pattern actually continued -- lane 1 measured a real case (af1
+    run 2) scoring 0.004 on [start_t, end_t] vs 0.351 on the arcs' own span.
+    Reproduce the mechanism directly: take a full, cleanly periodic 16-throw
+    run and turn one mid-run arc into a floor-bound miss by extending its
+    fitted t_end 0.09s further along its own parabola (past hand_line +
+    FLOOR_MARGIN, still descending) and stripping its catch -- WITHOUT
+    touching any other arc. end_t truncates hard; quality must still
+    reflect the real periodic structure across the whole arc span.
+
+    Plan-5 task 3 update: originally this fixture merely stripped a catch
+    EVENT from an otherwise normally-landing arc (an extraction miss, not a
+    floor-bound one) to trigger truncation. Task 3 changed segment_runs so
+    only a floor-bound uncaught arc (`is_floor_bound`) may truncate end_t --
+    an unwitnessed/extraction miss no longer does (see
+    test_unwitnessed_miss_does_not_truncate_run_span). The old fixture's
+    truncation premise is exactly the bug that fix removes, so this test now
+    builds a genuinely floor-bound miss (measured: extending t_end by 0.09s
+    lands y_at(t_end) ~= 0.736, comfortably past hand_line + FLOOR_MARGIN
+    ~= 0.732, with positive terminal velocity) to keep exercising the
+    quality-over-own-span mechanism this test is actually about.
     """
     r = simulate_cascade(n_throws=16, fps=30.0, seed=1)
     arcs = extract_arcs(r.detections)
@@ -84,14 +165,18 @@ def test_quality_scored_over_arc_span_not_truncated_end_t():
     throws, catches = derive_events(arcs, hl)
 
     arcs_sorted = sorted(arcs, key=lambda a: a.t_start)
-    miss_id = arcs_sorted[3].id
-    catches = [c for c in catches if c.arc_id != miss_id]
+    target = arcs_sorted[3]
+    mutated = target.model_copy(update={"t_end": target.t_end + 0.09})
+    assert is_floor_bound(mutated, hl), "fixture must genuinely be floor-bound"
+    arcs = [mutated if a.id == target.id else a for a in arcs]
+    catches = [c for c in catches if c.arc_id != target.id]
 
     runs = segment_runs(arcs, throws, catches, hl)
     assert len(runs) == 1
     run = runs[0]
-    # end_t truncated to (approximately) the 4th throw's crossing -- far
-    # short of the group's real arc span (16 throws over ~7s).
+    # end_t truncated to (approximately) the floor-bound arc's own
+    # hand-line crossing -- far short of the group's real arc span (16
+    # throws over ~7s).
     assert run.end_t < arcs_sorted[-1].t_end - 2.0
     assert run.quality > 0.3
 

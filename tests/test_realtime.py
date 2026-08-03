@@ -198,25 +198,56 @@ def test_debounce_merges_narrow_gap_runs_known_tradeoff():
 
 
 def test_debounce_absorbs_genuine_mid_run_detection_gap():
-    """T2: isolates RUN_CLOSE_DEBOUNCE_S itself, which the narrow-gap test
-    above does NOT (see its corrected docstring) -- that fixture's 1.0s gap
-    never makes liveness go false in the first place, so the debounce
-    never engages there.
+    """T2 ORIGINAL INTENT: isolate RUN_CLOSE_DEBOUNCE_S itself, which the
+    narrow-gap test above does NOT (see its corrected docstring) -- that
+    fixture's 1.0s gap never makes liveness go false in the first place, so
+    the debounce never engages there.
 
-    This fixture is a SINGLE juggling session with one detector blackout in
-    the middle (all detections removed for `gap_dur` seconds -- e.g. an
-    occlusion), with `gap_dur` chosen inside (freeze_s, freeze_s +
-    RUN_CLOSE_DEBOUNCE_S) = (1.5, 2.0) so that liveness genuinely DOES flap
-    false for a stretch (no arc's end_t is within freeze_s of `now` for
-    part of the gap) and only the debounce absorbing that brief window
-    keeps it counted as one run instead of a false split.
+    Plan-5 task 3 UPDATE (mechanism shift, measured): this fixture no longer
+    isolates the debounce -- Task 3's fix (segment_runs only truncates
+    end_t at a floor-bound miss; an uncaught arc that's merely unwitnessed,
+    e.g. cut short by this very detector blackout, no longer truncates it)
+    already prevents the false split this test used to rely on the
+    debounce for. Measured on this exact fixture (gap_dur=1.7s, gap0 at 60%
+    through the run): BEFORE task 3, disabling the debounce
+    (RUN_CLOSE_DEBOUNCE_S=-1.0) flipped runs_completed from 1 to 2 (the
+    false split the debounce existed to absorb). AFTER task 3, disabling
+    the debounce on the SAME fixture still gives 1 -- no false split occurs
+    at all, debounce or not.
+
+    Why: `strict_live` reads `r.end_t` from segment_runs' run objects, which
+    are recomputed from the FULL arc history every cycle. During this
+    blackout, at least one other ball is always still mid-flight (3-ball
+    cascade, period 0.45s << flight duration 1.1s -- overlap is structural,
+    not incidental to this fixture), so its arc gets fit from only its
+    real, pre-blackout points and its *analytic* hand-line crossing
+    (extrapolated past those points, same fit-then-solve `arc_end` used
+    everywhere in runs.py) lands later, inside or past the blackout. Since
+    that arc is uncaught-but-not-floor-bound (it ends mid-air, nowhere near
+    the hand line), task 3 lets it flow into the `max(arc_end(a) for a in
+    group)` fallback instead of truncating end_t to some earlier miss --
+    keeping the run's end_t "fresh" enough that `end_t > now - freeze_s`
+    never goes false during this gap. An exhaustive re-check (gap position
+    from 30%-97% through the run, gap_dur from 1.55s-1.95s) found no
+    parameter combination in this fixture family that still reproduces the
+    pre-task-3 false split -- the overlap that rescues it is structural to
+    any continuous multi-ball cascade at this period/flight ratio, not a
+    property of this one gap's placement.
+
+    This test is kept (rather than deleted) as regression coverage for
+    task 3's benefit itself: both assertions below now hold with or
+    without the debounce, which is exactly what "fewer premature closes"
+    (the task's stated goal) looks like from the realtime engine's side.
+    If the "without debounce" control ever regresses to 2 here, task 3's
+    protection has been lost for this mechanism and needs re-diagnosis --
+    not a debounce-band widening.
 
     Offline (which has no debounce concept, and free-runs segment_runs' own
     fixed gap_factor*period grouping threshold -- 1.3*0.45 =~ 0.585s, far
     below this gap) still segments this into 2 runs; that's expected and
     is not what this test is checking. This test is specifically about
-    RealtimeAnalyzer's own liveness+debounce mechanism, verified in
-    isolation via the disabled-debounce control below.
+    RealtimeAnalyzer's own liveness (now dominated by task 3's fix, not the
+    debounce) for this gap shape.
 
     Plan 5 task 2: per-frame duplicate-box clustering briefly threatened
     this test (a confidence-descending-sort-only merge rule let a genuine
@@ -231,26 +262,26 @@ def test_debounce_absorbs_genuine_mid_run_detection_gap():
     gap_dur = 1.7
     assert cfg.freeze_s < gap_dur < cfg.freeze_s + RealtimeAnalyzer.RUN_CLOSE_DEBOUNCE_S, (
         "gap_dur must sit strictly inside (freeze_s, freeze_s + debounce) for "
-        "this repro to isolate the debounce, not some other mechanism"
+        "this repro to originally have isolated the debounce (pre-task-3)"
     )
     gap0 = r.run_start + (r.run_end - r.run_start) * 0.6
     dets = [d for d in r.detections if not (gap0 <= d.t < gap0 + gap_dur)]
 
     final = stream_dets(dets, RealtimeAnalyzer(cfg))[-1]
     assert final.runs_completed == 1, (
-        f"debounce should absorb the mid-run gap and keep this as one run; "
-        f"got {final.runs_completed}"
+        f"this mid-run gap must still be counted as one run; got {final.runs_completed}"
     )
 
     class _NoDebounce(RealtimeAnalyzer):
         RUN_CLOSE_DEBOUNCE_S = -1.0
 
     without_debounce = stream_dets(dets, _NoDebounce(cfg))[-1]
-    assert without_debounce.runs_completed == 2, (
-        "control: disabling the debounce on this SAME fixture must reproduce "
-        f"the false split (2 runs) the debounce exists to prevent; got "
-        f"{without_debounce.runs_completed} -- if this changes, the isolating "
-        "repro needs to be re-measured, not just adjusted to match"
+    assert without_debounce.runs_completed == 1, (
+        "post-task-3: the run-span fix (not the debounce) now prevents the "
+        f"false split on this fixture even with the debounce disabled; got "
+        f"{without_debounce.runs_completed} -- a return to 2 here means task "
+        "3's end_t protection has regressed for this mechanism, not that the "
+        "debounce needs restoring"
     )
 
 

@@ -6,6 +6,23 @@ from juggletrack.events.catches import hand_line_crossings
 from juggletrack.types import Arc, DropEvent, Run
 
 
+def is_floor_bound(arc: Arc, hand_line: float, *, floor_margin: float = FLOOR_MARGIN) -> bool:
+    """True if `arc` ends past the floor margin below the hand line.
+
+    y is normalized image coordinates: larger y = lower in frame. An arc
+    that ends at or above `hand_line + floor_margin` terminated near the
+    hands (caught, or at least not evidence of a floor-ward miss). One that
+    ends below that threshold kept descending toward the floor -- the shape
+    a real drop leaves, as opposed to an arc that's merely unwitnessed past
+    that point (extraction miss, occlusion) while still airborne.
+
+    Single source of truth for this predicate: shared by `detect_drops`
+    (drop candidacy) and `segment_runs` (which uncaught arcs may truncate a
+    run's end_t).
+    """
+    return arc.y_at(arc.t_end) > hand_line + floor_margin
+
+
 def detect_drops(
     arcs: list[Arc],
     runs: list[Run],
@@ -33,8 +50,7 @@ def detect_drops(
             if run.start_t - 1.0 <= b.t_start <= run.end_t + bounce_window + 1.0
         ]
         for cand in run_arcs:
-            end_y = cand.y_at(cand.t_end)
-            if end_y <= hand_line + floor_margin:
+            if not is_floor_bound(cand, hand_line, floor_margin=floor_margin):
                 continue  # ended near the hands: caught, not dropped
 
             signals = []
