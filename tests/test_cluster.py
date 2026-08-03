@@ -29,6 +29,41 @@ def test_zero_merge_dist_is_identity():
     assert cluster_detections(dets, merge_dist=0.0) == dets
 
 
+def test_negative_merge_dist_raises():
+    dets = [_d(0.360, 0.770, 0.3)]
+    import pytest
+    with pytest.raises(ValueError, match="merge_dist must be >= 0"):
+        cluster_detections(dets, merge_dist=-0.01)
+
+
+def test_tied_confidence_sort_is_deterministic():
+    """Three chained detections all at same confidence=0.30, spaced so
+    A-B and B-C are within merge_dist but A-C is not. Clustering must
+    yield the same clusters regardless of input order [A,B,C] vs [B,A,C]."""
+    merge_dist = 0.025
+    # A at (0.360, 0.770)
+    # B at (0.368, 0.770) -- within 0.025 of A (dist=0.008)
+    # C at (0.394, 0.770) -- within 0.025 of B (dist=0.026, just over, but let's use 0.024)
+    # so A-C dist = 0.034, beyond merge_dist
+    A = _d(0.360, 0.770, 0.30)
+    B = _d(0.368, 0.770, 0.30)
+    C = _d(0.391, 0.770, 0.30)  # dist to B = 0.023, well within 0.025
+
+    # Verify distances manually
+    import math
+    assert math.hypot(A.x - B.x, A.y - B.y) < merge_dist  # A-B within
+    assert math.hypot(B.x - C.x, B.y - C.y) < merge_dist  # B-C within
+    assert math.hypot(A.x - C.x, A.y - C.y) > merge_dist  # A-C beyond
+
+    result_abc = cluster_detections([A, B, C], merge_dist=merge_dist)
+    result_bac = cluster_detections([B, A, C], merge_dist=merge_dist)
+
+    assert result_abc == result_bac, (
+        f"different cluster output for different input orders: "
+        f"[A,B,C]→{len(result_abc)} clusters vs [B,A,C]→{len(result_bac)} clusters"
+    )
+
+
 def test_duplicate_injection_does_not_inflate_catches():
     """Duplicate-box storms mint parallel arcs and inflate catches (measured:
     ss3_id_086 oracle 24 -> 57 pre-fix). Injecting 2-3 jittered clones of every

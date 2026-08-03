@@ -7,8 +7,7 @@ duplicate becomes its own point in the detection cloud; ``extract_arcs``' EM
 assigner can split them across sibling arcs that all pass through roughly the
 same space, minting parallel "ghost" arcs that inflate downstream catch counts
 (measured: ss3_id_086 went from an oracle-matched 24 catches to 57 with
-duplicate storms in the raw detections -- see
-docs/superpowers/sdd/task-2-report.md).
+duplicate storms in the raw detections).
 
 Default justification (merge_dist=0.03): measured duplicate offsets on
 real footage are 0.01-0.03 in normalized units on w~=0.065 boxes
@@ -43,7 +42,9 @@ def cluster_detections(dets: list[Detection], *, merge_dist: float) -> list[Dete
     max confidence among members, and ``frame_idx``/``t`` preserved from the
     frame (all members share them).
     """
-    if merge_dist <= 0.0:
+    if merge_dist < 0.0:
+        raise ValueError("merge_dist must be >= 0")
+    if merge_dist == 0.0:
         return list(dets)
 
     by_frame: dict[int, list[Detection]] = {}
@@ -70,7 +71,7 @@ def _cluster_frame(frame_dets: list[Detection], merge_dist: float) -> list[Detec
     # confidence-weighted mean is still computed, but only once, for the
     # final output position (_merge) -- never fed back into membership
     # testing.
-    ordered = sorted(frame_dets, key=lambda d: d.confidence, reverse=True)
+    ordered = sorted(frame_dets, key=lambda d: (-d.confidence, d.x, d.y))
     clusters: list[list[Detection]] = []
     anchors: list[tuple[float, float]] = []
 

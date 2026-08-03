@@ -285,9 +285,8 @@ def test_catch_accuracy_seed_sweep():
     tuning toward the field targets in the task's spot-check) either left
     this exact regression in place or broke substantially more of the
     existing pinned suite (test_realtime.py's hyper-sensitive parity/guard
-    tests) while making the field numbers no better -- see
-    docs/superpowers/sdd/task-2-report.md for the full sweep. Accepting one
-    more seed in this already-non-100% gate is the smaller, disclosed cost.
+    tests) while making the field numbers no better. Accepting one more seed
+    in this already-non-100% gate is the smaller, disclosed cost.
     """
     from juggletrack.analyze import analyze_detections
 
