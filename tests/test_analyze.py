@@ -134,22 +134,22 @@ def test_config_plumbs_linker_knobs():
     needed to make the default linker fail outright (0 arcs) while wider
     knobs still recover all 6 throws.
 
-    cluster_merge_dist=0.0 in both configs: this test isolates the linker
-    knobs, not clustering, but at this fixture's every-4th-frame density two
-    of the three balls have a genuine crossing (frame 52/92, measured
-    min_dist=0.008 -- well inside the 0.03 default) where each ball already
-    has as few as 8-9 total detection points. Losing one point per ball
-    there (Plan 5 task 2's clustering, default-on in AnalyzeConfig) drops one
-    arc below the linker's reach at these sparse counts -- a real cost of
-    clustering, but orthogonal to what THIS test checks (see
-    detect/cluster.py's module docstring for the general trade-off).
+    Plan 5 task 2 note: this fixture has a genuine crossing (frame 52/92,
+    measured min_dist=0.008) between two real balls, which briefly worried
+    clustering into this test's territory. Moot as of the strict-lower-
+    confidence absorption fix (detect/cluster.py): every raw sim detection
+    is confidence=1.0, so two real balls always tie and NEVER merge under
+    strict inequality -- clustering is a verified no-op on this (and every
+    other) clean, non-duplicate-injected sim fixture. Reverted to plain
+    AnalyzeConfig() (was briefly cluster_merge_dist=0.0-pinned; see
+    task-2-report.md's strict-inequality addendum).
     """
     r = simulate_cascade(n_throws=6, fps=30.0, seed=1)
     sparse = [d for d in r.detections if d.frame_idx % 4 == 0]
 
-    sr_default = analyze_detections(sparse, AnalyzeConfig(cluster_merge_dist=0.0))
+    sr_default = analyze_detections(sparse, AnalyzeConfig())
     sr_wide = analyze_detections(
-        sparse, AnalyzeConfig(link_max_dist=0.2, link_max_dt=0.35, cluster_merge_dist=0.0)
+        sparse, AnalyzeConfig(link_max_dist=0.2, link_max_dt=0.35)
     )
 
     assert len(sr_wide.arcs) >= 4

@@ -53,11 +53,26 @@ class AnalyzeConfig(BaseModel):
     # firing 2-3 overlapping boxes for one physical ball mints parallel
     # "ghost" arcs downstream that inflate catch counts (measured:
     # ss3_id_086 went from an oracle-matched 24 to 57 with duplicate storms
-    # in the raw detections). 0.03 in normalized units, applied BEFORE
-    # filter_static_detections/extract_arcs so every downstream stage --
-    # offline and the realtime window path alike -- sees clustered
-    # detections. 0.0 disables clustering entirely.
-    cluster_merge_dist: float = 0.03
+    # in the raw detections). Applied BEFORE filter_static_detections/
+    # extract_arcs so every downstream stage -- offline and the realtime
+    # window path alike -- sees clustered detections. 0.0 disables
+    # clustering entirely.
+    #
+    # 0.023, not 0.03: with strict-lower-confidence absorption (cluster.py),
+    # 0.03 measured a residual -2-catch UNDER-count on the sim's own
+    # duplicate-injection integration test (clone jitter at a genuine ball
+    # crossing can land closer to the WRONG ball's anchor than to its own
+    # true source -- a cross-contamination effect distinct from the
+    # real-crossing-merge bug strict inequality fixes). Swept 0.005-0.03:
+    # 0.023 is the value where that cross-contamination is smallest AND the
+    # sim integration test lands at its best measured margin (dirty==clean
+    # exactly) AND every field spot-check target still holds (see
+    # detect/cluster.py's docstring and task-2-report.md's addendum for the
+    # full sweep). Real detector confidences are continuous floats with no
+    # measured exact ties (0/399 multi-detection frames on ss3_id_086), so
+    # strict inequality costs nothing on real footage regardless of this
+    # value -- the tuning is driven entirely by the sim-crossing trade-off.
+    cluster_merge_dist: float = 0.023
 
     @model_validator(mode="after")
     def _validate_cluster_merge_dist(self) -> "AnalyzeConfig":

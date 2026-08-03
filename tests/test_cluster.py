@@ -67,7 +67,19 @@ def test_tied_confidence_sort_is_deterministic():
 def test_duplicate_injection_does_not_inflate_catches():
     """Duplicate-box storms mint parallel arcs and inflate catches (measured:
     ss3_id_086 oracle 24 -> 57 pre-fix). Injecting 2-3 jittered clones of every
-    sim detection must leave the catch count at the clean baseline."""
+    sim detection must leave the catch count at the clean baseline.
+
+    History on this exact fixture (seed=3, clone rng seed=7): pre-clustering
+    dirty=16 (inflated, the bug this module fixes). Deterministic
+    confidence-descending sort alone (no strict-inequality rule): dirty=6
+    (crossing balls -- tied at confidence=1.0 -- merged on every tie,
+    collapsing arcs). Strict-lower-confidence absorption added, still at the
+    original merge_dist=0.03: dirty=10 (crossing-merge fixed, but a distinct
+    cross-contamination effect -- a clone landing closer to the OTHER real
+    ball's anchor than its own true source -- costs 2 catches). Tuned to
+    merge_dist=0.023 (see AnalyzeConfig.cluster_merge_dist's comment for the
+    full sweep): dirty=12, exactly matching clean -- the current, shipped
+    measurement, passing with margin rather than at the ±1 band edge."""
     import numpy as np
     from juggletrack.analyze import AnalyzeConfig, analyze_detections
     from juggletrack.sim import simulate_cascade

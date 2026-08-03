@@ -272,21 +272,16 @@ def test_catch_accuracy_seed_sweep():
     strictly safer failure mode (fused arcs now rejected rather than silently
     netting out); seeds 4/8 are the known residual crossing-fusion gap.
 
-    17/20 (Plan 5 task 2): per-frame duplicate-box clustering is now default-on
-    in AnalyzeConfig (cluster_merge_dist=0.03) to kill a much larger field
-    over-count (ss3_id_086 measured 24->57 catches from duplicate-box storms;
-    see detect/cluster.py's module docstring). Measured directly (not
-    assumed): seed 2 is a NEW instance of the exact same crossing-fusion
-    class the two lines above already document -- clustering merges a
-    genuine sub-0.03 crossing between two distinct balls into one point,
-    and at this fixture's dropout=0.15 point density that one lost point is
-    enough to drop an arc below extraction's reach (catches 12 -> 9,
-    measured). Every alternative merge_dist tried (0.005-0.08, including
-    tuning toward the field targets in the task's spot-check) either left
-    this exact regression in place or broke substantially more of the
-    existing pinned suite (test_realtime.py's hyper-sensitive parity/guard
-    tests) while making the field numbers no better. Accepting one more seed
-    in this already-non-100% gate is the smaller, disclosed cost.
+    Plan 5 task 2 (per-frame duplicate-box clustering, default-on in
+    AnalyzeConfig, cluster_merge_dist=0.03): briefly regressed this to
+    17/20 (seed 2, catches 12->9) because the initial confidence-descending
+    sort let a genuine sub-0.03 real-ball crossing merge whenever it landed
+    on a tied-confidence pair. Fixed by strict-lower-confidence absorption
+    (detect/cluster.py): an anchor at or below a detection's own confidence
+    is never an eligible merge target, so two real balls tied at
+    confidence=1.0 (every raw sim detection) never merge, period. Verified
+    directly: clustering is now a no-op on every seed in this sweep (and
+    all 20 in the drift-cohort sweep below) -- 18/20 restored exactly.
     """
     from juggletrack.analyze import analyze_detections
 
@@ -300,7 +295,7 @@ def test_catch_accuracy_seed_sweep():
             ok += 1
         else:
             failures.append((seed, total, len(sr.runs)))
-    assert ok >= 17, f"catch accuracy {ok}/20 below target; failures: {failures}"
+    assert ok >= 18, f"catch accuracy {ok}/20 below 90% target; failures: {failures}"
 
 
 def _inject_static_cluster(fps, n_frames, cx, cy, jitter, density, seed, confidence=0.9):

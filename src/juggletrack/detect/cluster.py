@@ -9,14 +9,50 @@ same space, minting parallel "ghost" arcs that inflate downstream catch counts
 (measured: ss3_id_086 went from an oracle-matched 24 catches to 57 with
 duplicate storms in the raw detections).
 
-Default justification (merge_dist=0.03): measured duplicate offsets on
-real footage are 0.01-0.03 in normalized units on w~=0.065 boxes
-(ss3_id_086 frame 194). Distinct cascade balls approach closer than 0.03 only
-in brief crossing instants; losing one detection point per ball during those
-instants is absorbed by extract_arcs' EM assigner (verified by
-test_duplicate_injection_does_not_inflate_catches's sim-based clone-injection
-test), so the merge radius trades a rare, cheap point-loss for eliminating a
-much more damaging parallel-arc over-count.
+Default justification (merge_dist, see AnalyzeConfig.cluster_merge_dist =
+0.023): measured duplicate offsets on real footage are 0.01-0.03 in
+normalized units on w~=0.065 boxes (ss3_id_086 frame 194). Distinct cascade
+balls approach closer than that only in brief crossing instants; losing one
+detection point per ball during those instants used to be "absorbed by
+extract_arcs' EM assigner" -- see the strict-lower-confidence paragraph below
+for why that framing was wrong and crossings must not merge at all, and
+AnalyzeConfig.cluster_merge_dist's own comment for why 0.023 (not the
+originally-measured 0.03) is the shipped value.
+
+Strict-lower-confidence absorption: a detection may only be absorbed into a
+cluster whose anchor confidence is STRICTLY GREATER than its own -- two
+equal-confidence detections never merge, no matter how close. Real duplicate
+boxes are always weaker echoes of the strongest box (measured, ss3_id_086
+frame 194: anchor 0.303 vs echoes 0.220/0.177/0.152), while two REAL balls at
+a crossing instant either tie exactly (the sim's detections are all
+confidence=1.0 by construction) or are each independently strong -- never one
+strictly weaker echo of the other. Requiring strict inequality is what keeps
+real-ball crossings from ever being merged at all (rather than merged and
+"absorbed by the EM assigner" as the paragraph above used to justify): with a
+plain confidence-descending sort, real ties (crossing balls) and real echoes
+(duplicate storms) were indistinguishable by proximity alone, and a
+deterministic tie-break (needed for order-independence: same confidence, no
+secondary key, means input order picks who is a cluster's anchor) made the
+crossing-merge happen on EVERY tie, not just unluckily -- see
+test_duplicate_injection_does_not_inflate_catches's measured pre-fix dirty
+count for how badly that generalizes. Real detector confidences are
+continuous floats and essentially never tie exactly (measured: 0/399
+multi-detection frames on ss3_id_086), so this rule costs nothing on real
+footage -- it only ever changes behavior on the sim's exactly-tied synthetic
+detections.
+
+Residual cross-contamination at genuine crossings (why the default is 0.023,
+not 0.03): even with strict inequality, a duplicate clone near a crossing can
+land closer to the OTHER real ball's anchor than to its own true source
+(both anchors are eligible -- neither ties with a clone's lower confidence),
+polluting BOTH balls' reconstructed positions instead of one blended
+(previously "harmless") point. Measured directly on the sim integration
+test: 0.03 costs -2 catches (a genuine under-count from this
+cross-contamination, distinct from the crossing-merge bug strict inequality
+already fixes); sweeping 0.005-0.03 found 0.023 as the value where the sim
+integration test lands at its best measured margin (dirty exactly equals
+clean) while every field spot-check target still holds (see
+docs/superpowers/sdd/task-2-report.md's addendum for the full sweep table).
 """
 from __future__ import annotations
 
@@ -33,14 +69,18 @@ def cluster_detections(dets: list[Detection], *, merge_dist: float) -> list[Dete
     affects another (no cross-frame state). ``merge_dist`` of 0.0 disables
     clustering entirely (identity, input order preserved).
 
-    Algorithm (greedy, confidence-first): within each frame, sort detections
-    by confidence descending. For each detection (in that order), if its
-    center lies within ``merge_dist`` (euclidean, normalized units) of an
-    already-kept cluster's center, absorb it into that cluster; otherwise it
-    starts a new cluster. A cluster's output detection takes the
-    confidence-weighted mean of its members' x/y/w/h, ``confidence`` = the
-    max confidence among members, and ``frame_idx``/``t`` preserved from the
-    frame (all members share them).
+    Algorithm (greedy, confidence-first, strict-lower-confidence absorption):
+    within each frame, sort detections by confidence descending. For each
+    detection (in that order), if its center lies within ``merge_dist``
+    (euclidean, normalized units) of an already-kept cluster's anchor AND
+    its own confidence is STRICTLY LESS than that anchor's confidence, absorb
+    it into that cluster (the nearest such eligible cluster, if more than
+    one qualifies); otherwise it starts a new cluster. Two detections at
+    equal confidence never merge, regardless of distance (see the module
+    docstring's "Strict-lower-confidence absorption" section for why). A
+    cluster's output detection takes the confidence-weighted mean of its
+    members' x/y/w/h, ``confidence`` = the max confidence among members, and
+    ``frame_idx``/``t`` preserved from the frame (all members share them).
     """
     if merge_dist < 0.0:
         raise ValueError("merge_dist must be >= 0")
@@ -73,19 +113,25 @@ def _cluster_frame(frame_dets: list[Detection], merge_dist: float) -> list[Detec
     # testing.
     ordered = sorted(frame_dets, key=lambda d: (-d.confidence, d.x, d.y))
     clusters: list[list[Detection]] = []
-    anchors: list[tuple[float, float]] = []
+    anchors: list[tuple[float, float, float]] = []  # (x, y, confidence)
 
     for d in ordered:
         best_idx = None
         best_dist = merge_dist
-        for i, (ax, ay) in enumerate(anchors):
+        for i, (ax, ay, aconf) in enumerate(anchors):
+            # Strict-lower-confidence absorption: an anchor at or below this
+            # detection's own confidence is never an eligible merge target,
+            # however close -- see module docstring. Ties (equal confidence)
+            # are excluded here too, not just lower anchors.
+            if d.confidence >= aconf:
+                continue
             dist = math.hypot(d.x - ax, d.y - ay)
             if dist <= best_dist:
                 best_idx = i
                 best_dist = dist
         if best_idx is None:
             clusters.append([d])
-            anchors.append((d.x, d.y))
+            anchors.append((d.x, d.y, d.confidence))
         else:
             clusters[best_idx].append(d)
 

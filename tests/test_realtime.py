@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from juggletrack.analyze import AnalyzeConfig, analyze_detections
+from juggletrack.analyze import analyze_detections
 from juggletrack.pipeline.realtime import RealtimeAnalyzer, RealtimeConfig
 from juggletrack.sim import simulate_cascade
 from juggletrack.types import Detection
@@ -218,16 +218,16 @@ def test_debounce_absorbs_genuine_mid_run_detection_gap():
     RealtimeAnalyzer's own liveness+debounce mechanism, verified in
     isolation via the disabled-debounce control below.
 
-    cluster_merge_dist=0.0: Plan 5 task 2's per-frame duplicate-box
-    clustering is orthogonal to what this test isolates. Left at its
-    AnalyzeConfig default (0.03) it merges a genuine sub-0.03 crossing
-    between two distinct balls in this fixture, which shifts arc
-    continuity enough to flip runs_completed from 1 to 2 -- defeating the
-    narrow timing window this repro is built around. Disabling it here
-    restores the pre-existing, debounce-only behavior this test pins.
+    Plan 5 task 2: per-frame duplicate-box clustering briefly threatened
+    this test (a confidence-descending-sort-only merge rule let a genuine
+    sub-0.03 crossing between two distinct balls here flip runs_completed
+    from 1 to 2), fixed by strict-lower-confidence absorption -- two real
+    balls tied at confidence=1.0 never merge, so clustering is a no-op on
+    this fixture at the AnalyzeConfig default. Verified directly; reverted
+    the transient cluster_merge_dist=0.0 override.
     """
     r = simulate_cascade(n_throws=20, fps=30.0, noise=0.003, dropout=0.1, seed=5)
-    cfg = RealtimeConfig(analyze=AnalyzeConfig(cluster_merge_dist=0.0))
+    cfg = RealtimeConfig()
     gap_dur = 1.7
     assert cfg.freeze_s < gap_dur < cfg.freeze_s + RealtimeAnalyzer.RUN_CLOSE_DEBOUNCE_S, (
         "gap_dur must sit strictly inside (freeze_s, freeze_s + debounce) for "
@@ -326,17 +326,15 @@ def test_parity_very_long_stream():
     this same gap on real ss3_id_016 footage and why it's out of scope for
     this design.
 
-    cluster_merge_dist=0.0: this test's subject is window-boundary run
-    churn, orthogonal to Plan 5 task 2's per-frame duplicate-box clustering.
-    Left at the AnalyzeConfig default (0.03), clustering merges a genuine
-    sub-0.03 crossing in this fixture (measured: offline 23 -> 25 catches)
-    that has nothing to do with the windowing mechanism this test pins --
-    see test_extract.py::test_catch_accuracy_seed_sweep for the general
-    root cause. Disabling it here keeps this test isolating what it says
-    it isolates."""
-    noclust = AnalyzeConfig(cluster_merge_dist=0.0)
+    Plan 5 task 2: per-frame duplicate-box clustering briefly threatened
+    this test (a confidence-descending-sort-only merge rule let a genuine
+    sub-0.03 crossing here inflate offline 23 -> 25), fixed by strict-lower-
+    confidence absorption -- two real balls tied at confidence=1.0 never
+    merge, so clustering is a no-op on this fixture at the AnalyzeConfig
+    default. Verified directly; reverted the transient
+    cluster_merge_dist=0.0 override on both configs below."""
     dets = _three_run_stream(gap_s=3.0, noise=0.015, dropout=0.15)
-    offline = analyze_detections(dets, noclust)
+    offline = analyze_detections(dets)
     total_span = max(d.t for d in dets) - min(d.t for d in dets)
     assert total_span > 20.0, "fixture must span well beyond window_s=8"
     assert len(offline.runs) == 3, "fixture must offline-segment into 3 runs"
@@ -344,7 +342,7 @@ def test_parity_very_long_stream():
     off_catches = sum(run.catches for run in offline.runs)
     assert off_catches == 23, "pinned offline baseline for this fixture; revisit if sim.py changes"
 
-    analyzer = RealtimeAnalyzer(RealtimeConfig(analyze=noclust))
+    analyzer = RealtimeAnalyzer()
     final = stream_dets(dets, analyzer)[-1]
 
     assert final.runs_completed == len(offline.runs), (
@@ -619,25 +617,25 @@ def test_left_edge_guard_prevents_phantom_catches_from_truncated_refit():
     (edge_pad=0.0) on the IDENTICAL detections, catches_total picks up 3
     phantom catches.
 
-    cluster_merge_dist=0.0: this test isolates the left-edge guard, not
-    Plan 5 task 2's per-frame duplicate-box clustering -- orthogonal
-    concerns (see test_extract.py::test_catch_accuracy_seed_sweep for the
-    general crossing-merge root cause clustering can introduce on clean
-    sim fixtures). Disabling it here keeps both pinned numbers below
-    exactly as measured pre-clustering."""
+    Plan 5 task 2: per-frame duplicate-box clustering briefly threatened
+    this test's pinned numbers (confidence-descending-sort-only merging let
+    a genuine crossing here slip through), fixed by strict-lower-confidence
+    absorption -- two real balls tied at confidence=1.0 never merge, so
+    clustering is a no-op on this fixture at the AnalyzeConfig default.
+    Verified directly; reverted the transient cluster_merge_dist=0.0
+    override on both configs below."""
     r = simulate_cascade(n_throws=24, fps=30.0, noise=0.01, dropout=0.1, seed=4)
-    noclust = AnalyzeConfig(cluster_merge_dist=0.0)
-    offline = analyze_detections(r.detections, noclust)
+    offline = analyze_detections(r.detections)
     off_catches = sum(run.catches for run in offline.runs)
     assert off_catches == 20, "pinned offline baseline for this fixture"
 
-    guarded = stream(r, RealtimeAnalyzer(RealtimeConfig(edge_pad=0.5, analyze=noclust)))[-1]
+    guarded = stream(r, RealtimeAnalyzer(RealtimeConfig(edge_pad=0.5)))[-1]
     assert guarded.catches_total == off_catches, (
         f"left-edge guard active: expected {off_catches} catches, "
         f"got {guarded.catches_total}"
     )
 
-    unguarded = stream(r, RealtimeAnalyzer(RealtimeConfig(edge_pad=0.0, analyze=noclust)))[-1]
+    unguarded = stream(r, RealtimeAnalyzer(RealtimeConfig(edge_pad=0.0)))[-1]
     assert unguarded.catches_total == off_catches + 3, (
         "this pins the CURRENT measured effect of disabling the guard "
         f"(edge_pad=0.0); got {unguarded.catches_total} -- if this changes, the "
@@ -695,7 +693,10 @@ def test_duplicate_injection_inherits_clustering_via_analyze_detections():
     measured the pre-fix offline inflation at ss3_id_086's 24 -> 57 catches)
     must leave the LIVE final catches_total within +/-1 of the clean live
     baseline, confirming the fix's one integration point covers the
-    realtime window path too, not just offline."""
+    realtime window path too, not just offline. Measured on this exact
+    fixture with the shipped strict-lower-confidence absorption +
+    merge_dist=0.023: clean=12, dirty=12 -- passing with margin, matching
+    the offline measurement in test_cluster.py."""
     import numpy as np
     r = simulate_cascade(n_throws=12, fps=30.0, seed=3)
     rng = np.random.default_rng(7)
