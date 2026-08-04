@@ -494,3 +494,42 @@ post-Tasks-1-3. `ss50505_id_093`'s live number (31/37 drops) is no longer
 comparable to its former self — it inherited the offline collapse from the
 retuned defaults rather than a live-specific regression.
 
+## PS: the addendum's "final" state was superseded (commit `1f36307`)
+
+The addendum above treats `cluster_merge_dist=0.0` (box-level clustering
+fully retired) as the shipped, final state — it was, at the time that
+addendum was written. It no longer is. A follow-on combo sweep plus a
+controller spec-metric adjudication (`.superpowers/sdd/task-2b-report.md`
+§§9–10; numbers below quoted from there and from
+`outputs/meschke-val/combo-0.012/`, not recomputed) changed the shipped
+default to **`cluster_merge_dist=0.012`**, with arc dedup unchanged at
+`arc_dedup_overlap_frac=0.75` / `arc_dedup_traj_tol=0.15`. That is the
+actual final operating point as of `1f36307`; `AnalyzeConfig`'s own
+docstring carries the full combo table and adjudication quote verbatim.
+
+**§6.1 (≤1 catch Δ), overall, across all four states measured on this
+video set:** 27.8% (pre-Plan-5) → 37.5% (post-Tasks-1-3) → 28.0%
+(post-Task-2b, `merge_dist=0.0`) → **39.1%** (post-combo,
+`merge_dist=0.012` — best of all four). Cascade-low family, same
+progression minus the pre-Plan-5 state (not broken out there): 46.7%
+(post-Tasks-1-3) → 31.2% (post-Task-2b) → **53.3%** (post-combo — more
+than doubles the post-Task-2b figure).
+
+**Cost:** total offline catches across all 22 videos moved to −55 vs. the
+1096-catch oracle (−5.0%) at `merge_dist=0.012`, vs. −71 (−6.5%) at
+`merge_dist=0.0` — i.e. the combo state is also *less* wrong in raw catch
+count, not just on the §6.1 binary metric. The one specific, named
+regression the controller accepted to get there: `ss531_id_989` (one of
+Task 2b's own regression-repair gates) moves from 18 catches (oracle 19,
+Δ1) at `merge_dist=0.0` to 16 catches (Δ3) at `merge_dist=0.012` — recorded
+verbatim in the adjudication as "the documented cost of id_989 landing at
+16 vs oracle 19 (Δ3, was Δ1)."
+
+**Overfitting caveat (controller-directed, recorded verbatim in
+task-2b-report.md §10):** "this constant is now tuned against the
+22-video suite itself (no held-out set at this granularity —
+generalization check deferred to the spec's never-trained-on holdout
+set)." Treat `0.012` as measured on its own training data, not validated
+out-of-sample — the same caveat now carried in `AnalyzeConfig`'s own
+docstring.
+
