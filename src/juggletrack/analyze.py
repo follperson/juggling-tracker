@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from pydantic import BaseModel, model_validator
 
-from juggletrack.arcs.extract import dedup_parallel_arcs, extract_arcs
+from juggletrack.arcs.extract import (
+    ARC_DEDUP_OVERLAP_FRAC,
+    ARC_DEDUP_TRAJ_TOL,
+    dedup_parallel_arcs,
+    extract_arcs,
+)
 from juggletrack.detect.cluster import cluster_detections
 from juggletrack.events import CATCH_EXTRAPOLATION_MARGIN
 from juggletrack.events.catches import derive_events
@@ -144,8 +149,8 @@ class AnalyzeConfig(BaseModel):
     # confirm no merge_dist recovers it without breaking ss531_id_989 or
     # ss50505_id_012 instead. BLOCKED on this one video; see
     # .superpowers/sdd/task-2b-report.md for the measured frontier.
-    arc_dedup_overlap_frac: float = 0.75
-    arc_dedup_traj_tol: float = 0.15
+    arc_dedup_overlap_frac: float = ARC_DEDUP_OVERLAP_FRAC
+    arc_dedup_traj_tol: float = ARC_DEDUP_TRAJ_TOL
 
     @model_validator(mode="after")
     def _validate_cluster_merge_dist(self) -> "AnalyzeConfig":

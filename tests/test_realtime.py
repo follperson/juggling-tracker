@@ -321,13 +321,16 @@ def test_debounce_absorbs_gap_in_no_overlap_cascade():
     evicted along with everything else in [gap0, gap0+gap_dur), liveness
     genuinely has nothing to hold onto for the gap's own ~2s duration.
 
-    gap_dur=1.9s sits in (freeze_s=1.5, freeze_s+RUN_CLOSE_DEBOUNCE_S+1.0)
-    as the task specified, and (verified by direct sweep, not assumed) in
-    the middle of a comfortably wide plateau (1.75-1.92s at this exact
-    gap0) where this fixture's premise holds -- not a knife-edge: gap_dur
-    below ~1.93s gives offline=1/on=1/off=2 consistently; above it the
-    picture changes (both on and off give 2, a separate live/offline
-    disagreement unrelated to the debounce, out of scope here).
+    gap_dur=1.9s sits in (freeze_s=1.5, freeze_s+RUN_CLOSE_DEBOUNCE_S=2.0) --
+    tightened (Plan 5 task 5) from the original task-3b band, which padded
+    an extra +1.0s of slack onto the upper bound; the guard now asserts
+    exactly the debounce's own mechanism condition instead. Also (verified
+    by direct sweep, not assumed) in the middle of a comfortably wide
+    plateau (1.75-1.92s at this exact gap0) where this fixture's premise
+    holds -- not a knife-edge: gap_dur below ~1.93s gives
+    offline=1/on=1/off=2 consistently; above it the picture changes (both
+    on and off give 2, a separate live/offline disagreement unrelated to
+    the debounce, out of scope here).
 
     Offline (single whole-video pass over the identical gapped detections)
     still recognizes ONE continuous run -- catches=7, throws=7, matching
@@ -355,9 +358,9 @@ def test_debounce_absorbs_gap_in_no_overlap_cascade():
     r = simulate_cascade(n_throws=7, fps=30.0, params=p, seed=7)
     cfg = RealtimeConfig()
     gap_dur = 1.9
-    assert cfg.freeze_s < gap_dur < cfg.freeze_s + RealtimeAnalyzer.RUN_CLOSE_DEBOUNCE_S + 1.0, (
-        "gap_dur must sit inside (freeze_s, freeze_s + debounce + 1.0) per "
-        "the task-3b flap-hunt brief"
+    assert cfg.freeze_s < gap_dur < cfg.freeze_s + RealtimeAnalyzer.RUN_CLOSE_DEBOUNCE_S, (
+        "gap_dur must sit inside (freeze_s, freeze_s + debounce) -- the "
+        "debounce's own mechanism condition"
     )
     gap0 = r.run_start + (r.run_end - r.run_start) * 0.4
     dets = [d for d in r.detections if not (gap0 <= d.t < gap0 + gap_dur)]

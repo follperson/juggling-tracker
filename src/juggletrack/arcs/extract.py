@@ -463,8 +463,19 @@ def _stitch_splits(dets: list[Detection], arcs: list[Arc], resid_tol: float) -> 
     return arcs
 
 
+# Arc-level parallel-arc dedup defaults (Plan 5 task 2b; adjudicated in
+# .superpowers/sdd/task-2b-report.md §§9-10). Single-sourced here as module
+# constants so AnalyzeConfig's own fields reference the same values instead
+# of duplicating the literals (previously both dedup_parallel_arcs's
+# keyword defaults and AnalyzeConfig carried independent copies of 0.75/
+# 0.15, which could silently drift apart).
+ARC_DEDUP_OVERLAP_FRAC = 0.75
+ARC_DEDUP_TRAJ_TOL = 0.15
+
+
 def dedup_parallel_arcs(
-    arcs: list[Arc], *, overlap_frac: float = 0.75, traj_tol: float = 0.15, samples: int = 5,
+    arcs: list[Arc], *, overlap_frac: float = ARC_DEDUP_OVERLAP_FRAC,
+    traj_tol: float = ARC_DEDUP_TRAJ_TOL, samples: int = 5,
 ) -> list[Arc]:
     """Collapse arcs that trace the same physical flight (Plan 5 task 2b).
 
@@ -532,6 +543,24 @@ def dedup_parallel_arcs(
 def _same_flight(
     a: Arc, b: Arc, overlap_frac: float, traj_tol: float, samples: int,
 ) -> bool:
+    """True if `a` and `b` are judged the same physical flight (the
+    per-pair predicate behind `dedup_parallel_arcs` -- see its own
+    docstring for the acceptance rule this implements).
+
+    Known limitation (columns patterns, not the async-siteswap set this
+    stage was tuned/gated against): the premise above -- that two arcs
+    which agree closely across their ENTIRE shared window must be one
+    flight seen twice, because two genuinely different balls only ever
+    agree briefly -- fails for synchronous columns. Two real balls thrown
+    in parallel columns, less than `traj_tol` apart and moving in lockstep
+    (~100% temporal overlap, near-identical trajectories throughout, not
+    just a brief crossing), would read exactly like a duplicate-box storm
+    to this check and incorrectly collapse to one arc. Out of scope here:
+    every video in the Meschke oracle validation set (the evidence base
+    for `dedup_parallel_arcs`'s `overlap_frac`/`traj_tol` defaults) is
+    async, so this gap is undiagnosed by that evidence, not closed by this
+    predicate.
+    """
     ov_start = max(a.t_start, b.t_start)
     ov_end = min(a.t_end, b.t_end)
     ov_dur = ov_end - ov_start

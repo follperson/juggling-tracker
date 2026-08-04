@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from juggletrack.events import FLOOR_MARGIN
 from juggletrack.events.catches import hand_line_crossings
 from juggletrack.events.drops import is_floor_bound
 from juggletrack.events.periodicity import periodicity_score
@@ -25,6 +26,12 @@ def segment_runs(
     gap_factor: float = 1.3,
     min_arcs: int = 3,
     default_period: float = 0.5,
+    # detect_drops already exposes this as a parameter; segment_runs used to
+    # hardcode is_floor_bound's own default instead, so the two truncation-
+    # relevant predicates (drop candidacy here, run-span truncation there)
+    # could silently diverge if floor_margin were ever tuned in one place
+    # and not the other. Threading it through keeps them in lockstep.
+    floor_margin: float = FLOOR_MARGIN,
 ) -> list[Run]:
     throw_arc_ids = {e.arc_id for e in throws}
     juggling_arcs = sorted((a for a in arcs if a.id in throw_arc_ids), key=lambda a: a.t_start)
@@ -76,7 +83,11 @@ def segment_runs(
         # throw was caught, or every uncaught arc was merely unwitnessed).
         ordered = sorted(group, key=lambda a: a.t_start)
         first_miss = next(
-            (a for a in ordered if a.id not in catch_arc_ids and is_floor_bound(a, hand_line)),
+            (
+                a for a in ordered
+                if a.id not in catch_arc_ids
+                and is_floor_bound(a, hand_line, floor_margin=floor_margin)
+            ),
             None,
         )
         end_t = arc_end(first_miss) if first_miss is not None else max(arc_end(a) for a in group)

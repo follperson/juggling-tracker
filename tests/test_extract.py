@@ -549,6 +549,48 @@ def test_dedup_parallel_arcs_keeps_sequential_non_overlapping_arcs():
     assert {o.id for o in out} == {0, 1}
 
 
+def test_dedup_parallel_arcs_keeps_both_at_shipped_crossing_floor():
+    """IMPORTANT (2b review): pin the shipped dedup operating point against
+    the measured field crossing floor, not just the mechanism-level margin
+    `test_dedup_parallel_arcs_keeps_both_crossing_arcs` above already checks
+    (that test's crossing pair measures mean separation 0.24 against
+    traj_tol=0.02 -- a 12x margin, useful for isolating the mechanism, but
+    nowhere near the real operating point).
+
+    The shipped default is `traj_tol=0.15`
+    (`juggletrack.arcs.extract.ARC_DEDUP_TRAJ_TOL`, wired through
+    `AnalyzeConfig.arc_dedup_traj_tol`). The measured field crossing floor
+    -- `ss531_id_989`'s genuine duplicate-vs-crossing arc pairs, the
+    tightest real crossing in the 22-video Meschke validation set -- is
+    mean separation 0.164 (`.superpowers/sdd/task-2b-report.md` §5/§9),
+    only ~9% above 0.15. Construct a synthetic crossing pair whose mean
+    per-sample `|dx|+|dy|` over the full overlap window is exactly that
+    0.164 floor (two lines through a shared midpoint, opposite slopes,
+    sampled at the default 5 points -- same shape as the mechanism test
+    above, retuned) and assert BOTH arcs survive `dedup_parallel_arcs` at
+    the actual `AnalyzeConfig` defaults (read from a real `AnalyzeConfig()`
+    instance, not hardcoded here, so this test tracks the shipped knobs if
+    they're ever retuned) -- so any future tol bump past the 0.164 floor
+    fails this test loudly instead of silently starting to swallow real
+    crossings.
+    """
+    from juggletrack.analyze import AnalyzeConfig
+
+    cfg = AnalyzeConfig()
+    # Two lines crossing at the overlap window's midpoint (t=1 of [0, 2]):
+    # mean |dx| over 5 evenly-spaced samples works out to 1.2*m for a
+    # crossing slope +/-m through cx=0.5 -+ m (verified: (0.164/1.2)*1.2 ==
+    # 0.164). y is identical on both arcs (ay=by=0), so mean |dx|+|dy| ==
+    # mean |dx| == 0.164 exactly.
+    m = 0.164 / 1.2
+    a = _mk_arc(0, 0.0, 2.0, bx=m, cx=0.5 - m, n_points=20, rmse=0.005)
+    b = _mk_arc(1, 0.0, 2.0, bx=-m, cx=0.5 + m, n_points=15, rmse=0.01)
+    out = dedup_parallel_arcs(
+        [a, b], overlap_frac=cfg.arc_dedup_overlap_frac, traj_tol=cfg.arc_dedup_traj_tol,
+    )
+    assert {o.id for o in out} == {0, 1}
+
+
 def test_dedup_parallel_arcs_validates_knobs():
     a = _mk_arc(0, 0.0, 1.0)
     with pytest.raises(ValueError, match="overlap_frac"):
