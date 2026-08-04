@@ -9,35 +9,45 @@ same space, minting parallel "ghost" arcs that inflate downstream catch counts
 (measured: ss3_id_086 went from an oracle-matched 24 catches to 57 with
 duplicate storms in the raw detections).
 
-Plan 5 task 2b update: AnalyzeConfig.cluster_merge_dist's shipped default
-moved from 0.023 (below) to 0.0 -- this per-frame box-level mechanism
-stays available (and still fires whenever merge_dist > 0) but is no longer
-relied on by default: real ball crossings almost always differ in
-confidence, so no merge_dist here can collapse duplicate-box storms
-without also risking real crossings, on some videos measurably regressing
-them (ss531_id_005/989, ss50505_id_012 -- see AnalyzeConfig's own comment
-and docs/superpowers/plans/2026-08-03-meschke-validation-findings.md).
-arcs/extract.py's dedup_parallel_arcs now carries that job at the ARC/
-trajectory level instead, where duplicate storms and genuine crossings are
-measurably separable. Not a strict improvement on every video, though: at
-least one out-of-scope high-pattern video (ss50505_id_093) depended on
-THIS mechanism's pre-extraction cleanup and regresses when merge_dist is
-0.0 (arc-level dedup cannot recover information this stage would have
-kept raw detections from losing in the first place) -- callers with
-similarly messy footage can still pass a nonzero cluster_merge_dist
-explicitly; see AnalyzeConfig's own comment for the measured trade-off.
-The rest of this docstring documents the mechanism and its ORIGINAL 0.023
-tuning history, preserved for context.
+SUPERSEDED (Plan 5 task 2b, then the combo-sweep adjudication, commit
+1f36307): AnalyzeConfig.cluster_merge_dist's shipped default took three
+values in sequence -- 0.023 (original tuning, documented below) -> 0.0
+(task 2b retired box-level clustering to a no-op, in favor of arcs/
+extract.py's dedup_parallel_arcs doing the duplicate-vs-crossing
+discrimination at the ARC/trajectory level instead) -> **0.012**, the
+CURRENT shipped value, restored by a controller-directed spec-§6.1
+adjudication after the full 22-video re-aggregation showed 0.0 cost the
+primary metric versus 0.023 (see AnalyzeConfig.cluster_merge_dist's own
+comment for the combo-sweep table and adjudication quote verbatim -- that
+comment is the authority on the current value, not this paragraph). So:
+this per-frame box-level mechanism IS relied on by default again, at a
+small radius, ALONGSIDE arc-level dedup (not instead of it) -- real ball
+crossings almost always differ in confidence, so this small a merge_dist
+collapses duplicate-box storms without reopening the real-crossing
+regressions a wider one caused (ss531_id_005/989, ss50505_id_012 -- see
+AnalyzeConfig's own comment and
+docs/superpowers/plans/2026-08-03-meschke-validation-findings.md). One
+cost carries through unresolved at 0.012 same as at 0.0: at least one
+out-of-scope high-pattern video (ss50505_id_093) depended on the OLD
+0.023's pre-extraction cleanup specifically and neither 0.0 nor 0.012
+recovers it (arc-level dedup cannot repair points that never got merged
+before extraction ran) -- callers with similarly messy footage can still
+pass a larger cluster_merge_dist explicitly; see AnalyzeConfig's own
+comment for the measured trade-off. The rest of this docstring documents
+the mechanism and its ORIGINAL 0.023 tuning history, preserved for
+context.
 
-Default justification (merge_dist, see AnalyzeConfig.cluster_merge_dist =
-0.023): measured duplicate offsets on real footage are 0.01-0.03 in
-normalized units on w~=0.065 boxes (ss3_id_086 frame 194). Distinct cascade
-balls approach closer than that only in brief crossing instants; losing one
-detection point per ball during those instants used to be "absorbed by
-extract_arcs' EM assigner" -- see the strict-lower-confidence paragraph below
-for why that framing was wrong and crossings must not merge at all, and
-AnalyzeConfig.cluster_merge_dist's own comment for why 0.023 (not the
-originally-measured 0.03) is the shipped value.
+Default justification (merge_dist, see AnalyzeConfig.cluster_merge_dist,
+0.023 in this paragraph's ORIGINAL tuning history -- superseded, see
+above, by 0.012): measured duplicate offsets on real footage are 0.01-0.03
+in normalized units on w~=0.065 boxes (ss3_id_086 frame 194). Distinct
+cascade balls approach closer than that only in brief crossing instants;
+losing one detection point per ball during those instants used to be
+"absorbed by extract_arcs' EM assigner" -- see the strict-lower-confidence
+paragraph below for why that framing was wrong and crossings must not
+merge at all, and AnalyzeConfig.cluster_merge_dist's own comment for why
+0.023 (not the originally-measured 0.03) was the shipped value THEN, and
+for why the shipped value is 0.012 NOW.
 
 Strict-lower-confidence absorption: a detection may only be absorbed into a
 cluster whose anchor confidence is STRICTLY GREATER than its own -- two
@@ -71,8 +81,14 @@ test: 0.03 costs -2 catches (a genuine under-count from this
 cross-contamination, distinct from the crossing-merge bug strict inequality
 already fixes); sweeping 0.005-0.03 found 0.023 as the value where the sim
 integration test lands at its best measured margin (dirty exactly equals
-clean) while every field spot-check target still holds (see
-docs/superpowers/sdd/task-2-report.md's addendum for the full sweep table).
+clean) while every field spot-check target still holds -- the value and its
+selection rationale are captured in full above; the per-value sweep table
+itself lives only in the untracked local file `.superpowers/sdd/
+task-2-report.md`'s addendum (not `docs/superpowers/sdd/...` -- that path
+never existed -- and not committed to the repo, so it is not resolvable
+from a fresh clone; the committed record for this era of tuning is this
+docstring plus `docs/superpowers/plans/2026-08-03-meschke-validation-
+findings.md`).
 """
 from __future__ import annotations
 
@@ -101,11 +117,31 @@ def cluster_detections(dets: list[Detection], *, merge_dist: float) -> list[Dete
     cluster's output detection takes the confidence-weighted mean of its
     members' x/y/w/h, ``confidence`` = the max confidence among members, and
     ``frame_idx``/``t`` preserved from the frame (all members share them).
+
+    Raises ``ValueError`` if any detection has a non-finite (NaN/inf)
+    confidence: ``NaN >= x`` is False for every ``x``, so a NaN-confidence
+    detection would silently pass the strict-lower-confidence guard above
+    (merging into any anchor within ``merge_dist`` despite never being
+    strictly lower) and would make the confidence-descending sort key
+    undefined -- both breaking the "pure and order-independent per frame"
+    contract this docstring promises. Real detectors never emit NaN/inf;
+    this only guards against malformed saved/replayed detection streams
+    (e.g. the ``--detections`` JSONL replay path), which should fail loudly
+    rather than silently corrupt the merge rule.
     """
     if merge_dist < 0.0:
         raise ValueError("merge_dist must be >= 0")
     if merge_dist == 0.0:
         return list(dets)
+    for d in dets:
+        if not math.isfinite(d.confidence):
+            raise ValueError(
+                f"non-finite confidence {d.confidence!r} at frame_idx="
+                f"{d.frame_idx} (t={d.t}): cluster_detections requires "
+                "finite confidences -- NaN/inf breaks both the strict-"
+                "lower-confidence absorption rule and the confidence-"
+                "descending sort key"
+            )
 
     by_frame: dict[int, list[Detection]] = {}
     for d in dets:

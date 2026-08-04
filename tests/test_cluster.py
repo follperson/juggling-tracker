@@ -36,6 +36,29 @@ def test_negative_merge_dist_raises():
         cluster_detections(dets, merge_dist=-0.01)
 
 
+def test_nan_confidence_raises_instead_of_silently_corrupting_merge():
+    """A NaN confidence makes every ``>=`` comparison False, so the strict-
+    lower-confidence guard (cluster.py's `d.confidence >= aconf: continue`)
+    would vacuously pass and the NaN detection would merge into any nearby
+    anchor despite never being strictly lower -- and the confidence-
+    descending sort key would be undefined, breaking order-independence.
+    Reproduced pre-fix: [conf=0.30, conf=NaN 0.002 away] merges to 1 cluster
+    with confidence 0.3 in one input order and 1 cluster with confidence NaN
+    in the reversed order -- same input set, different output. Real
+    detectors never emit NaN; this guards malformed replayed/saved
+    detection streams (e.g. `--detections` JSONL) so they fail loudly
+    instead of silently corrupting the merge rule."""
+    import math
+    import pytest
+    dets = [_d(0.360, 0.770, 0.30), _d(0.362, 0.771, float("nan"))]
+    with pytest.raises(ValueError, match="non-finite confidence"):
+        cluster_detections(dets, merge_dist=0.03)
+    # inf is equally non-finite and must be rejected the same way.
+    dets_inf = [_d(0.360, 0.770, 0.30), _d(0.362, 0.771, math.inf)]
+    with pytest.raises(ValueError, match="non-finite confidence"):
+        cluster_detections(dets_inf, merge_dist=0.03)
+
+
 def test_tied_confidence_sort_is_deterministic():
     """Three chained detections all at same confidence=0.30, spaced so
     A-B and B-C are within merge_dist but A-C is not. Clustering must

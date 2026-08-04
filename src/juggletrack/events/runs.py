@@ -93,11 +93,13 @@ def segment_runs(
         end_t = arc_end(first_miss) if first_miss is not None else max(arc_end(a) for a in group)
         p = float(np.median(np.diff(run_throws))) if len(run_throws) >= 3 else None
         # Score periodicity over the arcs' OWN span (min t_start .. max
-        # arc-end), not [start_t, end_t]: end_t truncates at the first
-        # missed catch, which can be an extraction miss on an otherwise
-        # continuous run, not a real drop -- scoring that truncated sliver
-        # makes quality garbage (measured: a real run scored 0.004 there vs
-        # 0.351 over its own arc span). Lag band is adaptive to the run's
+        # arc-end), not [start_t, end_t]: end_t now truncates only at the
+        # first FLOOR-BOUND miss (see is_floor_bound above), which can land
+        # mid-group while the pattern continued -- throws the juggler made
+        # before noticing the drop are still in this group but fall after
+        # end_t -- scoring that truncated sliver makes quality garbage
+        # (measured: a real run scored 0.004 there vs 0.351 over its own arc
+        # span). Lag band is adaptive to the run's
         # own period when known -- [max(0.1, 0.5p), 1.5p] -- because a fixed
         # band tuned to one framing can sit wholly outside another framing's
         # true period (Meschke ground truth: period 1.19-2.89s, outside the

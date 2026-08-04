@@ -463,12 +463,16 @@ def _stitch_splits(dets: list[Detection], arcs: list[Arc], resid_tol: float) -> 
     return arcs
 
 
-# Arc-level parallel-arc dedup defaults (Plan 5 task 2b; adjudicated in
-# .superpowers/sdd/task-2b-report.md §§9-10). Single-sourced here as module
-# constants so AnalyzeConfig's own fields reference the same values instead
-# of duplicating the literals (previously both dedup_parallel_arcs's
-# keyword defaults and AnalyzeConfig carried independent copies of 0.75/
-# 0.15, which could silently drift apart).
+# Arc-level parallel-arc dedup defaults (Plan 5 task 2b; full adjudication
+# and combo-sweep history recorded verbatim in AnalyzeConfig's own comment
+# above the arc_dedup_* fields, and in the committed findings doc
+# docs/superpowers/plans/2026-08-03-meschke-validation-findings.md.
+# .superpowers/sdd/task-2b-report.md §§9-10 has additional per-round detail
+# but is an untracked local file, not resolvable from a fresh clone).
+# Single-sourced here as module constants so AnalyzeConfig's own fields
+# reference the same values instead of duplicating the literals (previously
+# both dedup_parallel_arcs's keyword defaults and AnalyzeConfig carried
+# independent copies of 0.75/0.15, which could silently drift apart).
 ARC_DEDUP_OVERLAP_FRAC = 0.75
 ARC_DEDUP_TRAJ_TOL = 0.15
 

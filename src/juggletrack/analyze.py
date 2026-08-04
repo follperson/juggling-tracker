@@ -107,9 +107,11 @@ class AnalyzeConfig(BaseModel):
     # clustering's PRE-extraction cleanup at the OLD 0.023 -- 0.012 is
     # still far short of that (raw detection stream is messy enough, 135
     # post-extraction arcs, that a small merge_dist and arc-level dedup
-    # together do not recover 0.023's 38 catches, oracle 42). See
-    # .superpowers/sdd/task-2b-report.md §§3,8,9,10 for the full sweep,
-    # trade-off measurements, and adjudication history.
+    # together do not recover 0.023's 38 catches, oracle 42). The sweep
+    # table and adjudication quote above are the committed record of this
+    # history; see .superpowers/sdd/task-2b-report.md §§3,8,9,10 (untracked
+    # local file -- not resolvable from a fresh clone) only for additional
+    # per-round trade-off detail not already inlined here.
     cluster_merge_dist: float = 0.012
     # Arc-level parallel-arc dedup (Plan 5 task 2b, arcs/extract.py's
     # dedup_parallel_arcs): applied AFTER extract_arcs, BEFORE the
@@ -124,22 +126,33 @@ class AnalyzeConfig(BaseModel):
     # traj_tol=0.15, overlap_frac=0.75 (both widened from an initial
     # 0.02/0.5 guess): the field-video evidence alone (ss3_id_086/
     # ss441_id_089's duplicate pairs top out at mean-diff ~0.097;
-    # ss531_id_989's genuine crossing floor is 0.164) suggested traj_tol
-    # could go as high as ~0.10-0.16 with overlap_frac=0.5. That FAILED the
-    # full test suite: two existing sim fixtures (test_low_gravity_framing_
-    # recovers_events's low-g cascade, whose alternating-hand throws
-    # overlap and trace mean-diff as low as 0.093 at overlap_frac=0.5; and
+    # ss531_id_989's genuine crossing floor is 0.164 -- the SMALLEST
+    # genuine-crossing pair measured, from a single video; not a population
+    # floor, and the base rate of tighter real crossings elsewhere is
+    # unmeasured) suggested traj_tol could go as high as ~0.10-0.16 with
+    # overlap_frac=0.5. That FAILED the full test suite: two existing sim
+    # fixtures (test_low_gravity_framing_recovers_events's low-g cascade,
+    # whose alternating-hand throws overlap and trace mean-diff as low as
+    # 0.093 at overlap_frac=0.5; and
     # test_left_edge_guard_prevents_phantom_catches_from_truncated_refit's
     # noisy fixture, mean-diff 0.029 at overlap_frac=0.70) are genuinely
     # DIFFERENT arcs that a traj_tol wide enough for the field videos would
     # incorrectly collapse. Raising overlap_frac to 0.75 excludes both
     # conflicting sim pairs outright (their own overlap_frac, 0.59 and 0.70,
     # sits below the new threshold) regardless of traj_tol, which reopens
-    # room to raise traj_tol to 0.15 -- verified safe up to 0.18 (0.15 keeps
-    # a margin) against the full suite, and still collapses the bulk of
-    # ss3_id_086/ss441_id_089's duplicate pairs (most of which sit above
-    # 0.75 overlap_frac; see .superpowers/sdd/task-2b-report.md for the
-    # measured pair distributions on both sides of this trade-off).
+    # room to raise traj_tol to 0.15 -- verified safe up to 0.18 against the
+    # full test suite, but 0.18 would exceed the measured 0.164 field
+    # crossing floor above, so 0.15 keeps a (thin, n=1-measurement) margin
+    # over it rather than being a suite-safe value with headroom to spare;
+    # do not raise traj_tol toward 0.18 without re-measuring crossing floors
+    # on more footage. 0.15 still collapses the bulk of ss3_id_086/
+    # ss441_id_089's duplicate pairs (most of which sit above 0.75
+    # overlap_frac; see .superpowers/sdd/task-2b-report.md, an untracked
+    # local file, for the measured pair distributions on both sides of this
+    # trade-off -- not resolvable from a fresh clone, but the governing
+    # values are inlined above and in test_extract.py's
+    # test_dedup_parallel_arcs_keeps_both_at_shipped_crossing_floor, which
+    # pins this exact floor against live AnalyzeConfig defaults).
     #
     # ss3_id_110 is a documented, unresolved exception: its own duplicate-
     # storm arc pairs measure mean-diff >=0.23 (ABOVE ss531_id_989's
@@ -147,8 +160,12 @@ class AnalyzeConfig(BaseModel):
     # without also unsafely collapsing real crossings elsewhere -- and
     # exhaustive merge_dist sweeps (0.001 and 0.0005 steps, 0.000-0.023)
     # confirm no merge_dist recovers it without breaking ss531_id_989 or
-    # ss50505_id_012 instead. BLOCKED on this one video; see
-    # .superpowers/sdd/task-2b-report.md for the measured frontier.
+    # ss50505_id_012 instead. BLOCKED on this one video; the committed
+    # findings doc's "ss3_id_110 -- structural frontier" section
+    # (docs/superpowers/plans/2026-08-03-meschke-validation-findings.md)
+    # carries this same conclusion. .superpowers/sdd/task-2b-report.md §5
+    # has the full per-sweep measurements but is an untracked local file,
+    # not resolvable from a fresh clone.
     arc_dedup_overlap_frac: float = ARC_DEDUP_OVERLAP_FRAC
     arc_dedup_traj_tol: float = ARC_DEDUP_TRAJ_TOL
 
@@ -251,6 +268,7 @@ def analyze_detections(
     if not dets:
         return SessionResult()
 
+    n_raw = len(dets)
     dets = cluster_detections(dets, merge_dist=cfg.cluster_merge_dist)
 
     arcs = extract_arcs(
@@ -265,5 +283,11 @@ def analyze_detections(
     )
     t_last = max(d.t for d in dets)
     result = _events_from_arcs(arcs, t_last, cfg)
-    result.meta["n_detections"] = len(dets)
+    # n_detections is the RAW input count (pre-clustering), matching
+    # oracle_events' meaning of the same key (meschke_import.py) so the two
+    # are comparable; n_detections_clustered is the post-clustering count,
+    # the merge-rate diagnostic n_detections alone used to conflate with the
+    # raw count when this stage briefly rebound `dets` before recording it.
+    result.meta["n_detections"] = n_raw
+    result.meta["n_detections_clustered"] = len(dets)
     return result
