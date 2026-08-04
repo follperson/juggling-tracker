@@ -276,3 +276,42 @@ def test_unwitnessed_miss_does_not_truncate_run_span():
   IoU gates fail.
 - The known under-count mechanisms (detector recall on ss3_id_016; high-pattern
   fragmentation) are explicitly out of scope — Task 4 documents rather than fixes.
+
+## Amendment (final review): post-BLOCKED continuation
+
+Task 4 (above) triggered this plan's own escalation rule (Step 3: "if the
+design can't reach it, STOP and report BLOCKED with per-video
+attribution") — recorded honestly in commit `2ca9056` and
+`docs/superpowers/plans/2026-08-03-meschke-validation-findings.md` §3 (4 of
+9 gates failing at the time). Work continued past that STOP under
+controller dispatch rather than closing here: a new mechanism, arc-level
+parallel-trajectory dedup (`dedup_parallel_arcs`, commit `9dc1fc5`, two new
+`AnalyzeConfig` knobs `arc_dedup_overlap_frac`/`arc_dedup_traj_tol`),
+followed by a combo-sweep spec-metric adjudication that changed the
+shipped `cluster_merge_dist` from this plan's own `0.023` (Task 2, not
+revisited above) to `0.012` (commit `1f36307`), and a final fix wave
+(commit `a41dadf` and this wave's own commits). This is in tension with
+this doc's own "No new subsystems" architecture note (line 7) — a
+deliberate, controller-authorized exception to keep the STOP from being
+the end of the story, not an oversight.
+
+The dispatch/authorization record itself lives only in the untracked
+`.superpowers/sdd/progress.md`, which this amendment cannot make
+resolvable from a fresh clone; what IS committed and resolvable is the
+*content* of every decision made along the way:
+- the BLOCKED report and its per-video attribution:
+  `2026-08-03-meschke-validation-findings.md` §3;
+- the Task 2b addendum (results, including the honestly-reported
+  regression on the broader spec-§6 aggregate) and its own re-BLOCKED
+  report: same doc, "Addendum: after parallel-arc dedup (Task 2b)";
+- the combo-sweep adjudication that set the final default, quoted
+  verbatim in `src/juggletrack/analyze.py`'s `AnalyzeConfig.cluster_merge_
+  dist` comment, and restated in the findings doc's "PS" and "PS-2"
+  sections (live validation, final per-video table, final gate verdicts);
+- the overfitting/margin caveats governing how much confidence to place
+  in that adjudication (same PS section, and the AnalyzeConfig comment).
+
+Net: the committed record for *why* this plan's scope grew past its own
+STOP is this paragraph; the committed record for *what* was decided and
+*how well it holds up* is the findings doc and `AnalyzeConfig`'s docstring
+in full, both resolvable without the untracked process files.

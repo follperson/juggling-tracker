@@ -50,20 +50,26 @@ run (the pre-fix batch had 2 errors: `ss531_id_988/989`, the parser crash).
 | ss51_id_163 | 1/58/0 | 1/41/0 | 1/51/0 | 1/50/0 | 2/58/0 |
 | ss531_id_005 | 1/63/0 | 1/40/0 | **2/16/0** | 1/64/0 | 2/81/1 |
 | ss531_id_014 | 1/29/0 | 1/25/0 | 1/29/0 | 2/36/2 | 1/41/0 |
-| ss531_id_988 | 1/21/0 | n/a (oracle crash) | 1/17/0 | n/a | 1/26/0 |
-| ss531_id_989 | 1/19/0 | n/a (oracle crash) | **2/15/0** | n/a | 1/37/0 |
+| ss531_id_988 | 1/21/0 | 1/22/0 [†] | 1/17/0 | n/a | 1/26/0 |
+| ss531_id_989 | 1/19/0 | 1/18/0 [†] | **2/15/0** | n/a | 1/37/0 |
 | ss60_id_151 | 1/26/0 | 1/29/0 | 1/29/0 | 1/32/0 | 2/33/0 |
 | ss8040_id_070 | 1/33/0 | 1/36/0 | 1/33/0 | 1/23/0 | 1/26/1 |
 | ss90501_id_145 | 1/5/0 | 1/11/0 | 1/9/0 | 3/17/1 | 1/23/4 |
 
 Bold = exact oracle match. `n/a` = pre-fix `oracle_events` crashed on float
-coordinates (`ss531_id_988/989`); their offline/live BEFORE numbers are not
-"missing data", they never ran the live step either — `run_validation.py`
-raised on step 2 before reaching step 3.
+coordinates (`ss531_id_988/989`) before `run_validation.py` reached the live
+step, so their live BEFORE numbers genuinely do not exist. `[†]` = **offline**
+BEFORE recovered (final review) from `outputs/meschke-val/ss531_id_988/
+989/analysis.json`: the offline `analyze` step ran and completed BEFORE the
+oracle-parse crash (step 2), so these two numbers do exist despite the
+row's live-step gap — an earlier draft of this table left them as `n/a`
+too, which undercounted `offline BEFORE`'s total by 40 catches (see below).
 
 **Totals (22 videos, oracle uniformly recomputed with the parser fix):**
-oracle 1096 catches; offline BEFORE 1128 (**+2.9%**); offline AFTER 1030
-(**−6.0%**); live BEFORE 1334 (n=20, 988/989 excluded); live AFTER 1365 (n=22).
+oracle 1096 catches; offline BEFORE 1128 (**+2.9%**, includes the two `[†]`
+recovered values: 1088 over the 20 non-crashed rows + 22 + 18); offline
+AFTER 1030 (**−6.0%**); live BEFORE 1334 (n=20, 988/989 excluded); live
+AFTER 1365 (n=22).
 
 The *officially recorded* pre-fix headline (20/22 scorable videos, exactly as
 measured in the hardening plan's evidence section) was §6.1 **27.8%**, §6.2
@@ -85,8 +91,11 @@ IoU, target ≥0.9 on ≥80% of runs.
 Both headline metrics improved substantially (§6.1 +9.7pp, §6.2 +27.8pp), but
 neither clears the Step-3 gate thresholds — see §3. The IoU story is more
 positive than the catch-count story: run-span truncation was IoU's dominant
-error source (ss42_id_011 alone went from IoU≈0.05, `-0.5..38.7s` vs the real
-`0..200s`, to IoU=1.000), so §6.2 moved the most. §6.1 moved less because the
+error source (ss42_id_011 alone went from IoU≈0.19 [corrected, final review
+— an earlier draft of this section said ≈0.05, which is arithmetically
+impossible for a 39s-intersection/~202s-union span and contradicted §5's own
+0.19 figure], `-0.5..38.7s` vs the real `-0.5..201.3s`, to IoU=1.000), so §6.2
+moved the most. §6.1 moved less because the
 duplicate-box clustering fix fully resolved 3 of its worst offenders
 (`ss3_id_086`, `ss441_id_089`, partially `ss423_id_088`) while a comparable
 number of *new or residual* catch-count misses remain (§5, §6).
@@ -327,6 +336,12 @@ suite `262 passed, 3 deselected`; `ruff check src tests`: `All checks passed!`
 — confirmed on the worktree HEAD (`2ff89d4`) both before and after this
 validation run.
 
+**PS note (final review):** this count is pinned to `2ff89d4` and is stale
+for the branch's final HEAD — commits `9dc1fc5`, `1f36307`, and `a41dadf`
+added tests after this section was written. Suite at final HEAD
+(`9777566` plus this wave's own commits): **272 passed, 3 deselected, 0
+warnings**; `ruff check src tests`: `All checks passed!`.
+
 ## Concerns
 
 - Four Step-3 gates fail (§3): `ss3_id_110` (residual duplicate-cluster
@@ -508,12 +523,59 @@ actual final operating point as of `1f36307`; `AnalyzeConfig`'s own
 docstring carries the full combo table and adjudication quote verbatim.
 
 **§6.1 (≤1 catch Δ), overall, across all four states measured on this
-video set:** 27.8% (pre-Plan-5) → 37.5% (post-Tasks-1-3) → 28.0%
-(post-Task-2b, `merge_dist=0.0`) → **39.1%** (post-combo,
-`merge_dist=0.012` — best of all four). Cascade-low family, same
+video set (k/n matched-run counts added, final review):** 27.8% (5/18,
+pre-Plan-5) → 37.5% (9/24, post-Tasks-1-3) → 28.0% (7/25, post-Task-2b,
+`merge_dist=0.0`) → **39.1% (9/23)** (post-combo, `merge_dist=0.012` —
+best of all four, on the smallest matched-run denominator of the three
+22-video states — see the margin caveat below). Cascade-low family, same
 progression minus the pre-Plan-5 state (not broken out there): 46.7%
-(post-Tasks-1-3) → 31.2% (post-Task-2b) → **53.3%** (post-combo — more
-than doubles the post-Task-2b figure).
+(7/15, post-Tasks-1-3) → 31.2% (5/16, post-Task-2b) → **53.3% (8/15)**
+(post-combo — a **1.7x** improvement over the post-Task-2b figure, not
+"more than doubles" as an earlier draft of this PS stated: 53.3/31.2 =
+1.71, and doubling would require ≥62.4%; in run counts it is a 3-run gain,
+8/15 vs 5/16).
+
+**Fixed-denominator cross-check (final review):** the progression above
+uses each state's own matched-run count as the denominator, and those
+counts differ (23-26) partly because two oracle runs
+(`ss50505_id_012`/`ss50505_id_093` — see the ground-truth-artifact note
+below) have internally truncated spans, so whether they enter the
+matched-run sample at all depends on the *prediction's* span too, not
+just its correctness — a video can silently leave the denominator by
+getting a near-perfect result whose span also happens to be short.
+Restated on a fixed 26-oracle-run denominator (every oracle run counted;
+an unmatched run scores as a failure) across the four merge_dist-sweep
+states — the one apples-to-apples grid, since pre-Plan-5 and
+post-Tasks-1-3 differ from the sweep in more than this one knob:
+
+| `merge_dist` | matched-run §6.1 | fixed-denominator §6.1 (26 oracle runs) |
+|---|---|---|
+| 0.0 (post-Task-2b) | 28.0% (7/25) | 26.9% (7/26) |
+| 0.010 | 26.9% (7/26) | 26.9% (7/26) |
+| **0.012 (shipped)** | **39.1% (9/23)** | **34.6% (9/26)** |
+| 0.015 | 29.2% (7/24) | 26.9% (7/26) |
+
+0.012 still wins under either convention, but the margin over its
+neighbors shrinks from up to +12.2pp (matched-run) to +7.7pp
+(fixed-denominator) — 2 net passing runs (9 vs 7, both out of 26), not an
+11-percentage-point gap on shifting bases.
+
+**Ground-truth-artifact flag (final review, for future Meschke work):**
+`oracle_events` pushes GT trajectories through the same
+`_events_from_arcs`/`segment_runs` pipeline predictions use, and for two
+videos this yields internally-inconsistent oracle run spans:
+`ss50505_id_012`'s oracle run is `-1.0..3.3s` holding **157 catches**
+(157 catches in a 4.3-second span is physically impossible for a 3-ball-
+equivalent pattern), and `ss50505_id_093`'s oracle run is `2.1..5.2s`
+holding 42 catches (similarly inconsistent). Both are almost certainly
+`is_floor_bound` firing on a GT descent the same way it correctly fires on
+predicted descents — the truncation mechanism is doing its documented job,
+but on ground truth this produces a run whose reported *span* no longer
+matches its own *catch count*, which is exactly the failure mode §6.2's
+IoU metric (and, via the matched-run gate above, §6.1's denominator
+membership) is supposed to measure against. Flagged here as a ground-
+truth data-quality issue for future Meschke-set work, not fixed in this
+wave (out of scope — no source/test files changed for this correction).
 
 **Cost:** total offline catches across all 22 videos moved to −55 vs. the
 1096-catch oracle (−5.0%) at `merge_dist=0.012`, vs. −71 (−6.5%) at
@@ -532,6 +594,25 @@ generalization check deferred to the spec's never-trained-on holdout
 set)." Treat `0.012` as measured on its own training data, not validated
 out-of-sample — the same caveat now carried in `AnalyzeConfig`'s own
 docstring.
+
+**Margin caveat (final review, quantified):** the matched-run flip lists
+behind the numbers above are small: `0.012` vs `0.0` is +4/−2 individual
+run flips (McNemar exact p≈0.69), vs `0.010` is +3/−1 (p≈0.63), vs `0.015`
+is +3/−1 — all statistically indistinguishable at this sample size, and
+overall §6.1 is non-monotonic across the `{0.010, 0.012, 0.015}` sweep
+(26.9%→39.1%→29.2%), an isolated spike at the adopted value rather than a
+monotonic trend. With on the order of 90-150 configuration evaluations
+made against subsets of this same 22-video suite across Plan 5's tuning
+history, the argmax's 39.1% carries winner's-curse bias that plausibly
+exceeds its 2-net-run margin over its neighbors. This does not reverse
+the decision (0.012 remains the best-tested point, and two more-robust
+legs still favor it: the total-catch-delta cost figure below, and
+cascade-low's OWN fixed-denominator number, computed the same way as the
+overall table above on its 16-oracle-run family total — 43.8%
+(post-Tasks-1-3) → 31.2% (post-Task-2b) → **50.0%** (post-combo), a
+margin that holds up much better than overall §6.1's did), but the reader
+should treat "39.1%, best of all four" as "best tested," not "robustly
+optimal."
 
 ## PS-2 (final review): live validation at the shipped operating point + final per-video record
 

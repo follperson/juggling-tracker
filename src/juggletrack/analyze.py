@@ -95,12 +95,34 @@ class AnalyzeConfig(BaseModel):
     # 39.1% (best of all four states) at the documented cost of id_989
     # landing at 16 vs oracle 19 (delta 3, was delta 1)." Shipped value is
     # therefore 0.012, not 0.0 or 0.023.
+    # [Editorial notes, final review, not part of the verbatim quote above:
+    # (1) the plan's clean-video list actually names SIX videos
+    # (id_013, id_010, id_011, id_079, id_987, id_012 -- id_010/011 are two
+    # entries, not one) and the eval script's "clean(5)" checker above only
+    # tested five of them (ss50505_id_012 is verified separately by its own
+    # 153-161 gate in the same script); at 0.012 id_012 lands at 156 vs
+    # oracle 157 (|delta|=1), so the true result is 6/6, stronger than the
+    # quoted 5/5, not weaker. (2) "more than doubles" is 53.3%/31.2% =
+    # 1.7x, not >=2x -- doubling would need >=62.4%; in matched-run counts
+    # it is 8/15 vs 5/16. Both corrections leave the adjudication's
+    # conclusion unchanged; see the findings doc PS for the full
+    # k/n-annotated progression.]
     #
     # OVERFITTING CAVEAT (controller-directed, record verbatim): this
     # constant is now tuned against the 22-video suite itself -- there is
     # no held-out set at this granularity. Generalization is deferred to
     # the spec's never-trained-on holdout set; treat 0.012 as measured on
     # its own training data, not as validated out-of-sample.
+    #
+    # MARGIN CAVEAT (final review, quantified): the 0.012-vs-neighbor
+    # margins on this suite are 2-4 individual matched-run flips (0.012 vs
+    # 0.0: +4/-2, McNemar exact p~=0.69; vs 0.010: +3/-1, p~=0.63; vs
+    # 0.015: +3/-1) out of 23-26 matched runs -- statistically
+    # indistinguishable, and overall §6.1 is non-monotonic across
+    # {0.010, 0.012, 0.015} (26.9%->39.1%->29.2%), an isolated spike at the
+    # adopted value rather than a monotonic trend. Read 0.012 as the best
+    # TESTED point on this suite, not a robust optimum, on top of (not
+    # instead of) the overfitting caveat above.
     #
     # KNOWN COST (measured, unchanged by this retune): ss50505_id_093
     # (high-pattern family, not a required gate) relied on box-level
