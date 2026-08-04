@@ -345,3 +345,152 @@ validation run.
 - The imgsz-1280 extension (§9) is a one-video, one-resolution data point;
   it establishes direction (over-segmentation and windowed-extraction
   over-count dominate once truncation is fixed) but is not a sweep.
+
+## Addendum: after parallel-arc dedup (Task 2b)
+
+**Status: exploratory measurement, not TDD** (consistent with the rest of
+this doc). Task 2b (`9dc1fc5`, `feat: parallel-arc dedup — trajectory-level
+duplicate removal protects real crossings`) retired box-level clustering to
+a no-op default (`cluster_merge_dist: 0.023 → 0.0`) and added arc-level
+trajectory dedup (`arc_dedup_overlap_frac=0.75`, `arc_dedup_traj_tol=0.15`)
+as the mechanism that discriminates real duplicate boxes from genuine ball
+crossings — see `.superpowers/sdd/task-2b-report.md` for the full tuning
+history (two failed rounds against the sim suite before landing on raising
+`overlap_frac` instead of capping `traj_tol`). This addendum re-runs the
+same saved-detection machinery (`outputs/meschke-val/rerun_validation_2b.py`
++ `rerun_aggregate_2b.py`) at this new HEAD, writing to
+`outputs/meschke-val/post-hardening-2b/`; the Tasks-1-3 artifacts in
+`post-hardening/` are untouched.
+
+### Final per-video table (`runs/catches/drops`)
+
+| video | oracle | offline (2b) | live (2b) |
+|---|---|---|---|
+| ss3_id_016 | 5/52/0 | 9/39/0 | 9/207/5 |
+| ss3_id_079 | 1/6/0 | 1/6/0 | 1/6/0 |
+| ss3_id_086 | 1/24/0 | 1/27/0 | 1/28/0 |
+| ss3_id_110 | 1/9/0 | 1/21/0 | 1/21/0 |
+| ss3_id_987 | 1/20/0 | 1/21/0 | 1/22/0 |
+| ss423_id_007 | 1/73/0 | 1/82/0 | 3/83/5 |
+| ss423_id_017 | 1/130/0 | 1/121/0 | 1/143/8 |
+| ss423_id_088 | 1/15/0 | 1/17/0 | 1/17/1 |
+| ss42_id_010 | 1/66/0 | 1/65/0 | 1/86/0 |
+| ss42_id_011 | 1/93/0 | 1/93/0 | 1/94/0 |
+| ss441_id_013 | 1/136/0 | 1/137/0 | 1/136/0 |
+| ss441_id_089 | 1/19/0 | 1/17/1 | 1/17/1 |
+| ss50505_id_012 | 1/157/0 | 1/155/0 | 1/148/2 |
+| ss50505_id_093 | 1/42/0 | **1/3/2** | 1/31/37 |
+| ss51_id_163 | 1/58/0 | 1/40/0 | 1/47/0 |
+| ss531_id_005 | 1/63/0 | 1/40/0 | 1/64/0 |
+| ss531_id_014 | 1/29/0 | 1/25/0 | 2/36/2 |
+| ss531_id_988 | 1/21/0 | 1/22/0 | 1/43/1 |
+| ss531_id_989 | 1/19/0 | 1/18/0 | 3/29/1 |
+| ss60_id_151 | 1/26/0 | 1/29/0 | 1/32/0 |
+| ss8040_id_070 | 1/33/0 | 1/36/0 | 1/23/0 |
+| ss90501_id_145 | 1/5/0 | 1/11/0 | 3/15/1 |
+
+### Spec §6 metrics — three states
+
+| state | §6.1 (≤1 catch Δ) | §6.2 (IoU ≥0.9) | matched runs | total offline catches (Δ vs oracle 1096) |
+|---|---|---|---|---|
+| pre-Plan-5 (official, 20/22 scorable) | 27.8% | 22.2% | 18 | 1088 on 1056-scope oracle (+3.0%) |
+| post-Tasks-1-3 (22/22) | 37.5% | 50.0% | 24 | 1030 (−6.0%) |
+| **post-Task-2b (22/22)** | **28.0%** | **48.0%** | 25 | **1025 (−6.5%)** |
+
+Cascade-low family (ss3/ss423/ss42/ss441), §6.1 only: 46.7% (post-1-3) →
+**31.2%** (post-2b, n=16). High-pattern family §6.1: 22.2% → 22.2%
+(unchanged); §6.2: 66.7% → 77.8% (improved).
+
+**This is not a uniform win.** Task 2b's own scope was 9 specific field
+gates (task-2b-report.md §4), and it hits 8/9 of those. But the broader
+spec-§6 aggregate across all 22 videos' matched runs is *worse* than the
+post-Tasks-1-3 state on both metrics, and worse than the pre-Plan-5 baseline
+on §6.1 specifically. Two things drive this, both measured directly by
+diffing the full per-match delta lists:
+1. **`ss50505_id_093` collapsed further** (§ below) — a single video
+   contributing a matched-run delta of 39, the largest in the set.
+2. **Several previously-exact/near-exact cascade videos drifted away from
+   zero** as a side effect of the retune, even while none of them are
+   Task 2b's own required gates: `ss3_id_086` delta 1→3 (loosened gate is
+   `≤30`; 27 still passes it), `ss531_id_014` delta 0→4, `ss441_id_089`
+   delta 0→2 (drops 0→1), `ss8040_id_070` delta 0→3. None individually
+   large, but the ≤1 binary threshold is unforgiving of small drift.
+
+Offsetting this, several previously badly-wrong videos improved
+substantially in absolute terms even though the binary metric doesn't
+credit it: `ss531_id_005` 52→23 catch-delta, `ss531_id_988`/`989` roughly
+4-10→1 each. The **clean-video constraint is now fully resolved**:
+`ss50505_id_012` (the post-Tasks-1-3 regression flagged in §6/§3 above) is
+back to Δ−2 (155 vs oracle 157), and all six originally-clean videos
+(`ss441_id_013`, `ss42_id_010/011`, `ss3_id_079/987`, `ss50505_id_012`) sit
+within ±2 again.
+
+### Step-3 gates, updated
+
+| gate | post-1-3 | post-2b | target | result |
+|---|---|---|---|---|
+| ss3_id_086 | 25 | 27 | 24±4 | PASS |
+| ss3_id_110 | 17 | **21** | 9±3 | **FAIL, worse** |
+| ss441_id_089 catches/drops | 19/0 | 17/1 | 19±5 & ≤2 | PASS |
+| ss423_id_088 | 18 | 17 | 15±5 | PASS |
+| ss42_id_011 IoU | 1.000 | 1.000 | ≥0.9 | PASS |
+| ss42_id_010 IoU | 1.000 | 1.000 | ≥0.9 | PASS |
+| Clean-video constraint | FAIL (id_012 Δ−6) | **PASS** (all six ±2) | ±2 | **RESOLVED** |
+| §6.1 ≥55% overall | 37.5% FAIL | 28.0% FAIL | ≥55% | FAIL, worse |
+| §6.1 ≥80% cascade-low | 46.7% FAIL | 31.2% FAIL | ≥80% | FAIL, worse |
+
+**6/9 PASS (up from 5/9)** — the clean-video constraint is fixed, but
+`ss3_id_110` moved further from its target (17→21) and both §6.1 fractions
+regressed in absolute terms even though neither newly passes nor newly
+fails relative to their gate thresholds.
+
+### ss3_id_110 — structural frontier (from task-2b-report.md §5)
+
+Confirmed by direct measurement, not just asserted: `ss3_id_110`'s own
+duplicate-storm arc pairs have mean positional separation **≥0.23**, which
+is *above* `ss531_id_989`'s genuine-crossing floor of 0.164. Any single
+global `merge_dist`/`traj_tol` that collapses `ss3_id_110`'s duplicates down
+to its ≤18 gate necessarily also collapses `ss531_id_989`'s real crossings
+(breaking it below 17) or pushes `ss50505_id_012` outside 153–161 — verified
+by two exhaustive sweeps (0.001 and 0.0005 step, 0.000–0.023). This is the
+same "larger, more variable duplicate offsets" residual flagged in
+`task-2-report.md` and the main body of this doc (§6) — now confirmed
+structural (no achievable single-knob value closes it) rather than merely
+untuned. Closing it needs a mechanism beyond both box-level clustering and
+arc-trajectory dedup: per-video/adaptive thresholding, or a discriminator
+richer than mean positional separation.
+
+### ss50505_id_093 — lost its accidental clustering benefit
+
+This high-pattern video (out of both Task 2's and Task 2b's gate scope) is
+the clearest illustration of §6/§7's "mixed, not uniform" finding, now
+resolved in the negative direction. Its improvement in the main body of this
+doc (drops 35→0, catches 6→38 vs oracle 42, §5) turns out to have depended on
+**box-level clustering's pre-extraction cleanup**, not the span-truncation
+fix credited there: its raw detections are messy enough (135 post-extraction
+arcs) that retiring `cluster_merge_dist` to 0.0 removes that cleanup, and
+arc-level dedup cannot recover the same result after the fact (dedup only
+ever discards one of two already-extracted, already-damaged arcs — it can't
+repair points that never got merged before extraction ran). Result: **3
+catches / 2 drops** (down from 38/0), the single worst matched-run delta in
+the 22-video set. Documented as a known collateral cost in
+`task-2b-report.md` §3/§8, not fixed there (reopening `cluster_merge_dist`
+would reopen the `ss531`/`ss50505_id_012` regressions Task 2b's gates are
+scored on) — flagged here for the same reason. Candidate future direction
+(per both reports): adaptive, per-video density-based `merge_dist` selection
+that runs box-clustering only where the raw detection stream needs it,
+instead of one global default serving both regimes.
+
+### Live envelope, updated
+
+The live/offline gap structure is essentially unchanged by Task 2b:
+`ss3_id_016` still dominates by an order of magnitude (offline 39, live 207,
+**+168** — the windowed-extraction global-statistics mechanism from §8 is
+untouched by either box- or arc-level dedup, both of which run upstream of
+the realtime/offline divergence). The next-largest deltas shuffle slightly
+(`ss42_id_010` +21, `ss531_id_988` +21, `ss423_id_017` +22, `ss531_id_989`
++11 across a new 3-way run split) but stay in the same rough band as
+post-Tasks-1-3. `ss50505_id_093`'s live number (31/37 drops) is no longer
+comparable to its former self — it inherited the offline collapse from the
+retuned defaults rather than a live-specific regression.
+
