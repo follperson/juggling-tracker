@@ -321,16 +321,18 @@ def test_debounce_absorbs_gap_in_no_overlap_cascade():
     evicted along with everything else in [gap0, gap0+gap_dur), liveness
     genuinely has nothing to hold onto for the gap's own ~2s duration.
 
-    gap_dur=1.9s sits in (freeze_s=1.5, freeze_s+RUN_CLOSE_DEBOUNCE_S=2.0) --
+    gap_dur=1.78s sits in (freeze_s=1.5, freeze_s+RUN_CLOSE_DEBOUNCE_S=2.0) --
     tightened (Plan 5 task 5) from the original task-3b band, which padded
     an extra +1.0s of slack onto the upper bound; the guard now asserts
     exactly the debounce's own mechanism condition instead. Also (verified
-    by direct sweep, not assumed) in the middle of a comfortably wide
-    plateau (1.75-1.92s at this exact gap0) where this fixture's premise
-    holds -- not a knife-edge: gap_dur below ~1.93s gives
-    offline=1/on=1/off=2 consistently; above it the picture changes (both
-    on and off give 2, a separate live/offline disagreement unrelated to
-    the debounce, out of scope here).
+    by direct 0.005-step sweep at this exact gap0, final review) in the
+    middle of the true plateau (1.605-1.930s at this exact gap0) where this
+    fixture's premise holds -- not a knife-edge: gap_dur from 1.605s up to
+    1.930s gives offline=1/on=1/off=2 consistently; at 1.935s `on` itself
+    flips to 2 (a separate live/offline disagreement unrelated to the
+    debounce, out of scope here). The prior 1.9s value sat only ~0.035s
+    below that cliff, at the plateau's top edge rather than its middle;
+    1.78s gains >=0.15s of margin on both sides.
 
     Offline (single whole-video pass over the identical gapped detections)
     still recognizes ONE continuous run -- catches=7, throws=7, matching
@@ -357,7 +359,7 @@ def test_debounce_absorbs_gap_in_no_overlap_cascade():
     )
     r = simulate_cascade(n_throws=7, fps=30.0, params=p, seed=7)
     cfg = RealtimeConfig()
-    gap_dur = 1.9
+    gap_dur = 1.78
     assert cfg.freeze_s < gap_dur < cfg.freeze_s + RealtimeAnalyzer.RUN_CLOSE_DEBOUNCE_S, (
         "gap_dur must sit inside (freeze_s, freeze_s + debounce) -- the "
         "debounce's own mechanism condition"
@@ -819,6 +821,7 @@ def test_finalize_clears_run_active_and_catches_current_run():
     assert final.catches_current_run == 0
 
 
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 def test_duplicate_injection_inherits_clustering_via_analyze_detections():
     """Plan 5 task 2: RealtimeAnalyzer has no clustering logic of its own --
     it inherits per-frame duplicate-box clustering entirely through the
@@ -841,7 +844,12 @@ def test_duplicate_injection_inherits_clustering_via_analyze_detections():
     box clustering alongside arc dedup (see AnalyzeConfig's own comment).
     Verified directly at the FINAL shipped default (merge_dist=0.012 + arc
     dedup): clean=12, dirty=12 -- exact match, matching the offline
-    measurement in test_cluster.py."""
+    measurement in test_cluster.py.
+
+    Final review: same RankWarning-suppression rationale as test_cluster.py's
+    twin of this fixture -- the jittered clone cloud legitimately poorly-
+    conditions np.polyfit on some draws; suppressed at the source, not
+    globally."""
     import numpy as np
     r = simulate_cascade(n_throws=12, fps=30.0, seed=3)
     rng = np.random.default_rng(7)
@@ -855,4 +863,7 @@ def test_duplicate_injection_inherits_clustering_via_analyze_detections():
             }))
     clean_final = stream_dets(r.detections, RealtimeAnalyzer())[-1]
     dirty_final = stream_dets(r.detections + clones, RealtimeAnalyzer())[-1]
+    assert clean_final.catches_total == 12, (
+        "pinned clean baseline for this fixture; revisit if sim.py changes"
+    )
     assert abs(dirty_final.catches_total - clean_final.catches_total) <= 1

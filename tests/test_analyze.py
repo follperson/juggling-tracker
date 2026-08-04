@@ -118,6 +118,26 @@ def test_cluster_merge_dist_rejects_negative():
     AnalyzeConfig(cluster_merge_dist=0.0)  # 0.0 (disables clustering) stays valid
 
 
+def test_cluster_merge_dist_default_is_pinned_to_adjudicated_value():
+    """IMPORTANT (final review): the shipped cluster_merge_dist=0.012 is
+    the branch's most-contested tuned deliverable -- a controller-directed
+    spec-6.1 adjudication (task-2b-report.md §10, quoted verbatim in
+    AnalyzeConfig's own comment above this field) that overrode a
+    scaffolding gate to restore a small amount of box-level clustering
+    after task 2b had retired it to 0.0. No prior test distinguished 0.012
+    from 0.0 or 0.023: every other fixture in the suite either forces the
+    value explicitly or uses confidence=1.0 sim detections where clustering
+    is a no-op at any merge_dist, so an accidental revert during a rebase
+    (this constant has already moved 0.03 -> 0.023 -> 0.0 -> 0.012 across
+    this branch's history) would leave the entire suite green while
+    silently dropping the measured cascade-low spec-6.1 result from 53.3%
+    to 31.2% (see AnalyzeConfig's own combo-sweep table). Pin the value
+    directly, mirroring how test_dedup_parallel_arcs_keeps_both_at_shipped_
+    crossing_floor (tests/test_extract.py) pins the arc-dedup knobs
+    behaviorally against the measured 0.164 crossing floor."""
+    assert AnalyzeConfig().cluster_merge_dist == pytest.approx(0.012)
+
+
 def test_arc_dedup_knobs_reject_out_of_range():
     """Plan 5 task 2b: arc_dedup_overlap_frac must be a fraction in [0, 1]
     (it's compared against a temporal-overlap ratio) and arc_dedup_traj_tol

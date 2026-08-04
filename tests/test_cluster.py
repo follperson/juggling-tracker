@@ -1,3 +1,5 @@
+import pytest
+
 from juggletrack.detect.cluster import cluster_detections
 from juggletrack.types import Detection
 
@@ -49,7 +51,6 @@ def test_nan_confidence_raises_instead_of_silently_corrupting_merge():
     detection streams (e.g. `--detections` JSONL) so they fail loudly
     instead of silently corrupting the merge rule."""
     import math
-    import pytest
     dets = [_d(0.360, 0.770, 0.30), _d(0.362, 0.771, float("nan"))]
     with pytest.raises(ValueError, match="non-finite confidence"):
         cluster_detections(dets, merge_dist=0.03)
@@ -59,34 +60,58 @@ def test_nan_confidence_raises_instead_of_silently_corrupting_merge():
         cluster_detections(dets_inf, merge_dist=0.03)
 
 
-def test_tied_confidence_sort_is_deterministic():
-    """Three chained detections all at same confidence=0.30, spaced so
-    A-B and B-C are within merge_dist but A-C is not. Clustering must
-    yield the same clusters regardless of input order [A,B,C] vs [B,A,C]."""
-    merge_dist = 0.025
-    # A at (0.360, 0.770)
-    # B at (0.368, 0.770) -- within 0.025 of A (dist=0.008)
-    # C at (0.394, 0.770) -- within 0.025 of B (dist=0.026, just over, but let's use 0.024)
-    # so A-C dist = 0.034, beyond merge_dist
-    A = _d(0.360, 0.770, 0.30)
-    B = _d(0.368, 0.770, 0.30)
-    C = _d(0.391, 0.770, 0.30)  # dist to B = 0.023, well within 0.025
+def test_absorption_is_deterministic_across_input_orderings():
+    """Retuned (final review) from an all-tied-confidence fixture that the
+    9f9d303 strict-lower-confidence rule made vestigial: all three
+    detections shared confidence=0.30, so under the shipped
+    `d.confidence >= aconf: continue` guard NOTHING could ever merge --
+    both orderings produced 3 singleton clusters, and the test was
+    comparing two identity outputs rather than exercising real absorption
+    or the greedy nearest-eligible-anchor selection ("the nearest such
+    eligible cluster, if more than one qualifies" in cluster_detections'
+    own docstring).
 
-    # Verify distances manually
+    This fixture has genuine, unequal-confidence merge eligibility instead:
+    A (0.30) and A2 (0.10) are two real echoes of the same ball (dist
+    0.0054, well inside merge_dist) that must collapse into one cluster
+    anchored at A; D (0.25) is a second, distant real ball (dist to A
+    0.566, far outside merge_dist) that must survive alone, unmerged
+    despite being an eligible-by-confidence anchor for A2 too (A2's own
+    confidence 0.10 is strictly less than BOTH A's 0.30 and D's 0.25 --
+    only proximity, not eligibility, decides A2's cluster). Asserting
+    output equality across every permutation of the three inputs, plus the
+    expected cluster count/membership/confidences, discriminates real
+    absorption-and-selection determinism from no-op identity."""
+    import itertools
+    A = _d(0.30, 0.30, 0.30)
+    A2 = _d(0.305, 0.302, 0.10)
+    D = _d(0.70, 0.70, 0.25)
+    merge_dist = 0.03
+
     import math
-    assert math.hypot(A.x - B.x, A.y - B.y) < merge_dist  # A-B within
-    assert math.hypot(B.x - C.x, B.y - C.y) < merge_dist  # B-C within
-    assert math.hypot(A.x - C.x, A.y - C.y) > merge_dist  # A-C beyond
+    assert math.hypot(A.x - A2.x, A.y - A2.y) < merge_dist  # A2 merges into A
+    assert math.hypot(A.x - D.x, A.y - D.y) > merge_dist  # D stays separate
 
-    result_abc = cluster_detections([A, B, C], merge_dist=merge_dist)
-    result_bac = cluster_detections([B, A, C], merge_dist=merge_dist)
-
-    assert result_abc == result_bac, (
-        f"different cluster output for different input orders: "
-        f"[A,B,C]→{len(result_abc)} clusters vs [B,A,C]→{len(result_bac)} clusters"
+    results = [
+        cluster_detections(list(perm), merge_dist=merge_dist)
+        for perm in itertools.permutations([A, A2, D])
+    ]
+    first = results[0]
+    assert len(first) == 2, f"expected A+A2 merged and D separate, got {len(first)} clusters"
+    confidences = sorted(o.confidence for o in first)
+    assert confidences == [0.25, 0.30], (
+        "expected one merged cluster (confidence 0.30, the stronger echo) "
+        f"and D untouched (confidence 0.25); got {confidences}"
     )
+    for r in results[1:]:
+        assert r == first, (
+            "cluster output must not depend on input order: "
+            f"got {[(o.x, o.y, o.confidence) for o in r]} vs "
+            f"{[(o.x, o.y, o.confidence) for o in first]}"
+        )
 
 
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 def test_duplicate_injection_does_not_inflate_catches():
     """Duplicate-box storms mint parallel arcs and inflate catches (measured:
     ss3_id_086 oracle 24 -> 57 pre-fix). Injecting 2-3 jittered clones of every
@@ -112,7 +137,14 @@ def test_duplicate_injection_does_not_inflate_catches():
     AnalyzeConfig's own comment for the full combo-sweep rationale).
     Verified directly on this exact fixture at the FINAL shipped default
     (merge_dist=0.012 + arc dedup): clean=12, dirty=12 -- exact match,
-    passing with margin rather than at the ±1 band edge."""
+    passing with margin rather than at the ±1 band edge.
+
+    Final review: the randomly-jittered clone cloud legitimately poorly-
+    conditions np.polyfit on some draws (expected for this fixture's dense,
+    near-degenerate point clusters, same rationale as test_extract.py's
+    test_dense_same_timestamp_clusters_do_not_crash) -- RankWarning
+    suppressed at the source via a marker, not globally, so one elsewhere
+    in the suite still surfaces normally."""
     import numpy as np
     from juggletrack.analyze import AnalyzeConfig, analyze_detections
     from juggletrack.sim import simulate_cascade
@@ -130,4 +162,5 @@ def test_duplicate_injection_does_not_inflate_catches():
     dirty = analyze_detections(sim.detections + clones, config=AnalyzeConfig())
     clean_c = sum(r.catches for r in clean.runs)
     dirty_c = sum(r.catches for r in dirty.runs)
+    assert clean_c == 12, "pinned clean baseline for this fixture; revisit if sim.py changes"
     assert abs(dirty_c - clean_c) <= 1
