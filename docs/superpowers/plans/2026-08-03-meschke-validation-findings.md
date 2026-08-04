@@ -533,3 +533,114 @@ set)." Treat `0.012` as measured on its own training data, not validated
 out-of-sample — the same caveat now carried in `AnalyzeConfig`'s own
 docstring.
 
+## PS-2 (final review): live validation at the shipped operating point + final per-video record
+
+The PS above adopted `cluster_merge_dist=0.012` from an **offline-only**
+combo sweep (`task-2b-report.md` §9: "no live replays, per scope") — no
+committed table had ever measured the live/realtime path at the actual
+shipped default; every live table in this doc (§8, the addendum's "Live
+envelope, updated") describes a superseded config (`0.023` or `0.0`). This
+section closes that gap and gives the shipped default's own final
+per-video record, both per the plan's Global Constraints ("any count
+change... must be justified... per-video, both directions").
+
+### Live validation at 0.012
+
+Re-ran the live replay leg (`uv run juggletrack live <video> --detections
+<saved detections.jsonl> --no-display`) at shipped defaults — no code or
+config override; the stock CLI path already uses `0.012` — for the four
+Step-3 gate videos where clustering has the largest measured offline
+effect, plus one already-clean video as a control:
+
+| video | oracle | offline (0.012) | live (0.012) |
+|---|---|---|---|
+| ss3_id_086 | 1/24/0 | 1/25/0 | 1/27/0 |
+| ss3_id_110 | 1/9/0 | 1/15/0 | 1/18/0 |
+| ss441_id_089 | 1/19/0 | 1/16/0 | 1/17/0 |
+| ss423_id_088 | 1/15/0 | 1/15/0 | 1/18/0 |
+| ss441_id_013 (clean control) | 1/136/0 | 1/135/0 | 1/140/0 |
+
+Live tracks offline closely on all five (+1 to +5 catches over offline, 0
+drops throughout) — no live-specific regression at `0.012` on this
+subset, and the realtime engine's single integration point
+(`analyze_detections`, unchanged by this adoption) behaves as expected.
+Not a full 22-video live re-run (out of scope for this wave); it targets
+the videos where the offline record shows the operating-point change
+mattered most, plus a clean-video control.
+
+### Final per-video table at the shipped operating point (`outputs/meschke-val/combo-0.012/results.jsonl`)
+
+| video | oracle | offline (0.012) | Δ catches (offline − oracle) |
+|---|---|---|---|
+| ss3_id_016 | 5/52/0 | 9/41/0 | −11 (+4 runs vs oracle) |
+| ss3_id_079 | 1/6/0 | **1/6/0** | 0 (exact) |
+| ss3_id_086 | 1/24/0 | 1/25/0 | +1 |
+| ss3_id_110 | 1/9/0 | 1/15/0 | +6 |
+| ss3_id_987 | 1/20/0 | 1/21/0 | +1 |
+| ss423_id_007 | 1/73/0 | 1/80/0 | +7 |
+| ss423_id_017 | 1/130/0 | 1/119/0 | −11 |
+| ss423_id_088 | 1/15/0 | **1/15/0** | 0 (exact) |
+| ss42_id_010 | 1/66/0 | 1/64/0 | −2 |
+| ss42_id_011 | 1/93/0 | **1/93/0** | 0 (exact) |
+| ss441_id_013 | 1/136/0 | 1/135/0 | −1 |
+| ss441_id_089 | 1/19/0 | 1/16/0 | −3 |
+| ss50505_id_012 | 1/157/0 | 1/156/0 | −1 |
+| ss50505_id_093 | 1/42/0 | 1/30/0 | −12 |
+| ss51_id_163 | 1/58/0 | 1/46/0 | −12 |
+| ss531_id_005 | 1/63/0 | 1/37/0 | −26 |
+| ss531_id_014 | 1/29/0 | 1/27/0 | −2 |
+| ss531_id_988 | 1/21/0 | **1/21/0** | 0 (exact) |
+| ss531_id_989 | 1/19/0 | 1/16/0 | −3 |
+| ss60_id_151 | 1/26/0 | 1/30/0 | +4 |
+| ss8040_id_070 | 1/33/0 | 1/35/0 | +2 |
+| ss90501_id_145 | 1/5/0 | 1/13/0 | +8 |
+
+Bold = exact oracle catch-count match (4 of 22: `ss3_id_079`,
+`ss423_id_088`, `ss42_id_011`, `ss531_id_988`). Totals: oracle 1096
+catches; offline 1041 (**−5.0%**, matching the PS's already-committed −55
+figure exactly).
+
+**Both directions, versus the addendum's post-Task-2b table:** comparing
+absolute `|offline − oracle|` at `0.012` to the same quantity at post-2b
+(`merge_dist=0.0`), **11 of 22 videos move closer** to oracle
+(`ss3_id_016`, `ss3_id_086`, `ss3_id_110`, `ss423_id_007`, `ss423_id_088`,
+`ss50505_id_012`, `ss50505_id_093`, `ss51_id_163`, `ss531_id_014`,
+`ss531_id_988`, `ss8040_id_070`), **4 are unchanged**
+(`ss3_id_079`, `ss3_id_987`, `ss42_id_011`, `ss441_id_013` — same
+`|Δ|`, in some cases with the sign flipped), and **7 move farther**
+(`ss423_id_017`, `ss42_id_010`, `ss441_id_089`, `ss531_id_005`,
+`ss531_id_989`, `ss60_id_151`, `ss90501_id_145`). None of the seven
+regressions is large in absolute terms (largest single-step regression:
+`ss531_id_005` +3 catches of `|Δ|`, already the set's worst outlier
+before and after); the biggest mover by far is `ss50505_id_093`'s `|Δ|`
+39 → 12, a high-pattern-family video outside this plan's gate scope.
+
+### Step-3 gate verdicts at the shipped operating point (0.012)
+
+| gate | measured | target | result |
+|---|---|---|---|
+| ss3_id_086 total catches | 25 | 24±4 (20–28) | **PASS** |
+| ss3_id_110 total catches | 15 | 9±3 (6–12) | **FAIL** (closer than post-2b's 21, still above target) |
+| ss441_id_089 total catches / drops | 16 / 0 | 19±5 (14–24) AND ≤2 | **PASS** |
+| ss423_id_088 total catches | 15 | 15±5 (10–20) | **PASS** (exact) |
+| ss42_id_011 matched-run IoU | 1.000 | ≥0.9 | **PASS** |
+| ss42_id_010 matched-run IoU | 1.000 | ≥0.9 | **PASS** |
+| Clean-video constraint (±2 of oracle, all six) | see below | ±2 | **PASS**, 6/6 |
+| §6.1 ≥55% overall | 39.1% (9/23 matched runs) | ≥55% | **FAIL** |
+| §6.1 ≥80% cascade-low family | 53.3% (8/15 matched runs) | ≥80% | **FAIL** |
+
+**Clean-video constraint detail at 0.012** — the six videos in the plan's
+Global Constraints list: `ss441_id_013` Δ−1, `ss42_id_010` Δ−2,
+`ss42_id_011` Δ0, `ss3_id_079` Δ0, `ss3_id_987` Δ+1, `ss50505_id_012`
+Δ−1 — all six hold within ±2.
+
+**Verdict: 6 of 9 gates PASS, 3 FAIL — the same gate count as post-Task-2b
+(§ addendum), but both `ss3_id_110` and the §6.1 fractions moved closer to
+their targets in absolute terms** (`ss3_id_110` 21→15 vs a 6–12 target;
+overall §6.1 28.0%→39.1%; cascade-low §6.1 31.2%→53.3%, all still short of
+gate). Per the plan's escalation rule this remains a **BLOCKED** result on
+`ss3_id_110` and both §6.1 fractions — the same three axes as post-2b,
+reported here with attribution rather than iterated on further in this
+wave; `ss3_id_110`'s own structural-frontier finding (§ addendum) is
+unchanged by this retune.
+
