@@ -80,12 +80,16 @@ def test_duplicate_injection_does_not_inflate_catches():
     merge_dist=0.023: dirty=12, exactly matching clean -- passing with
     margin rather than at the ±1 band edge.
 
-    Plan 5 task 2b: cluster_merge_dist's shipped default moved to 0.0 (box-
-    level clustering retired to a no-op by default; see AnalyzeConfig's own
-    comment) with arcs/extract.py's dedup_parallel_arcs now doing this
-    fixture's duplicate-collapsing work at the arc level instead. Verified
-    directly on this exact fixture at the new default: clean=12, dirty=11 --
-    still comfortably within the ±1 band, just via a different mechanism."""
+    Plan 5 task 2b: cluster_merge_dist's shipped default moved first to 0.0
+    (box-level clustering retired to a no-op; arcs/extract.py's
+    dedup_parallel_arcs alone doing this fixture's duplicate-collapsing
+    work at the arc level -- measured clean=12, dirty=11 there), then to
+    0.012 after a controller-directed spec-§6.1 adjudication restored a
+    small amount of box clustering alongside arc dedup (see
+    AnalyzeConfig's own comment for the full combo-sweep rationale).
+    Verified directly on this exact fixture at the FINAL shipped default
+    (merge_dist=0.012 + arc dedup): clean=12, dirty=12 -- exact match,
+    passing with margin rather than at the ±1 band edge."""
     import numpy as np
     from juggletrack.analyze import AnalyzeConfig, analyze_detections
     from juggletrack.sim import simulate_cascade

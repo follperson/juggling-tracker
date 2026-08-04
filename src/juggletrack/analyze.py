@@ -57,39 +57,55 @@ class AnalyzeConfig(BaseModel):
     # detections. 0.0 disables clustering entirely (identity passthrough,
     # see cluster_detections).
     #
-    # 0.0, not the earlier 0.023 (Plan 5 task 2): retuned DOWN in task 2b
-    # once arc_dedup_traj_tol below took over most of the duplicate-storm-
-    # collapsing job at the ARC level. Box-level clustering at 0.023 could
-    # not tell a duplicate echo from a genuine crossing on REAL footage
-    # (real crossing balls almost always differ in confidence, so the
-    # strict-lower-confidence guard doesn't protect them the way it
-    # protects the sim's exactly-tied detections) -- and turning merge_dist
-    # up far enough to collapse duplicate storms regressed real crossings
-    # badly: ss531_id_005 40->16 catches (oracle 63), ss531_id_989 18->15
-    # (oracle 19), ss50505_id_012 155->151 (oracle 157), see
-    # docs/superpowers/plans/2026-08-03-meschke-validation-findings.md.
-    # Swept {0.010, 0.012, 0.015, 0.018, 0.023} WITH arc dedup active per
-    # task 2b's brief, then finer (0.0005 steps, 0.000-0.023) once no value
-    # in that grid passed every field gate: results were flat/identical
-    # across 0.000-0.006 on every required video (the sim-crossing tie-
-    # break makes clustering a no-op on synthetic data regardless of this
-    # value, same as before), and 0.0 additionally scored BETTER than 0.023
-    # on ss423_id_088 (15, exact oracle match, vs 0.023's 16) and
-    # ss531_id_988 (22 vs 0.023's 17, oracle 21) in a broader spot-check.
+    # 0.012, not the earlier 0.023 (Plan 5 task 2) or task 2b's initial 0.0:
+    # box-level clustering at 0.023 could not tell a duplicate echo from a
+    # genuine crossing on REAL footage (real crossing balls almost always
+    # differ in confidence, so the strict-lower-confidence guard doesn't
+    # protect them the way it protects the sim's exactly-tied detections)
+    # -- turning merge_dist up far enough to collapse duplicate storms
+    # regressed real crossings: ss531_id_005 40->16 catches (oracle 63),
+    # ss531_id_989 18->15 (oracle 19), ss50505_id_012 155->151 (oracle 157).
+    # Once arc_dedup_traj_tol below took over most of the duplicate-storm
+    # job at the ARC level, task 2b's own field-gate sweep found 0.0
+    # (clustering fully retired) passed 8/9 required gates -- but a
+    # coordinator-directed full 22-video re-aggregation (task-2b-report.md
+    # §9) showed 0.0 costs spec §6.1 (per-run catch accuracy, the primary
+    # metric) versus the old 0.023 state: 37.5%->28.0% overall,
+    # 46.7%->31.2% on the cascade-low family. A combo sweep of
+    # cluster_merge_dist in {0.010, 0.012, 0.015} WITH arc dedup active
+    # (0.75/0.15, unchanged) across all 22 videos, offline only, produced:
     #
-    # KNOWN COST (measured, out of this task's required-gate scope):
-    # ss50505_id_093 (high-pattern family, not gated by this task) relied
-    # on box-level clustering's PRE-extraction cleanup -- its raw detection
-    # stream is messy enough that arc-level dedup alone cannot recover the
-    # same result (135 raw arcs post-extraction; collapsing them after the
-    # fact only gets to ~9 catches vs merge_dist=0.023's 38, oracle 42, a
-    # real regression). No merge_dist satisfies both this video AND
-    # ss531_id_989/ss50505_id_012 (opposite requirements on the SAME knob);
-    # since 093 isn't a required gate here, this task accepts that cost
-    # rather than reopen the regression-repair gates it IS scored on. See
-    # .superpowers/sdd/task-2b-report.md for the full sweep and this
-    # trade-off's measurement.
-    cluster_merge_dist: float = 0.0
+    #   merge_dist | 9-gate | clean(5) | cascade-low §6.1 | overall §6.1 | catch Δ
+    #   0.0        | 8/9 (fails ss3_id_110)         | 5/5 | 31.2% | 28.0% | -71
+    #   0.010      | 5/9                            | 5/5 | 43.8% | 26.9% | -84
+    #   0.012      | 8/9 (fails ss531_id_989: 16<17) | 5/5 | 53.3% | 39.1% | -55
+    #   0.015      | 7/9 (fails ss531_id_989, ss50505_id_012) | 4/5 | 40.0% | 29.2% | -60
+    #
+    # ADJUDICATION (controller, task-2b-report.md §10, recorded verbatim):
+    # "the ss531_id_989 >=17 gate was task-dispatch scaffolding, not a
+    # plan-binding constraint -- the plan's Global Constraints clean-video
+    # list (id_013, id_010/011, id_079, id_987, id_012) passes 5/5 at
+    # 0.012, and the spec's primary metric §6.1 governs: 0.012 more than
+    # doubles cascade-low §6.1 (31.2->53.3%) and lifts overall §6.1 to
+    # 39.1% (best of all four states) at the documented cost of id_989
+    # landing at 16 vs oracle 19 (delta 3, was delta 1)." Shipped value is
+    # therefore 0.012, not 0.0 or 0.023.
+    #
+    # OVERFITTING CAVEAT (controller-directed, record verbatim): this
+    # constant is now tuned against the 22-video suite itself -- there is
+    # no held-out set at this granularity. Generalization is deferred to
+    # the spec's never-trained-on holdout set; treat 0.012 as measured on
+    # its own training data, not as validated out-of-sample.
+    #
+    # KNOWN COST (measured, unchanged by this retune): ss50505_id_093
+    # (high-pattern family, not a required gate) relied on box-level
+    # clustering's PRE-extraction cleanup at the OLD 0.023 -- 0.012 is
+    # still far short of that (raw detection stream is messy enough, 135
+    # post-extraction arcs, that a small merge_dist and arc-level dedup
+    # together do not recover 0.023's 38 catches, oracle 42). See
+    # .superpowers/sdd/task-2b-report.md §§3,8,9,10 for the full sweep,
+    # trade-off measurements, and adjudication history.
+    cluster_merge_dist: float = 0.012
     # Arc-level parallel-arc dedup (Plan 5 task 2b, arcs/extract.py's
     # dedup_parallel_arcs): applied AFTER extract_arcs, BEFORE the
     # event-derivation tail, offline and realtime alike (same integration

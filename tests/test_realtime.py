@@ -830,11 +830,15 @@ def test_duplicate_injection_inherits_clustering_via_analyze_detections():
     merge_dist=0.023: clean=12, dirty=12 -- passing with margin, matching
     the offline measurement in test_cluster.py.
 
-    Plan 5 task 2b: cluster_merge_dist's shipped default moved to 0.0;
-    arcs/extract.py's dedup_parallel_arcs (also inherited for free through
-    analyze_detections) now carries this fixture's duplicate-collapsing
-    work instead. Verified directly at the new default: clean=12, dirty=11
-    -- still comfortably within the +/-1 band."""
+    Plan 5 task 2b: cluster_merge_dist's shipped default moved first to 0.0
+    (arcs/extract.py's dedup_parallel_arcs, also inherited for free through
+    analyze_detections, carrying this fixture's duplicate-collapsing work
+    alone -- measured clean=12, dirty=11 there), then to 0.012 after a
+    controller-directed spec-§6.1 adjudication restored a small amount of
+    box clustering alongside arc dedup (see AnalyzeConfig's own comment).
+    Verified directly at the FINAL shipped default (merge_dist=0.012 + arc
+    dedup): clean=12, dirty=12 -- exact match, matching the offline
+    measurement in test_cluster.py."""
     import numpy as np
     r = simulate_cascade(n_throws=12, fps=30.0, seed=3)
     rng = np.random.default_rng(7)
