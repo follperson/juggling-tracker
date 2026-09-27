@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from juggletrack.detect.weights import resolve_model
 from juggletrack.types import Detection
 
 SPORTS_BALL_CLASS = 32  # COCO 80-class index
@@ -43,12 +44,13 @@ def detections_from_xywhn(
 class YOLODetector:
     def __init__(
         self,
-        model_path: str = "yolo11n.pt",
+        model_path: str | None = None,
         conf: float = 0.05,
         imgsz: int = 640,
         classes: tuple[int, ...] | None = None,
         device: str | None = None,
     ):
+        model_path = resolve_model(model_path)
         from ultralytics import YOLO  # lazy: torch loads only when a real detector is built
 
         self._model = YOLO(model_path)

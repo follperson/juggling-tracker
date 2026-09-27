@@ -11,3 +11,4 @@
 /runs/
 /models/
 /datasets/
+.coverage

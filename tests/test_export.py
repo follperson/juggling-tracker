@@ -46,7 +46,8 @@ def test_export_coreml_missing_product_raises(tmp_path, monkeypatch):
 def test_export_coreml_real():
     from juggletrack.train.export import export_coreml
 
-    weights = Path("/Users/andrew.follmann/personal-projects/juggling/models/juggletrack-v3/best.pt")
+    pytest.importorskip("coremltools", reason="optional CoreML export dependency")
+    weights = Path(__file__).resolve().parents[1] / "models/juggletrack-v3/best.pt"
     if not weights.exists():
         pytest.skip("v3 weights not on this machine")
     out = export_coreml(weights)

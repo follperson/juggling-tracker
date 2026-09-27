@@ -1,4 +1,5 @@
 import json
+import re
 
 import numpy as np
 import pytest
@@ -10,6 +11,13 @@ from juggletrack.types import Detection, SessionResult
 from tests.helpers import write_test_video
 
 runner = CliRunner()
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(output: str) -> str:
+    """Rich splits a styled option token, so "--model" is absent from coloured bytes."""
+    return _ANSI.sub("", output)
 
 
 @pytest.fixture()
@@ -264,3 +272,21 @@ def test_live_command_non_ascii_digit_source_stays_a_string(workspace, monkeypat
     ])
     assert result.exit_code == 0, result.output
     assert captured["src"] == "²"
+
+
+@pytest.mark.parametrize("command", ["analyze", "live", "coverage", "label"])
+def test_inference_commands_explain_missing_default_model(workspace, monkeypatch, command):
+    from juggletrack.cli import app
+
+    def unexpected_model_load(*args, **kwargs):
+        raise AssertionError("missing defaults must fail before loading/downloading weights")
+
+    monkeypatch.setattr("juggletrack.detect.yolo.YOLODetector", unexpected_model_load)
+    _, video, _, tmp = workspace
+    monkeypatch.chdir(tmp)
+    monkeypatch.delenv("JUGGLETRACK_MODEL", raising=False)
+    result = runner.invoke(app, [command, str(video)])
+    output = plain(result.output)
+    assert result.exit_code == 2, output
+    assert "--model" in output
+    assert "JUGGLETRACK_MODEL" in output

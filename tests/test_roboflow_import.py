@@ -7,7 +7,7 @@ import pytest
 
 from juggletrack.data.roboflow_import import import_roboflow_dataset
 
-REAL_SRC = Path("/Users/andrew.follmann/personal-projects/juggling/data/raw/roboflow/universe-juggling-balls")
+REAL_SRC = Path(__file__).resolve().parents[1] / "data/raw/roboflow/universe-juggling-balls"
 
 
 def _write_image(path: Path):
