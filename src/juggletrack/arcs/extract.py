@@ -110,8 +110,8 @@ def extract_arcs(
     # SELF-consistent slow-drift junk (ay in [0.05, 0.25)) now survives — the
     # median-relative _gravity_prune only rejects outliers within a cohort, it
     # cannot invalidate a junk-consistent cohort, and the old absolute floor
-    # was the sole defense. Pinned by test_slow_drift_junk_cohort_known_gap;
-    # the principled fix is the spec-§4 periodicity run-validator (unbuilt).
+    # was the only arc-level defense. Pinned by
+    # test_slow_drift_junk_cohort_known_gap.
     g_range: tuple[float, float] = (0.1, 8.0),
     # 0.12 -> 0.18: 0.12s tolerated zero consecutive missed-detection frames
     # at 24fps stride-2 (and only ~2 at 30fps stride-1) -- fine for in-domain

@@ -1,7 +1,8 @@
+import numpy as np
 import pytest
 
 from juggletrack.analyze import analyze_detections
-from juggletrack.events.validate import is_drift_cohort
+from juggletrack.events.validate import _sweeps, is_drift_cohort
 from juggletrack.sim import CascadeParams, simulate_cascade
 from juggletrack.types import Arc, Detection
 
@@ -118,63 +119,98 @@ def test_near_vertical_columns_pattern_survives_drift_gate():
     assert abs(sr.runs[0].catches - 12) <= 1
 
 
-# Fitted on real af2 juggling (7.1-9.1 s) by the stock COCO detector, which
-# finds too few throws for the cascade to visibly alternate.
-# Each row is (t_start, t_end, ay, by, cy, bx, cx).
-AF2_STOCK_COHORT = [
-    (7.1220, 7.8208, 0.9381, -0.5772, 0.4778, 0.1494, 0.5694),
-    (7.8541, 8.2535, 1.4412, -0.6132, 0.4521, 0.1801, 0.5838),
-    (8.4864, 9.0855, 1.1122, -0.5784, 0.4483, 0.2618, 0.6096),
+AF2_STOCK_ARCS = [
+    Arc(id=0, t_start=7.1220, t_end=7.8208, ay=0.9381, by=-0.5772, cy=0.4778,
+        bx=0.1494, cx=0.5694, n_points=19, rmse=0.0082),
+    Arc(id=1, t_start=7.8541, t_end=8.2535, ay=1.4412, by=-0.6132, cy=0.4521,
+        bx=0.1801, cx=0.5838, n_points=13, rmse=0.0006),
+    Arc(id=2, t_start=8.4864, t_end=9.0855, ay=1.1122, by=-0.5784, cy=0.4483,
+        bx=0.2618, cx=0.6096, n_points=19, rmse=0.0085),
+]
+
+REAL_JUGGLING_COHORTS = {
+    "af2_stock": AF2_STOCK_ARCS,
+    "pxl_stock": [
+        _arc(6.0571, 0.3660, bx=0.1954, cx=0.5030),
+        _arc(6.3566, 0.3328, bx=0.0392, cx=0.5125),
+        _arc(6.6561, 0.5658, bx=0.4671, cx=0.5540),
+    ],
+    "pxl_191622045_motion": [
+        _arc(27.7840, 1.0398, bx=-0.2454, cx=0.6729),
+        _arc(28.4495, 1.1646, bx=-0.0969, cx=0.5459),
+        _arc(29.1981, 0.8735, bx=-0.2936, cx=0.5086),
+    ],
+}
+
+PXL_182734164_MOTION_JUNK = [
+    _arc(19.3104, 0.7370, bx=-0.0088, cx=0.4464),
+    _arc(19.3841, 1.1055, bx=0.0281, cx=0.6081),
+    _arc(21.5952, 0.7739, bx=0.0642, cx=0.9394),
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="drift gate deletes real same-direction runs")
 def test_real_same_direction_run_survives_drift_gate():
-    """Three real throws that all travel right while their starts step right.
-    They match the junk shape on direction and monotonicity, but their x-ranges
-    overlap because the balls keep returning to one pattern."""
     fps = 30.0
     dets = [
-        Detection(frame_idx=f, t=f / fps, x=bx * (f / fps - t0) + cx,
-                  y=ay * (f / fps - t0) ** 2 + by * (f / fps - t0) + cy)
-        for t0, t1, ay, by, cy, bx, cx in AF2_STOCK_COHORT
-        for f in range(round(t0 * fps), round(t1 * fps) + 1)
+        Detection(frame_idx=f, t=f / fps, x=a.x_at(f / fps), y=a.y_at(f / fps))
+        for a in AF2_STOCK_ARCS
+        for f in range(round(a.t_start * fps), round(a.t_end * fps) + 1)
     ]
     sr = analyze_detections(dets)
     assert [(r.catches, r.throws) for r in sr.runs] == [(3, 3)]
 
 
-# Runs the gate rejected on real footage, as (t_start, t_end, bx, cx). af2 and
-# pxl come from the stock COCO detector; the 2026-07-16 PXL clips come from the
-# motion detector. Each was checked by eye against the video frames.
-REAL_JUGGLING_COHORTS = {
-    "af2_stock": [(t0, t1, bx, cx) for t0, t1, _, _, _, bx, cx in AF2_STOCK_COHORT],
-    "pxl_stock": [
-        (6.0571, 6.4231, 0.1954, 0.5030),
-        (6.3566, 6.6894, 0.0392, 0.5125),
-        (6.6561, 7.2219, 0.4671, 0.5540),
-    ],
-    "pxl_191622045_motion": [
-        (27.7840, 28.8238, -0.2454, 0.6729),
-        (28.4495, 29.6141, -0.0969, 0.5459),
-        (29.1981, 30.0716, -0.2936, 0.5086),
-    ],
-}
-
-
-@pytest.mark.xfail(strict=True, reason="drift gate deletes real same-direction runs")
 @pytest.mark.parametrize("name", REAL_JUGGLING_COHORTS)
 def test_real_juggling_cohorts_are_not_flagged(name):
-    arcs = [_arc(t0, t1 - t0, bx=bx, cx=cx) for t0, t1, bx, cx in REAL_JUGGLING_COHORTS[name]]
-    assert is_drift_cohort(arcs) is False
+    assert is_drift_cohort(REAL_JUGGLING_COHORTS[name]) is False
 
 
 def test_real_junk_cohort_is_flagged():
-    """Motion-detector streaks on PXL_20260716_182734164, 19.3-22.4 s, scattered
-    across the frame as a second person walks in. Each arc lands on new ground."""
-    arcs = [_arc(t0, t1 - t0, bx=bx, cx=cx) for t0, t1, bx, cx in [
-        (19.3104, 20.0474, -0.0088, 0.4464),
-        (19.3841, 20.4896, 0.0281, 0.6081),
-        (21.5952, 22.3691, 0.0642, 0.9394),
-    ]]
+    assert is_drift_cohort(PXL_182734164_MOTION_JUNK) is True
+
+
+@pytest.mark.xfail(strict=True, reason="known gap: a pattern that translates faster than "
+                   "its throws move sideways sweeps when only one ball is detected")
+def test_panning_juggler_with_one_ball_detected_is_not_flagged():
+    hand_sep, flight, period, pan = 0.18, 1.1, 0.45, 0.2
+    arcs = []
+    for k in (0, 3, 6):
+        t, from_right = k * period, k % 2 == 1
+        bx = (-hand_sep if from_right else hand_sep) / flight + pan
+        arcs.append(_arc(t, flight, bx=bx, cx=0.05 + pan * t + (hand_sep if from_right else 0)))
+    assert is_drift_cohort(arcs) is False
+
+
+@pytest.mark.xfail(strict=True, reason="known gap: junk escapes when two of its pieces "
+                   "overlap in x")
+def test_junk_with_two_overlapping_pieces_is_flagged():
+    arcs = [*PXL_182734164_MOTION_JUNK, _arc(21.70, 0.60, bx=0.06, cx=0.955)]
     assert is_drift_cohort(arcs) is True
+
+
+def test_stacking_twin_of_junk_fixture_is_not_flagged():
+    arcs = [_arc(0.5 + 0.7 * k, 1.2, bx=0.15, cx=0.15 + 0.15 * k) for k in range(3)]
+    assert is_drift_cohort(arcs) is False
+
+
+def test_leftward_junk_fixture_is_flagged():
+    arcs = [_arc(0.5 + 0.7 * k, 1.2, bx=-0.15, cx=0.85 - 0.22 * k) for k in range(3)]
+    assert is_drift_cohort(arcs) is True
+
+
+def _spans(ranges, leftward):
+    lo, hi = np.array(ranges, dtype=float).T
+    return (hi, lo - hi) if leftward else (lo, hi - lo)
+
+
+@pytest.mark.parametrize("ranges, leftward, expected", [
+    pytest.param([(.15, .33), (.37, .55), (.59, .77)], False, True, id="disjoint_every_step"),
+    pytest.param([(.67, .85), (.45, .63), (.23, .41)], True, True, id="leftward_sweep"),
+    pytest.param([(0, .25), (.25, .5), (.5, .75)], False, False, id="touching_is_overlap"),
+    pytest.param([(.10, .30), (.35, .50), (.45, .60)], False, False, id="later_step_overlaps"),
+    pytest.param([(.10, .30), (.25, .40), (.70, .80)], False, False, id="earlier_step_overlaps"),
+    pytest.param([(0, .1), (.3, .4), (.15, .2), (.6, .7), (.8, .9)], False, False,
+                 id="overlaps_hull_not_previous_arc"),
+])
+def test_sweeps_requires_every_arc_to_clear_the_hull(ranges, leftward, expected):
+    assert _sweeps(*_spans(ranges, leftward)) is expected
