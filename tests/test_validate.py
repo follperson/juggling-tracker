@@ -35,6 +35,17 @@ def test_alternating_cascade_is_not_flagged():
     assert is_drift_cohort(arcs) is False
 
 
+def test_mixed_sign_sweep_is_not_flagged():
+    """Marches (mono ~0.93) and sweeps, so only the middle arc's opposite
+    sign (dom2 = 1/3) keeps the gate from firing."""
+    arcs = [
+        _arc(0.0, 1.0, bx=0.10, cx=0.10),
+        _arc(1.0, 1.0, bx=-0.10, cx=0.35),
+        _arc(2.0, 1.0, bx=0.10, cx=0.40),
+    ]
+    assert is_drift_cohort(arcs) is False
+
+
 def test_near_vertical_arcs_protected_by_dx_min():
     """Near-vertical throws (siteswap-4 "columns" style: bx ~ 0) must not be
     misread as a drift cohort just because tiny sign noise happens to have a
