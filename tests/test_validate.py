@@ -1,8 +1,10 @@
+import math
+
 import numpy as np
 import pytest
 
 from juggletrack.analyze import analyze_detections
-from juggletrack.events.validate import _sweeps, is_drift_cohort
+from juggletrack.events.validate import DOM_T, DX_MIN, _sweeps, is_drift_cohort
 from juggletrack.sim import CascadeParams, simulate_cascade
 from juggletrack.types import Arc, Detection
 
@@ -45,6 +47,14 @@ def test_mixed_sign_sweep_is_not_flagged():
         _arc(2.0, 1.0, bx=0.10, cx=0.40),
     ]
     assert is_drift_cohort(arcs) is False
+
+
+def test_a_minority_sign_cannot_fit_in_one_frame_width():
+    """is_drift_cohort has no alternation term because of this: a run that
+    passes dom2 with even one opposite-sign arc has so many meaningful arcs
+    that their disjoint x-ranges cannot sweep within one frame width."""
+    fewest_arcs_with_a_minority = math.ceil(2 / (1 - DOM_T))
+    assert fewest_arcs_with_a_minority * DX_MIN > 1
 
 
 def test_near_vertical_arcs_protected_by_dx_min():
