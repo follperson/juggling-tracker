@@ -86,6 +86,35 @@ Keep `development` and `holdout` manifests separate. Once a holdout influences
 parameter selection it has become development data. Historical result JSONs
 without source/configuration hashes should remain labeled historical.
 
+## Event-core parity
+
+A refactor or speedup of the event core should leave every result unchanged.
+`scripts/event_core_parity.py` checks that on real footage. It runs
+`analyze_detections` on every saved `detections.jsonl` under `outputs/` and
+records a SHA-256 digest of each `SessionResult`. With `--realtime`, it also
+replays the matching sessions frame by frame through `RealtimeAnalyzer` and
+hashes every emitted state except the timing field. Take one snapshot before
+the change and one after it, on the same machine:
+
+```bash
+uv run --no-sync python scripts/event_core_parity.py snapshot before.json \
+  --realtime meschke-val/ --realtime-frames 900
+# apply the change
+uv run --no-sync python scripts/event_core_parity.py snapshot after.json \
+  --realtime meschke-val/ --realtime-frames 900
+uv run --no-sync python scripts/event_core_parity.py compare before.json after.json
+```
+
+`compare` prints `PARITY OK` and the speed ratio, or names each session whose
+digest or input changed and exits nonzero. Each snapshot records the source
+hash of the package it imported, so a baseline can come from an older checkout
+on `PYTHONPATH`. Digests depend on the platform's floating point and numpy
+build. Never commit them as golden values or compare snapshots from different
+machines. The saved detections are local, gitignored data, so CI does not run
+this check. A change that is meant to alter results fails `compare` by design.
+In that case, review the per-session run, catch and drop counts that each
+snapshot records instead.
+
 ## Detector center benchmark
 
 For Meschke footage with saved detections, run:
