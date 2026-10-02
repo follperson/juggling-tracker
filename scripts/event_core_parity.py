@@ -95,9 +95,22 @@ def _realtime(dets: list[Detection], max_frames: int) -> dict:
     }
 
 
+def _overwrites_detections(out: Path, saved: list[Path]) -> bool:
+    if "detections.jsonl" in (out.name, out.resolve().name):
+        return True
+    # samefile also catches symlink and hardlink aliases.
+    return out.exists() and any(out.samefile(p) for p in saved)
+
+
 def snapshot(args: argparse.Namespace) -> int:
     root = Path(args.root)
     paths = sorted(root.rglob("detections.jsonl"))
+    # Check every saved session, not just the --only selection: a snapshot
+    # must never replace recorded detections.
+    if _overwrites_detections(Path(args.out), paths):
+        print(f"refusing to write {args.out}: it would overwrite saved detections",
+              file=sys.stderr)
+        return 2
     if args.only:
         paths = [p for p in paths if any(s in str(p) for s in args.only)]
     if not paths:
