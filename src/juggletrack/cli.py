@@ -116,7 +116,7 @@ def eval(
     out: Path | None = typer.Option(None, help="Write EvalReport JSON here"),
 ) -> None:
     from juggletrack.eval.labels import VideoLabels
-    from juggletrack.eval.metrics import evaluate_session
+    from juggletrack.eval.metrics import CATCH_ERROR_PASS, RUN_IOU_PASS, evaluate_session
     from juggletrack.types import SessionResult
 
     session = SessionResult.model_validate(json.loads(analysis_json.read_text()))
@@ -125,8 +125,8 @@ def eval(
 
     typer.echo(f"video: {report.video}")
     typer.echo(f"runs: {report.n_pred_runs} predicted / {report.n_labeled_runs} labeled")
-    typer.echo(f"run boundary IoU>=0.9: {report.frac_runs_iou90:.0%}")
-    typer.echo(f"catch count within +/-1: {report.frac_catch_within_1:.0%}")
+    typer.echo(f"run boundary IoU>={RUN_IOU_PASS}: {report.frac_runs_iou90:.0%}")
+    typer.echo(f"catch count within +/-{CATCH_ERROR_PASS}: {report.frac_catch_within_1:.0%}")
     typer.echo(
         f"drops: precision {report.drop_precision:.2f} "
         f"recall {report.drop_recall:.2f} "
@@ -147,6 +147,7 @@ def benchmark(
     """Benchmark saved detections against independently reviewed event labels."""
     from juggletrack.analyze import AnalyzeConfig
     from juggletrack.eval.benchmark import BenchmarkManifest, run_benchmark
+    from juggletrack.eval.metrics import CATCH_ERROR_PASS
 
     try:
         manifest = manifest.resolve()
@@ -165,7 +166,7 @@ def benchmark(
     formatted = f"{score:.1%}" if score is not None else "n/a (no labeled runs)"
     typer.echo(
         f"{summary['n_videos']} videos, {summary['n_labeled_runs']} labeled runs; "
-        f"catch count within +/-1: {formatted}; "
+        f"catch count within +/-{CATCH_ERROR_PASS}: {formatted}; "
         f"missed runs {summary['unmatched_labeled']}, extra runs {summary['unmatched_pred']} "
         f"-> {out}"
     )

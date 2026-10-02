@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from juggletrack.eval.labels import LabeledRun, VideoLabels
-from juggletrack.eval.metrics import evaluate_session, temporal_iou
+from juggletrack.eval.metrics import aggregate_scores, evaluate_session, temporal_iou
 from juggletrack.types import DropEvent, Run, SessionResult
 
 
@@ -93,3 +93,40 @@ def test_labels_json_roundtrip(tmp_path):
 def test_misspelled_label_keys_are_rejected(document):
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         VideoLabels.model_validate_json(document)
+
+
+@pytest.mark.parametrize(("predicted", "passes"), [(13, True), (14, False)])
+def test_catch_error_of_one_passes_and_two_fails(predicted, passes):
+    labels = VideoLabels(video="v.mp4", runs=[LabeledRun(start_t=0, end_t=10, catches=12)])
+    rep = evaluate_session(session(runs=[run(0, 10, predicted)]), labels)
+    assert rep.frac_catch_within_1 == float(passes)
+    assert aggregate_scores([rep])["frac_catch_within_1"] == float(passes)
+
+
+@pytest.mark.parametrize(("pred_end", "passes"), [(9.0, True), (8.99, False)])
+def test_run_iou_passes_at_exactly_the_threshold(pred_end, passes):
+    labels = VideoLabels(video="v.mp4", runs=[LabeledRun(start_t=0, end_t=10, catches=12)])
+    rep = evaluate_session(session(runs=[run(0, pred_end, 12)]), labels)
+    assert rep.matches[0].iou == pytest.approx(pred_end / 10)
+    assert rep.frac_runs_iou90 == float(passes)
+    assert aggregate_scores([rep])["frac_runs_iou90"] == float(passes)
+
+
+@pytest.mark.parametrize(("predicted", "labeled", "counts", "precision", "recall"), [
+    ([6.0, 30.0], [6.3, 12.0], (1, 1, 1), 0.5, 0.5),
+    ([6.0, 30.0, 40.0], [6.3], (1, 2, 0), 1 / 3, 1.0),
+], ids=["one_tp_fp_fn", "asymmetric"])
+def test_aggregate_drop_scores(predicted, labeled, counts, precision, recall):
+    sr = session(runs=[run(1, 6, 12)], drops=predicted)
+    labels = VideoLabels(video="v.mp4", runs=[LabeledRun(start_t=1, end_t=6, catches=12)],
+                         drops=labeled)
+    scores = aggregate_scores([evaluate_session(sr, labels)])
+    assert (scores["drop_tp"], scores["drop_fp"], scores["drop_fn"]) == counts
+    assert scores["drop_precision"] == pytest.approx(precision)
+    assert scores["drop_recall"] == pytest.approx(recall)
+
+
+def test_aggregate_scores_do_not_claim_perfect_empty_sets():
+    scores = aggregate_scores([evaluate_session(session(), VideoLabels(video="v.mp4"))])
+    assert scores["frac_runs_iou90"] is None and scores["frac_catch_within_1"] is None
+    assert scores["drop_precision"] is None and scores["drop_recall"] is None

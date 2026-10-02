@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from juggletrack import SCHEMA_VERSION
 from juggletrack.analyze import AnalyzeConfig, analyze_detections
 from juggletrack.eval.labels import VideoLabels
-from juggletrack.eval.metrics import EvalReport, evaluate_session
+from juggletrack.eval.metrics import EvalReport, aggregate_scores, evaluate_session
 from juggletrack.pipeline.offline import load_detections_jsonl
 from juggletrack.pipeline.realtime import RealtimeAnalyzer, RealtimeConfig
 from juggletrack.types import Detection
@@ -120,22 +120,12 @@ def _replay(dets: list[Detection], clip: BenchmarkClip, cfg: RealtimeConfig) -> 
 
 
 def _summarize(reports: list[EvalReport]) -> dict:
-    n = sum(r.n_labeled_runs for r in reports)
-    catch_ok = sum(m.catch_error <= 1 for r in reports for m in r.matches)
-    iou_ok = sum(m.iou >= 0.9 for r in reports for m in r.matches)
-    tp = sum(r.drop_tp for r in reports)
-    fp = sum(r.drop_fp for r in reports)
-    fn = sum(r.drop_fn for r in reports)
     return {
-        "n_videos": len(reports), "n_labeled_runs": n,
+        "n_videos": len(reports), "n_labeled_runs": sum(r.n_labeled_runs for r in reports),
         "n_pred_runs": sum(r.n_pred_runs for r in reports),
         "unmatched_labeled": sum(len(r.unmatched_labeled) for r in reports),
         "unmatched_pred": sum(len(r.unmatched_pred) for r in reports),
-        "frac_catch_within_1": catch_ok / n if n else None,
-        "frac_runs_iou90": iou_ok / n if n else None,
-        "drop_tp": tp, "drop_fp": fp, "drop_fn": fn,
-        "drop_precision": tp / (tp + fp) if tp + fp else None,
-        "drop_recall": tp / (tp + fn) if tp + fn else None,
+        **aggregate_scores(reports),
     }
 
 
@@ -181,7 +171,7 @@ def run_benchmark(
             "video": clip.video, "label_source": clip.label_source,
             "detector": clip.detector, "fps": clip.fps, "frame_count": clip.frame_count,
             "detections_sha256": _sha256(det_path), "labels_sha256": _sha256(label_path),
-            "offline": report.model_dump(mode="json"),
+            "offline": {**report.model_dump(mode="json"), **aggregate_scores([report])},
             "offline_catches": sum(r.catches for r in session.runs),
             "labeled_catches": sum(r.catches for r in labels.runs),
         }

@@ -64,7 +64,7 @@ aliases. A report cannot replace its manifest, configuration, labels or detectio
 Aggregate event scores use **all labeled runs** as the denominator. An
 unmatched labeled run is a failure. Extra predicted runs and drop TP/FP/FN are
 reported explicitly. Metrics with no applicable observations are `null` in the
-aggregate, not a claimed perfect score.
+aggregate and in each clip's offline scores, not a claimed perfect score.
 
 Realtime mode feeds every frame, including empty frames, and flushes the tail.
 It feeds the clock the detections were recorded with: a frame with detections

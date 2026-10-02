@@ -6,6 +6,10 @@ from pydantic import BaseModel, Field
 from juggletrack.eval.labels import VideoLabels
 from juggletrack.types import SessionResult
 
+# Spec §6 pass criteria for a matched run, shared by per-video and aggregate scores.
+RUN_IOU_PASS = 0.9
+CATCH_ERROR_PASS = 1
+
 
 def temporal_iou(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
     inter = max(0.0, min(a_end, b_end) - max(a_start, b_start))
@@ -65,8 +69,8 @@ def evaluate_session(
         ))
 
     n_l = len(labels.runs)
-    frac_iou = sum(1 for m in matches if m.iou >= 0.9) / n_l if n_l else 1.0
-    frac_catch = sum(1 for m in matches if m.catch_error <= 1) / n_l if n_l else 1.0
+    frac_iou = sum(1 for m in matches if m.iou >= RUN_IOU_PASS) / n_l if n_l else 1.0
+    frac_catch = sum(1 for m in matches if m.catch_error <= CATCH_ERROR_PASS) / n_l if n_l else 1.0
 
     pred_drops = sorted(d.t for d in session.drops)
     label_drops = sorted(labels.drops)
@@ -103,3 +107,24 @@ def evaluate_session(
         drop_precision=tp / (tp + fp) if (tp + fp) else 1.0,
         drop_recall=tp / (tp + fn) if (tp + fn) else 1.0,
     )
+
+
+def aggregate_scores(reports: list[EvalReport]) -> dict:
+    """Pool reports over all labeled runs and drops.
+
+    Unlike EvalReport, which scores an empty set as 1.0, a score with no
+    applicable observations is None rather than a claimed perfect result.
+    """
+    n = sum(r.n_labeled_runs for r in reports)
+    catch_ok = sum(m.catch_error <= CATCH_ERROR_PASS for r in reports for m in r.matches)
+    iou_ok = sum(m.iou >= RUN_IOU_PASS for r in reports for m in r.matches)
+    tp = sum(r.drop_tp for r in reports)
+    fp = sum(r.drop_fp for r in reports)
+    fn = sum(r.drop_fn for r in reports)
+    return {
+        "frac_catch_within_1": catch_ok / n if n else None,
+        "frac_runs_iou90": iou_ok / n if n else None,
+        "drop_tp": tp, "drop_fp": fp, "drop_fn": fn,
+        "drop_precision": tp / (tp + fp) if tp + fp else None,
+        "drop_recall": tp / (tp + fn) if tp + fn else None,
+    }

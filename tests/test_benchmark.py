@@ -46,6 +46,17 @@ def test_benchmark_resolves_paths_and_penalizes_missing_runs(benchmark_manifest,
     assert len(result["clips"][0]["detections_sha256"]) == 64
 
 
+def test_benchmark_clip_and_summary_agree_on_empty_drop_sets(benchmark_manifest):
+    from juggletrack.eval.benchmark import run_benchmark
+
+    result = run_benchmark(benchmark_manifest)
+    offline, summary = result["clips"][0]["offline"], result["summary"]
+    assert offline["drop_tp"] + offline["drop_fp"] + offline["drop_fn"] == 0
+    for key in ("drop_precision", "drop_recall"):
+        assert offline[key] is None and summary[key] is None
+    assert offline["frac_catch_within_1"] == summary["frac_catch_within_1"] == 0.5
+
+
 def test_benchmark_records_configuration_and_changed_inputs(benchmark_manifest):
     from juggletrack.analyze import AnalyzeConfig
     from juggletrack.eval.benchmark import run_benchmark
