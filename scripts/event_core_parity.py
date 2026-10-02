@@ -126,9 +126,7 @@ def snapshot(args: argparse.Namespace) -> int:
             print(f"skip  n={len(dets):7d} {rel}", flush=True)
             continue
         with warnings.catch_warnings():
-            # RankWarning from degenerate fits is part of today's behaviour, not
-            # a parity signal; silence it so the report stays readable.
-            warnings.simplefilter("ignore")
+            warnings.simplefilter("ignore", np.exceptions.RankWarning)
             row = {"input_sha256": _sha256(raw), "n": len(dets), **_offline(dets)}
             offline[rel] = row
             print(f"{row['seconds']:8.3f}s n={len(dets):7d} arcs={row['arcs']:5d} {rel}", flush=True)
