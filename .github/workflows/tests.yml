@@ -1,7 +1,10 @@
 name: Tests
 
 on:
+  # pull_request already covers PR branches, so pushes run only for main.
+  # It has no branch filter because PRs here stack on non-main bases.
   push:
+    branches: [main]
   pull_request:
 
 permissions:
