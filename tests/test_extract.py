@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from juggletrack.arcs import extract
 from juggletrack.arcs.extract import (
     _EM_TIME_MARGIN,
     _em_assign_refit,
@@ -1013,3 +1014,38 @@ def test_em_and_merge_match_reference_on_arbitrary_spans(cloud, resid_tol):
         arcs = _window_arcs(arr, 25, seed)
         assert _em_assign_refit(arr, arcs, resid_tol) == _ref_em_assign_refit(arr, arcs, resid_tol)
         assert _merge_pass(arr, arcs, resid_tol) == _ref_merge_pass(arr, arcs, resid_tol)
+
+
+@pytest.mark.parametrize("cloud", ["clean", "noisy", "drop"])
+def test_fast_paths_spare_most_fit_arc_calls(cloud, monkeypatch):
+    """The closed-form fast paths are the speedup, and every parity test still
+    passes when they silently stop firing, so pin how often fit_arc runs
+    against the frozen references, which call it at every step."""
+    calls = 0
+    real = extract.fit_arc
+
+    def counting(arr, arc_id=-1):
+        nonlocal calls
+        calls += 1
+        return real(arr, arc_id)
+
+    monkeypatch.setattr(extract, "fit_arc", counting)
+    monkeypatch.setitem(globals(), "fit_arc", counting)
+
+    def fit_arc_calls(fn, *args):
+        nonlocal calls
+        calls = 0
+        fn(*args)
+        return calls
+
+    arr = _sorted_points(_CLOUDS[cloud]())
+    frags = _link_fragments(arr, 0.18, 0.08)
+    split = sum(fit_arc_calls(_split_ballistic, arr, f, 0.02) for f in frags)
+    split_ref = sum(fit_arc_calls(_ref_split_ballistic, arr, f, 0.02) for f in frags)
+    assert split <= split_ref / 20, (split, split_ref)
+
+    arcs = [real(arr[p]) for f in frags for p in _split_ballistic(arr, f, 0.02)]
+    arcs = _em_assign_refit(arr, arcs, 0.02)
+    merge = fit_arc_calls(_merge_pass, arr, arcs, 0.02)
+    merge_ref = fit_arc_calls(_ref_merge_pass, arr, arcs, 0.02)
+    assert merge <= merge_ref / 5, (merge, merge_ref)
