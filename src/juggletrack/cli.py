@@ -65,9 +65,15 @@ def analyze(
         "detections only), 'all' (every raw detection), or 'none'",
     ),
 ) -> None:
+    from pydantic import ValidationError
+
     from juggletrack.analyze import AnalyzeConfig
     from juggletrack.pipeline.offline import analyze_video, load_detections_jsonl
 
+    try:
+        config = AnalyzeConfig(link_max_dist=link_max_dist)
+    except ValidationError as exc:
+        raise typer.BadParameter(exc.errors()[0]["msg"], param_hint="--link-max-dist") from exc
     out_dir = out or Path("outputs") / video.stem
     if detections is not None:
         from juggletrack.detect.fake import FakeDetector
@@ -83,7 +89,7 @@ def analyze(
     session = analyze_video(
         video, detector,
         out_dir=out_dir, save_intermediates=save_intermediates, stride=stride,
-        config=AnalyzeConfig(link_max_dist=link_max_dist),
+        config=config,
     )
 
     if overlay:

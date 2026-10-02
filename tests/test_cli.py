@@ -92,6 +92,23 @@ def test_analyze_no_overlay(workspace):
     assert not (out / "overlay.mp4").exists()
 
 
+@pytest.mark.parametrize("value", ["inf", "nan"])
+def test_analyze_rejects_non_finite_link_distance_as_usage_error(workspace, value):
+    from juggletrack.cli import app
+
+    _, video, dets, tmp = workspace
+    out = tmp / "out_nonfinite"
+    result = runner.invoke(app, [
+        "analyze", str(video), "--out", str(out), "--detections", str(dets),
+        "--link-max-dist", value,
+    ])
+    output = plain(result.output)
+    assert result.exit_code == 2, output
+    assert re.search(r"Invalid value for '?--link-max-dist'?: Input should be a finite number",
+                     output), output
+    assert not out.exists()
+
+
 def test_analyze_dots_option_passthrough(workspace):
     from juggletrack.cli import app
 
