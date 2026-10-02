@@ -113,8 +113,10 @@ uv run --no-sync python scripts/event_core_parity.py compare before.json after.j
 
 `compare` prints `PARITY OK` and the speed ratio, or names each session whose
 digest or input changed and exits nonzero. Each snapshot records the source
-hash of the package it imported, so a baseline can come from an older checkout
-on `PYTHONPATH`. Digests depend on the platform's floating point and numpy
+hash of the package it imported and the git commit of the checkout that holds
+it, so a baseline can come from an older checkout on `PYTHONPATH`. When both
+snapshots record the same source hash, `compare` says so: matching digests then
+show only that the run repeats. Digests depend on the platform's floating point and numpy
 build. Never commit them as golden values or compare snapshots from different
 machines. Realtime digests also depend on the harness version: snapshots taken
 before the harness used the recorded clock do not match current ones, so take

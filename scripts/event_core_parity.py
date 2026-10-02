@@ -41,10 +41,13 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _git_head() -> str:
+def _git_head(package_dir: Path) -> str:
+    """HEAD of the checkout holding the imported package, which differs from
+    the cwd's when a baseline runs an older checkout on PYTHONPATH."""
     try:
         return subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
+            ["git", "-C", str(package_dir), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
@@ -148,10 +151,11 @@ def snapshot(args: argparse.Namespace) -> int:
 
     # Stamp the code identity before analysing: the run can take minutes, and
     # the checkout may move on while it does.
+    package_dir = Path(juggletrack.__file__).parent
     meta = {
-        "package": str(Path(juggletrack.__file__).parent),
+        "package": str(package_dir),
         "implementation_sha256": _implementation_sha256(),
-        "git_head": _git_head(),
+        "git_head": _git_head(package_dir),
         "python": sys.version.split()[0],
         "numpy": np.__version__,
         "platform": platform.platform(),
@@ -221,8 +225,8 @@ def _compare_section(name: str, base: dict, new: dict, time_key: str) -> int:
 def compare(args: argparse.Namespace) -> int:
     base = json.loads(Path(args.base).read_text())
     new = json.loads(Path(args.new).read_text())
-    print("implementation " + " -> ".join(
-        s["meta"].get("implementation_sha256", "unrecorded")[:12] for s in (base, new)))
+    impls = [s["meta"].get("implementation_sha256", "unrecorded") for s in (base, new)]
+    print("implementation " + " -> ".join(i[:12] for i in impls))
     for key in ("python", "numpy", "platform"):
         if base["meta"][key] != new["meta"][key]:
             print(f"warning: {key} differs ({base['meta'][key]} vs {new['meta'][key]}); "
@@ -235,6 +239,9 @@ def compare(args: argparse.Namespace) -> int:
             print(f"realtime: {rel} cycle p50 {b['analysis_ms_p50']:.1f} -> "
                   f"{n['analysis_ms_p50']:.1f}ms, p95 {b['analysis_ms_p95']:.1f} -> "
                   f"{n['analysis_ms_p95']:.1f}ms")
+    if impls[0] == impls[1] != "unrecorded":
+        print("note: both snapshots ran the same implementation, so this shows only "
+              "that the run repeats, not that a change preserved output")
     print("PARITY OK" if failures == 0 else f"PARITY FAILED ({failures})")
     return 0 if failures == 0 else 1
 

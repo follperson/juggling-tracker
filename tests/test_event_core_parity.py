@@ -16,9 +16,10 @@ from juggletrack.types import Detection
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "event_core_parity.py"
 
 
-def _parity(*args):
+def _parity(*args, cwd=None):
     return subprocess.run(
-        [sys.executable, str(_SCRIPT), *map(str, args)], capture_output=True, text=True,
+        [sys.executable, str(_SCRIPT), *map(str, args)],
+        capture_output=True, text=True, cwd=cwd,
     )
 
 
@@ -62,12 +63,40 @@ def test_snapshot_writes_a_fresh_path_and_leaves_inputs_alone(tmp_path):
     before = a.read_bytes()
     out = tmp_path / "snap.json"
 
-    proc = _parity("snapshot", out, "--root", root, "--realtime", "a/")
+    # Run outside any git checkout: git_head must still name the checkout
+    # that holds the imported package.
+    proc = _parity("snapshot", out, "--root", root, "--realtime", "a/", cwd=tmp_path)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     snap = json.loads(out.read_text())
     assert set(snap["offline"]) == set(snap["realtime"]) == {"a/detections.jsonl"}
     assert a.read_bytes() == before
+    package_head = subprocess.run(
+        ["git", "-C", snap["meta"]["package"], "rev-parse", "HEAD"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    assert snap["meta"]["git_head"] == (package_head or "unknown")
+
+
+def _snapshot_file(path, implementation):
+    meta = {"implementation_sha256": implementation, "python": "3", "numpy": "2",
+            "platform": "p"}
+    row = {"input_sha256": "i", "digest": "d", "seconds": 1.0, "arcs": 1, "runs": 1,
+           "catches": 1, "drops": 0}
+    path.write_text(json.dumps({"meta": meta, "offline": {"s": row}, "realtime": {}}))
+    return path
+
+
+@pytest.mark.parametrize("same", [True, False])
+def test_compare_says_when_both_snapshots_ran_the_same_implementation(same, tmp_path):
+    base = _snapshot_file(tmp_path / "base.json", "a" * 64)
+    new = _snapshot_file(tmp_path / "new.json", "a" * 64 if same else "b" * 64)
+
+    proc = _parity("compare", base, new)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "PARITY OK" in proc.stdout
+    assert ("same implementation" in proc.stdout) == same
 
 
 def _load_script():
