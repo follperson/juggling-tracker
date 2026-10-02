@@ -27,7 +27,8 @@ def _resolve_model(model: str | None) -> str:
     try:
         return resolve_model(model)
     except FileNotFoundError as exc:
-        raise typer.BadParameter(str(exc), param_hint="--model") from exc
+        # Only the default can be missing: explicit names go to Ultralytics.
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _check_report_output(out: Path, inputs: list[Path]) -> None:

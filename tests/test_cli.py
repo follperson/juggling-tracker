@@ -286,7 +286,40 @@ def test_inference_commands_explain_missing_default_model(workspace, monkeypatch
     monkeypatch.chdir(tmp)
     monkeypatch.delenv("JUGGLETRACK_MODEL", raising=False)
     result = runner.invoke(app, [command, str(video)])
-    output = plain(result.output)
+    output = " ".join(plain(result.output).replace("│", " ").split())
     assert result.exit_code == 2, output
+    # No --model was passed, so the error must not blame that option.
+    assert not re.search(r"Invalid value for '?--model", output)
+    assert "relative to the current directory" in output
     assert "--model" in output
     assert "JUGGLETRACK_MODEL" in output
+
+
+@pytest.mark.parametrize(("args", "environment", "expected"), [
+    (["--model", "x.pt"], None, "x.pt"),
+    ([], "y.pt", "y.pt"),
+    (["--model", "x.pt"], "y.pt", "x.pt"),
+])
+def test_analyze_forwards_selected_model_to_detector(
+    workspace, monkeypatch, args, environment, expected,
+):
+    from juggletrack.cli import app
+    from juggletrack.detect.fake import FakeDetector
+
+    sim, video, _, tmp = workspace
+    captured = {}
+
+    def capturing_detector(model_path, **kwargs):
+        captured["model_path"] = model_path
+        return FakeDetector(sim.detections)
+
+    monkeypatch.setattr("juggletrack.detect.yolo.YOLODetector", capturing_detector)
+    monkeypatch.chdir(tmp)
+    monkeypatch.delenv("JUGGLETRACK_MODEL", raising=False)
+    if environment is not None:
+        monkeypatch.setenv("JUGGLETRACK_MODEL", environment)
+    result = runner.invoke(app, [
+        "analyze", str(video), "--out", str(tmp / "out"), "--no-overlay", *args,
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["model_path"] == expected

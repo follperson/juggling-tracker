@@ -19,7 +19,9 @@ def resolve_model(model: str | None = None) -> str:
     if DEFAULT_MODEL.is_file():
         return str(DEFAULT_MODEL)
     raise FileNotFoundError(
-        f"Juggling weights not found at {DEFAULT_MODEL}. "
-        "Pass --model /path/to/best.pt or set JUGGLETRACK_MODEL. "
+        f"No model selected and default weights not found: looked for "
+        f"{DEFAULT_MODEL.resolve()} ({DEFAULT_MODEL} relative to the current "
+        f"directory {Path.cwd()}). Pass --model /path/to/best.pt, set "
+        "JUGGLETRACK_MODEL, or run from the repository root. "
         "For a stock-detector experiment, explicitly pass --model yolo11n.pt."
     )
