@@ -208,15 +208,26 @@ def _link_fragments(arr: np.ndarray, max_dt: float, max_dist: float) -> list[lis
     return [f for f in done if len(f) >= 4]
 
 
-# A closed-form fit statistic must clear its threshold by this much before it
-# may stand in for fit_arc; anything closer is re-decided by fit_arc itself.
+# A closed-form fit statistic must clear its threshold by this much per unit of
+# coordinate scale (see _exact_margin) before it may stand in for fit_arc;
+# anything closer is re-decided by fit_arc itself.
 _EXACT_MARGIN = 1e-7
 # Normal equations whose determinant is below this fraction of the product of
 # their diagonal (det of the column-normalized Gram matrix, in (0, 1]) are too
-# ill-conditioned to trust the closed-form solve. Measured: the closed-form
-# statistics stay within 3e-14 of fit_arc's above 1e-6 but drift to 4e-7 by
-# 1e-10, and real-session fits sit at 3e-6 and up.
+# ill-conditioned to trust the closed-form solve. Measured per unit of
+# coordinate scale: the closed-form statistics stay within 3e-10 of fit_arc's
+# above 1e-6 but reach 4e-7 by 1e-9, and real-session fits sit at 3e-6 and up.
 _MIN_REL_DET = 1e-6
+
+
+def _exact_margin(pts: np.ndarray) -> float:
+    """_EXACT_MARGIN for statistics of ``pts`` or any subset of it. Both solves
+    round relative to the coordinates, so their disagreement grows with the
+    largest |x| or |y|, and so does the margin. It assumes distinct timestamps
+    at least a microsecond apart and nonzero confidences within about 1e7 of
+    each other: fuzzing against fit_arc found disagreements only outside those
+    bounds, where neither solve is accurate."""
+    return _EXACT_MARGIN * float(np.abs(pts[:, 1:3]).max(initial=1.0))
 
 
 class _Moments:
@@ -315,17 +326,19 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
     Fast path: running weighted moments of the current piece give its
     least-squares fit in closed form, so most steps skip fit_arc. That fit
     only ever decides "keep extending", and only when its y-rmse and max
-    x-residual both clear their thresholds by ``_EXACT_MARGIN``; every other
-    step, including every split, is decided by fit_arc as before. The y side
-    is safe even for an imperfect solve, because any parabola's rmse is at
-    least the least-squares minimum fit_arc finds; the x side relies on the
-    well-conditioned 2x2 solve plus the margin. Requires ``idxs`` in strictly
+    x-residual both clear their thresholds by ``_exact_margin``; every other
+    step, including every split, is decided by fit_arc as before. On the y
+    side an imperfect solve can only overstate the rmse, since no parabola
+    beats the least-squares minimum, and polyfit reaches that minimum to well
+    within the margin under ``_exact_margin``'s assumptions; the x side relies
+    on the well-conditioned 2x2 solve plus the margin. Requires ``idxs`` in strictly
     increasing t (``_link_fragments`` links only forward in time), so the
     piece's first point is fit_arc's ``t_start``.
     """
     pieces: list[list[int]] = []
     cur: list[int] = []
     rows = arr[idxs]
+    margin = _exact_margin(rows)
     for k, (i, row) in enumerate(zip(idxs, rows.tolist())):
         if not cur:
             mom = _Moments(row[0])
@@ -336,8 +349,8 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
             fast = mom.fit_residuals(rows[k + 1 - len(cur) : k + 1])
             if (
                 fast is not None
-                and fast[0] <= resid_tol - _EXACT_MARGIN
-                and np.abs(fast[1]).max() <= 2 * resid_tol - _EXACT_MARGIN
+                and fast[0] <= resid_tol - margin
+                and np.abs(fast[1]).max() <= 2 * resid_tol - margin
             ):
                 continue
             arc = fit_arc(arr[cur])
@@ -417,13 +430,14 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
     rows come from two slices instead of a mask over every point.
 
     A union whose closed-form least-squares fit (``_Moments``) misses either
-    acceptance bound by more than ``_EXACT_MARGIN`` is rejected without
+    acceptance bound by more than ``_exact_margin`` is rejected without
     running fit_arc; every other union goes through fit_arc's acceptance test
     unchanged. Rejecting on y-rmse rests on the solve being accurate, which
     ``_MIN_REL_DET`` guards: duplicate timestamps leaving fewer than three
     distinct times fall below it and keep polyfit's own handling.
     """
     arcs = sorted(arcs, key=lambda a: a.t_start)
+    margin = _exact_margin(arr)
     t = arr[:, 0]
     lo = np.searchsorted(t, [a.t_start for a in arcs], side="left").tolist()
     hi = np.searchsorted(t, [a.t_end for a in arcs], side="right").tolist()
@@ -460,8 +474,8 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
                 continue
             fast = _Moments.of(pts).fit_residuals(pts)
             if fast is not None and (
-                fast[0] > resid_tol + _EXACT_MARGIN
-                or math.sqrt(float(np.mean(fast[1] ** 2))) > 2 * resid_tol + _EXACT_MARGIN
+                fast[0] > resid_tol + margin
+                or math.sqrt(float(np.mean(fast[1] ** 2))) > 2 * resid_tol + margin
             ):
                 continue
             try:

@@ -966,9 +966,7 @@ def _light_head_union(seed, *, gap, offset):
 
 
 @pytest.mark.parametrize(("gap", "offset"), [
-    # relative determinant ~3.5e-6, y a million units from the origin
-    pytest.param(0.6, 1e6, marks=pytest.mark.xfail(
-        strict=True, reason="_EXACT_MARGIN is absolute, not scaled to the coordinates")),
+    (0.6, 1e6),  # relative determinant ~3.5e-6, y a million units from the origin
     (3.5, 0.0),  # relative determinant ~3e-10, below _MIN_REL_DET
 ])
 def test_merge_matches_reference_at_y_ties_on_ill_conditioned_unions(gap, offset):
