@@ -24,6 +24,7 @@ def test_pinned_junk_cohort_is_flagged():
 
 
 def test_alternating_cascade_is_not_flagged():
+    """Every term rejects it: signs alternate, x-origins don't march, x-ranges overlap."""
     arcs = [
         _arc(0.0, 1.1, bx=0.16, cx=0.41),
         _arc(0.45, 1.1, bx=-0.16, cx=0.59),
