@@ -11,7 +11,7 @@ from juggletrack.types import Arc
 # near-vertical throws (e.g. a siteswap-4 "columns" pattern, or multiplex
 # throws) from having their sign flip on measurement noise alone.
 DX_MIN = 0.03
-DOM_T = 0.99
+DOM_T = 0.99   # dom2 >= this: every meaningful arc drifts the same direction
 MONO_T = 0.9   # mono >= this: throw x-origins march monotonically with index
 
 
@@ -39,8 +39,11 @@ def is_drift_cohort(arcs: list[Arc]) -> bool:
 
     No alternation term is needed. ``dom2 >= DOM_T`` allows one minority
     sign only per 200 meaningful arcs, and a sweep of 200 meaningful arcs
-    spans at least ``200 * DX_MIN`` = 6 frame widths. So inside the frame,
-    every meaningful arc of a rejected run shares a sign.
+    spans at least ``200 * DX_MIN`` = 6 frame widths. ``_sweeps`` reads
+    fitted endpoints (``cx`` and ``cx + dx``), which can sit slightly outside
+    [0, 1], but nowhere near that far. So inside the frame, every meaningful
+    arc of a rejected run shares a sign. The 200 and 6 follow from DOM_T and
+    DX_MIN; test_a_minority_sign_cannot_fit_in_one_frame_width guards them.
     """
     ordered = sorted(arcs, key=lambda a: a.t_start)
     dx = np.array([a.bx * a.duration() for a in ordered])
