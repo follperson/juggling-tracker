@@ -115,13 +115,12 @@ def _events_from_arcs(
         gap_factor=cfg.gap_factor, min_arcs=cfg.min_arcs,
     )
 
-    # Drift-cohort run gate (spec §4 validator, turn-4 cascade-structure-gate
-    # bake-off clause A): a self-consistent slow-drift junk cohort can pass
-    # every arc-level check (each arc individually looks like a plausible
-    # ballistic flight) yet be structurally not-juggling at the RUN level --
-    # unidirectional, monotonically marching across the frame, never
-    # alternating hands. Reject the run outright; its arcs stay in `arcs`
-    # (and in any other surviving run's arc_ids) untouched.
+    # Drift-cohort run gate (spec §4 validator): a self-consistent slow-drift
+    # junk cohort can pass every arc-level check (each arc individually looks
+    # like a plausible ballistic flight) yet be one object drifting across the
+    # frame rather than juggling. Reject such a run outright; the conditions
+    # that define the cohort are in is_drift_cohort's docstring. The run's
+    # arcs stay in `arcs` (and in any other surviving run's arc_ids) untouched.
     #
     # This must run BEFORE detect_drops: a rejected run's arcs can still look
     # like a floor-descending "drop" in isolation (e.g. a drift path that
