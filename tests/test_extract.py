@@ -610,9 +610,8 @@ def test_dedup_parallel_arcs_validates_knobs():
     assert dedup_parallel_arcs([a], overlap_frac=1.0, traj_tol=0.0) == [a]
 
 
-# Frozen copies of the extraction stages as they were before the fast paths
-# in extract.py. Those paths must reproduce these exactly (Arc == compares
-# every float), with fit_arc still the only producer of a returned Arc.
+# Frozen copies of the stages before their closed-form fast paths. The fast
+# paths must reproduce them exactly (Arc == compares every float).
 
 
 def _ref_split_ballistic(arr, idxs, resid_tol):
@@ -705,13 +704,11 @@ def _ref_merge_pass(arr, arcs, resid_tol):
 
 
 def _sorted_points(dets):
-    """The (t, x, y, confidence) array exactly as extract_arcs orders it."""
     arr = points_array(dets)
     return arr[np.lexsort((arr[:, 3], arr[:, 2], arr[:, 1], arr[:, 0]))]
 
 
 def _crossing_cloud():
-    """Two balls on one y-parabola with opposite x-velocities, crossing at t=0.5."""
     dets = []
     for f in range(31):
         t = f / 30.0
@@ -722,7 +719,6 @@ def _crossing_cloud():
 
 
 def _duplicate_box_cloud():
-    """One to three jittered boxes per detection in the same frame, as dense detectors emit."""
     rng = np.random.default_rng(7)
     base = simulate_cascade(n_throws=8, fps=30.0, noise=0.002, seed=7).detections
     dets = []
@@ -737,7 +733,6 @@ def _duplicate_box_cloud():
 
 
 def _low_confidence_cloud():
-    """Mostly tiny or zero weights: weighted fits are dominated by a few points."""
     rng = np.random.default_rng(11)
     base = simulate_cascade(n_throws=10, fps=30.0, noise=0.004, dropout=0.1, seed=11).detections
     conf = rng.choice([0.0, 1e-6, 1e-3, 0.02, 0.3, 1.0], size=len(base),
@@ -746,7 +741,6 @@ def _low_confidence_cloud():
 
 
 def _random_cloud():
-    """Uniform junk on a 30 fps grid, several points sharing most timestamps."""
     rng = np.random.default_rng(13)
     frames = rng.integers(0, 120, size=500)
     return [
@@ -771,8 +765,6 @@ _CLOUDS = {
 
 
 def _window_arcs(arr, n, seed):
-    """Arcs fit to random time windows of ``arr``: nested, overlapping, touching
-    and disjoint spans, many mixing points from several balls."""
     rng = np.random.default_rng(seed)
     t = arr[:, 0]
     arcs = []
@@ -785,8 +777,6 @@ def _window_arcs(arr, n, seed):
 
 
 def _fragment(seed, n=24, y_noise=0.004, x_noise=0.004, weights=(0.05, 1.0), switch_at=None):
-    """One ball's points in strictly increasing t (as _link_fragments emits them),
-    optionally jumping onto a second ball's x-line at ``switch_at`` (a crossing)."""
     rng = np.random.default_rng(seed)
     t = 10.0 + np.cumsum(rng.uniform(1 / 60, 1 / 12, n))
     dt = t - t[0]
@@ -828,7 +818,6 @@ def test_split_matches_reference_on_synthetic_fragments(resid_tol):
 
 
 def _prefix_stats(arr):
-    """fit_arc's (rmse, max |x residual|) of every prefix of ``arr`` with >= 4 points."""
     out = []
     for k in range(4, len(arr) + 1):
         arc = fit_arc(arr[:k])
@@ -838,11 +827,8 @@ def _prefix_stats(arr):
 
 @pytest.mark.parametrize("stat", ["y-rmse", "x-max"])
 def test_split_matches_reference_when_a_statistic_ties_its_threshold(stat):
-    """Set resid_tol so the reference statistic of one prefix lands exactly on
-    its threshold (rmse <= resid_tol keeps, max |x residual| <= 2*resid_tol
-    keeps), then one ulp either side. The closed-form statistic differs from
-    fit_arc's in the last bits, so only the margin plus the fit_arc fallback
-    can keep these decisions identical."""
+    """The closed-form statistic differs from fit_arc's in the last bits, so at
+    a tie and one ulp either side only the margin keeps decisions identical."""
     for seed in range(30):
         if stat == "y-rmse":
             arr = _fragment(500 + seed, y_noise=0.005, x_noise=1e-4)
@@ -862,9 +848,8 @@ def test_split_matches_reference_when_a_statistic_ties_its_threshold(stat):
 
 @pytest.mark.parametrize("seed", range(20))
 def test_running_moments_reproduce_fit_arc_on_every_prefix(seed):
-    """The split fast path keeps a piece on the closed-form fit alone, and a
-    wrong x line can have a smaller max residual than fit_arc's, so the running
-    sums must reproduce fit_arc's statistics, not merely bound them."""
+    """A wrong x line can have a smaller max residual than fit_arc's, so the
+    running sums must reproduce fit_arc's statistics, not merely bound them."""
     rng = np.random.default_rng(seed)
     n = 40
     t = 3.0 + np.cumsum(rng.uniform(1 / 60, 1 / 12, n))
@@ -885,15 +870,13 @@ def test_running_moments_reproduce_fit_arc_on_every_prefix(seed):
         np.testing.assert_allclose(np.abs(fast[1]), x_residuals(arc, pts), rtol=1e-9, atol=1e-12)
 
 
-def _split_flight(seed, *, y_step, x_step):
+def _split_flight(seed, *, y_step, x_step, overlap):
     """One flight cut into two arcs whose halves disagree by ``y_step`` in y and
-    ``x_step`` in x. Each arc fits its own half almost exactly, so every point
-    passes _merge_pass's keep filter and the union's misfit is the step alone.
-    Even seeds leave a gap between the halves, odd seeds overlap them."""
+    ``x_step`` in x, so the union's misfit is the step alone."""
     rng = np.random.default_rng(seed)
     t = 20.0 + np.arange(28) / 30.0
     cut = 20.45
-    lo_end, hi_start = (cut - 0.04, cut + 0.04) if seed % 2 == 0 else (cut + 0.06, cut - 0.06)
+    lo_end, hi_start = (cut + 0.06, cut - 0.06) if overlap else (cut - 0.04, cut + 0.04)
     half_a, half_b = t <= lo_end, t >= hi_start
     dt = t - t[0]
     y = 0.7 - 1.6 * dt + 4.0 * dt**2 + rng.normal(0, 1e-4, len(t))
@@ -908,7 +891,6 @@ def _split_flight(seed, *, y_step, x_step):
 
 
 def _union_stats(arr, arcs):
-    """fit_arc's (rmse, unweighted x-rmse) of the union _merge_pass forms from two arcs."""
     a, b = arcs
     t = arr[:, 0]
     pts = arr[((t >= a.t_start) & (t <= a.t_end)) | ((t >= b.t_start) & (t <= b.t_end))]
@@ -919,16 +901,15 @@ def _union_stats(arr, arcs):
 
 @pytest.mark.parametrize("stat", ["y-rmse", "x-rmse"])
 def test_merge_matches_reference_when_a_statistic_ties_its_threshold(stat):
-    """Set resid_tol so the union's reference statistic lands exactly on its
-    acceptance bound (rmse <= resid_tol, x-rmse <= 2*resid_tol), then one ulp
-    either side. Only the margin keeps the closed-form pre-reject from
-    rejecting a union fit_arc would accept."""
+    """At a tie and one ulp either side, only the margin keeps the closed-form
+    pre-reject from dropping a union fit_arc would accept."""
     for seed in range(30):
+        overlap = seed % 2 == 1
         if stat == "y-rmse":
-            arr, arcs = _split_flight(seed, y_step=0.01, x_step=0.0)
+            arr, arcs = _split_flight(seed, y_step=0.01, x_step=0.0, overlap=overlap)
             tie = _union_stats(arr, arcs)[0]
         else:
-            arr, arcs = _split_flight(seed, y_step=0.0, x_step=0.02)
+            arr, arcs = _split_flight(seed, y_step=0.0, x_step=0.02, overlap=overlap)
             tie = _union_stats(arr, arcs)[1] / 2
         assert len(_ref_merge_pass(arr, arcs, tie)) == 1
         assert len(_ref_merge_pass(arr, arcs, np.nextafter(tie, 0.0))) == 2
@@ -939,10 +920,9 @@ def test_merge_matches_reference_when_a_statistic_ties_its_threshold(stat):
 
 
 def _light_head_union(seed, *, gap, offset):
-    """One flight whose first detection is nearly weightless and ``gap`` seconds
-    ahead of eleven dense ones, cut into two exact arcs whose halves disagree
-    by 5e-6 in y. The union's polynomial basis is centred far from its data,
-    so its normal equations are nearly singular."""
+    """A nearly weightless point ``gap`` seconds ahead of eleven dense ones puts
+    the union's polynomial basis far from its data, so its normal equations
+    are nearly singular."""
     rng = np.random.default_rng(seed)
     t = 20.0 + np.concatenate([[0.0], gap + np.arange(11) / 30.0])
     dt = t - t[0]
@@ -966,14 +946,13 @@ def _light_head_union(seed, *, gap, offset):
 
 
 @pytest.mark.parametrize(("gap", "offset"), [
-    (0.6, 1e6),  # relative determinant ~3.5e-6, y a million units from the origin
-    (3.5, 0.0),  # relative determinant ~3e-10, below _MIN_REL_DET
+    pytest.param(0.6, 1e6, id="far-from-origin"),
+    pytest.param(3.5, 0.0, id="below-det-floor"),
 ])
 def test_merge_matches_reference_at_y_ties_on_ill_conditioned_unions(gap, offset):
-    """Here the closed-form y-rmse overestimates the union's by up to 1e-4 far
-    from the origin and by up to 2e-6 below the conditioning floor. Unless the
-    margin grows with the coordinates and the floor sends near-singular unions
-    to fit_arc, the pre-reject drops a union that fit_arc accepts."""
+    """Far from the origin and below the conditioning floor the closed-form
+    y-rmse overstates the union's, so the margin must grow with the
+    coordinates and near-singular unions must reach fit_arc."""
     for seed in range(20):
         arr, arcs = _light_head_union(seed, gap=gap, offset=offset)
         tie = _union_stats(arr, arcs)[0]
@@ -1063,11 +1042,9 @@ def test_em_and_merge_match_reference_on_arbitrary_spans(cloud, resid_tol):
         assert _merge_pass(arr, arcs, resid_tol) == _ref_merge_pass(arr, arcs, resid_tol)
 
 
-@pytest.mark.parametrize("cloud", ["clean", "noisy", "drop"])
-def test_fast_paths_spare_most_fit_arc_calls(cloud, monkeypatch):
-    """The closed-form fast paths are the speedup, and every parity test still
-    passes when they silently stop firing, so pin how often fit_arc runs
-    against the frozen references, which call it at every step."""
+def _fit_arc_counter(monkeypatch):
+    """Count fit_arc calls in extract and in the frozen copies above:
+    ``count(fn, *args)`` runs fn and returns how many calls it made."""
     calls = 0
     real = extract.fit_arc
 
@@ -1079,20 +1056,56 @@ def test_fast_paths_spare_most_fit_arc_calls(cloud, monkeypatch):
     monkeypatch.setattr(extract, "fit_arc", counting)
     monkeypatch.setitem(globals(), "fit_arc", counting)
 
-    def fit_arc_calls(fn, *args):
+    def count(fn, *args):
         nonlocal calls
         calls = 0
         fn(*args)
         return calls
 
+    return count
+
+
+@pytest.mark.parametrize("cloud", ["clean", "noisy", "drop"])
+def test_fast_paths_spare_most_fit_arc_calls(cloud, monkeypatch):
+    """Every parity test still passes if the fast paths silently stop firing,
+    so pin how often fit_arc runs against the frozen copies, which call it at
+    every step."""
+    count = _fit_arc_counter(monkeypatch)
     arr = _sorted_points(_CLOUDS[cloud]())
     frags = _link_fragments(arr, 0.18, 0.08)
-    split = sum(fit_arc_calls(_split_ballistic, arr, f, 0.02) for f in frags)
-    split_ref = sum(fit_arc_calls(_ref_split_ballistic, arr, f, 0.02) for f in frags)
+    split = sum(count(_split_ballistic, arr, f, 0.02) for f in frags)
+    split_ref = sum(count(_ref_split_ballistic, arr, f, 0.02) for f in frags)
     assert split <= split_ref / 20, (split, split_ref)
 
-    arcs = [real(arr[p]) for f in frags for p in _split_ballistic(arr, f, 0.02)]
+    arcs = [fit_arc(arr[p]) for f in frags for p in _split_ballistic(arr, f, 0.02)]
     arcs = _em_assign_refit(arr, arcs, 0.02)
-    merge = fit_arc_calls(_merge_pass, arr, arcs, 0.02)
-    merge_ref = fit_arc_calls(_ref_merge_pass, arr, arcs, 0.02)
+    merge = count(_merge_pass, arr, arcs, 0.02)
+    merge_ref = count(_ref_merge_pass, arr, arcs, 0.02)
     assert merge <= merge_ref / 5, (merge, merge_ref)
+
+
+@pytest.mark.parametrize("bound", ["weight-ratio", "timestamp-gap"])
+def test_fast_paths_defer_to_fit_arc_outside_their_tested_bounds(bound, monkeypatch):
+    """Beyond these bounds the closed-form solve and fit_arc can disagree, so
+    fit_arc must make every decision there."""
+    count = _fit_arc_counter(monkeypatch)
+    frag = _fragment(700, n=40)
+    cloud = _sorted_points(_CLOUDS["clean"]())
+    if bound == "weight-ratio":
+        frag[20, 3] = 1e-9
+        cloud[len(cloud) // 2, 3] = 1e-9
+    else:
+        frag[20, 0] = frag[19, 0] + 5e-7
+        cloud = np.insert(cloud, 1, cloud[0] + [5e-7, 0.0, 0.0, 0.0], axis=0)
+
+    idxs = list(range(len(frag)))
+    assert count(_split_ballistic, frag, idxs, 0.02) == count(_ref_split_ballistic, frag, idxs, 0.02)
+    assert _split_ballistic(frag, idxs, 0.02) == _ref_split_ballistic(frag, idxs, 0.02)
+
+    arcs = [
+        fit_arc(cloud[p])
+        for f in _link_fragments(cloud, 0.18, 0.08)
+        for p in _ref_split_ballistic(cloud, f, 0.02)
+    ]
+    assert count(_merge_pass, cloud, arcs, 0.02) == count(_ref_merge_pass, cloud, arcs, 0.02)
+    assert _merge_pass(cloud, arcs, 0.02) == _ref_merge_pass(cloud, arcs, 0.02)
