@@ -6,6 +6,7 @@ from juggletrack.arcs.extract import (
     _em_assign_refit,
     _link_fragments,
     _merge_pass,
+    _Moments,
     _split_ballistic,
     dedup_parallel_arcs,
     extract_arcs,
@@ -856,6 +857,31 @@ def test_split_matches_reference_when_a_statistic_ties_its_threshold(stat):
                 _split_ballistic(arr, idxs, resid_tol)
                 == _ref_split_ballistic(arr, idxs, resid_tol)
             ), (seed, resid_tol)
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_running_moments_reproduce_fit_arc_on_every_prefix(seed):
+    """The split fast path keeps a piece on the closed-form fit alone, and a
+    wrong x line can have a smaller max residual than fit_arc's, so the running
+    sums must reproduce fit_arc's statistics, not merely bound them."""
+    rng = np.random.default_rng(seed)
+    n = 40
+    t = 3.0 + np.cumsum(rng.uniform(1 / 60, 1 / 12, n))
+    dt = t - t[0]
+    y = 0.7 - 1.8 * dt + 4.0 * dt**2 + rng.normal(0, 0.01, n)
+    x = 0.3 + 0.2 * dt + 0.01 * rng.standard_t(2, n)
+    rows = np.column_stack([t, x, y, rng.uniform(0.05, 1.0, n)])
+    mom = _Moments(rows[0, 0])
+    for k, row in enumerate(rows.tolist()):
+        mom.add(*row)
+        if k < 3:
+            continue
+        pts = rows[: k + 1]
+        fast = mom.fit_residuals(pts)
+        assert fast is not None, k
+        arc = fit_arc(pts)
+        assert fast[0] == pytest.approx(arc.rmse, rel=1e-9), k
+        np.testing.assert_allclose(np.abs(fast[1]), x_residuals(arc, pts), rtol=1e-9, atol=1e-12)
 
 
 def _split_flight(seed, *, y_step, x_step):
