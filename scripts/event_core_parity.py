@@ -3,7 +3,8 @@
 Snapshot every saved ``detections.jsonl`` before and after a change on the
 same machine, then compare. Offline mode hashes the full ``SessionResult`` of
 ``analyze_detections``. Realtime mode replays selected sessions frame by
-frame through ``RealtimeAnalyzer`` and hashes every emitted state.
+frame through ``RealtimeAnalyzer``, on the clock recorded with the detections,
+and hashes every emitted state.
 
     uv run --no-sync python scripts/event_core_parity.py snapshot before.json
     # ...apply the change...
@@ -63,13 +64,41 @@ def _offline(dets: list[Detection]) -> dict:
     }
 
 
+def _replay_clock(by_frame: dict[int, list[Detection]]) -> list[float]:
+    """The clock live mode fed each frame, up to the last detected one.
+
+    Live mode stamps a frame's detections with the clock it feeds, so a frame
+    with detections gives it exactly. An empty frame takes the linear
+    interpolation between its detected neighbours, and frames before the
+    first detection step back from it at the median frame interval.
+    RealtimeAnalyzer reacts to 1-ulp clock differences, so a replay on any
+    other clock is not the session live mode saw.
+    """
+    frames = sorted(by_frame)
+    stamp = {i: by_frame[i][0].t for i in frames}
+    clock = [0.0] * (frames[-1] + 1)
+    for a, b in zip(frames, frames[1:]):
+        clock[a] = stamp[a]
+        for idx in range(a + 1, b):
+            clock[idx] = stamp[a] + (stamp[b] - stamp[a]) * (idx - a) / (b - a)
+    clock[frames[-1]] = stamp[frames[-1]]
+    first = frames[0]
+    if first:
+        steps = [(stamp[b] - stamp[a]) / (b - a) for a, b in zip(frames, frames[1:])]
+        # A lone detected frame leaves no interval to measure; assume the
+        # clock started at zero.
+        step = statistics.median(steps) if steps else stamp[first] / first
+        for idx in range(first):
+            clock[idx] = stamp[first] - (first - idx) * step
+    return clock
+
+
 def _realtime(dets: list[Detection], max_frames: int) -> dict:
     by_frame: dict[int, list[Detection]] = {}
     for d in dets:
         by_frame.setdefault(d.frame_idx, []).append(d)
-    last = max(by_frame)
-    fps = last / by_frame[last][0].t if last else 30.0
-    n_frames = last + 1 if max_frames <= 0 else min(last + 1, max_frames)
+    clock = _replay_clock(by_frame)
+    n_frames = len(clock) if max_frames <= 0 else min(len(clock), max_frames)
 
     analyzer = RealtimeAnalyzer()
     digest = hashlib.sha256()
@@ -77,7 +106,7 @@ def _realtime(dets: list[Detection], max_frames: int) -> dict:
     cycle_ms: list[float] = []
     for idx in range(n_frames):
         t0 = time.perf_counter()
-        state = analyzer.feed(by_frame.get(idx, []), idx / fps)
+        state = analyzer.feed(by_frame.get(idx, []), clock[idx])
         feed_s += time.perf_counter() - t0
         if state.last_analysis_ms and (not cycle_ms or state.last_analysis_ms != cycle_ms[-1]):
             cycle_ms.append(state.last_analysis_ms)
