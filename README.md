@@ -75,7 +75,7 @@ All commands (`--help` on each for options):
 
 ```bash
 uv run pytest -q          # excludes detector tests requiring weights/footage
-uv run ruff check src tests
+uv run ruff check src tests scripts
 ```
 
 GitHub Actions runs the standard suite and lint. Run optional detector checks

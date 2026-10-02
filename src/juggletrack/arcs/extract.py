@@ -208,6 +208,105 @@ def _link_fragments(arr: np.ndarray, max_dt: float, max_dist: float) -> list[lis
     return [f for f in done if len(f) >= 4]
 
 
+# A closed-form statistic within this margin (per unit of coordinate scale) of
+# its threshold is re-decided by fit_arc.
+_EXACT_MARGIN = 1e-7
+# Normal equations whose determinant is below this fraction of the product of
+# their diagonal (det of the column-normalized Gram matrix, in (0, 1]) are too
+# ill-conditioned to trust the closed-form solve. Measured per unit of
+# coordinate scale: the closed-form statistics stay within 3e-10 of fit_arc's
+# above 1e-6 but reach 4e-7 by 1e-9, and real-session fits sit at 3e-6 and up.
+_MIN_REL_DET = 1e-6
+# Fuzzing found the closed-form solve and fit_arc disagreeing only beyond these
+# bounds, where neither is accurate; points beyond them go to fit_arc.
+_MIN_DISTINCT_DT = 1e-6
+_MAX_WEIGHT_RATIO = 1e7
+
+
+def _exact_margin(pts: np.ndarray) -> float:
+    """_EXACT_MARGIN for statistics of ``pts`` or any subset of it, or inf to
+    leave every decision to fit_arc. Both solves round relative to the
+    coordinates, so the margin grows with the largest |x| or |y|."""
+    t = np.unique(pts[:, 0])
+    w = pts[pts[:, 3] > 0, 3]
+    if (len(t) > 1 and np.diff(t).min() < _MIN_DISTINCT_DT) or (
+        len(w) and w.max() > _MAX_WEIGHT_RATIO * w.min()
+    ):
+        return math.inf
+    return _EXACT_MARGIN * float(np.abs(pts[:, 1:3]).max(initial=1.0))
+
+
+class _Moments:
+    """Weighted power sums ``s[k] = sum(w^2 dt^k)`` (k = 0..4),
+    ``sy[k] = sum(w^2 dt^k y)`` (k = 0..2) and ``sx[k] = sum(w^2 dt^k x)``
+    (k = 0..1), with ``dt = t - t0``. The weight w is the detection
+    confidence, fit_arc's polyfit weight, so polyfit minimizes
+    sum((w*resid)^2) and every sum carries w^2.
+    """
+
+    __slots__ = ("t0", "s", "sy", "sx")
+
+    def __init__(self, t0: float) -> None:
+        self.t0 = t0
+        self.s = [0.0] * 5
+        self.sy = [0.0] * 3
+        self.sx = [0.0] * 2
+
+    @classmethod
+    def of(cls, pts: np.ndarray) -> _Moments:
+        m = cls(float(pts[:, 0].min()))
+        pw = np.vander(pts[:, 0] - m.t0, 5, increasing=True) * (pts[:, 3] ** 2)[:, None]
+        m.s = pw.sum(axis=0).tolist()
+        m.sy = (pts[:, 2] @ pw[:, :3]).tolist()
+        m.sx = (pts[:, 1] @ pw[:, :2]).tolist()
+        return m
+
+    def add(self, t: float, x: float, y: float, w: float) -> None:
+        dt = t - self.t0
+        s, sy, sx = self.s, self.sy, self.sx
+        p = w * w
+        s[0] += p
+        sy[0] += p * y
+        sx[0] += p * x
+        p *= dt
+        s[1] += p
+        sy[1] += p * y
+        sx[1] += p * x
+        p *= dt
+        s[2] += p
+        sy[2] += p * y
+        p *= dt
+        s[3] += p
+        s[4] += p * dt
+
+    def fit_residuals(self, pts: np.ndarray) -> tuple[float, np.ndarray] | None:
+        """Least-squares parabola y(dt) and line x(dt) from the sums, evaluated
+        on ``pts`` (the summed points): the weighted y-rmse as fit_arc defines
+        it and the signed x residuals, or None when the system is too
+        ill-conditioned. The x system is the y system's leading 2x2 block, so
+        by Fischer's inequality passing the y check also clears the x one."""
+        s0, s1, s2, s3, s4 = self.s
+        c11 = s2 * s0 - s1 * s1  # also the determinant of the x system
+        c12 = s2 * s1 - s3 * s0
+        c13 = s3 * s1 - s2 * s2
+        det = s4 * c11 + s3 * c12 + s2 * c13
+        if not (math.isfinite(det) and det > _MIN_REL_DET * s4 * s2 * s0):
+            return None
+        c22 = s4 * s0 - s2 * s2
+        c23 = s3 * s2 - s4 * s1
+        c33 = s4 * s2 - s3 * s3
+        r0, r1, r2 = self.sy
+        ay = (c11 * r2 + c12 * r1 + c13 * r0) / det
+        by = (c12 * r2 + c22 * r1 + c23 * r0) / det
+        cy = (c13 * r2 + c23 * r1 + c33 * r0) / det
+        bx = (s0 * self.sx[1] - s1 * self.sx[0]) / c11
+        cx = (s2 * self.sx[0] - s1 * self.sx[1]) / c11
+
+        dt = pts[:, 0] - self.t0
+        ry = ((ay * dt + by) * dt + cy - pts[:, 2]) * pts[:, 3]
+        return math.sqrt(float(ry @ ry) / s0), bx * dt + cx - pts[:, 1]
+
+
 def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list[list[int]]:
     """Split a fragment wherever one parabola -- or one x(t) line -- stops explaining it.
 
@@ -226,12 +325,31 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
     The threshold constant `2*resid_tol` is reused by `_merge_pass`, but this
     check gates on the MAX x-residual (stricter), while `_merge_pass` gates on
     x-RMSE (looser) — deliberate, because rmse dilutes the tail-point signal.
+
+    Most steps skip fit_arc: running moments give the piece's least-squares
+    fit in closed form, and that fit may decide "keep extending" when both
+    statistics clear their thresholds by ``_exact_margin``. Every other step,
+    including every split, runs fit_arc as before, so the pieces are exactly
+    those of a fit_arc call per step. An imperfect solve can only overstate
+    the y-rmse, since no parabola beats the least-squares minimum; the x side
+    relies on the well-conditioned 2x2 solve plus the margin.
     """
     pieces: list[list[int]] = []
     cur: list[int] = []
-    for i in idxs:
+    rows = arr[idxs]
+    margin = _exact_margin(rows)
+    for k, (i, row) in enumerate(zip(idxs, rows.tolist())):
+        if not cur:
+            mom = _Moments(row[0])
         cur.append(i)
+        mom.add(*row)
         if len(cur) >= 4:
+            # cur is always the run of idxs ending at k, so its rows are a slice
+            fast = mom.fit_residuals(rows[k + 1 - len(cur) : k + 1])
+            if fast is not None:
+                y_rmse, x_res = fast
+                if y_rmse <= resid_tol - margin and np.abs(x_res).max() <= 2 * resid_tol - margin:
+                    continue
             arc = fit_arc(arr[cur])
             x_bad = np.max(x_residuals(arc, arr[cur])) > 2 * resid_tol
             # Known gap: some crossing-ball fusions are invisible to both curvature
@@ -239,29 +357,41 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
             if arc.rmse > resid_tol or x_bad:
                 pieces.append(cur[:-1])
                 cur = [i]
+                mom = _Moments(row[0])
+                mom.add(*row)
     if len(cur) >= 4:
         pieces.append(cur)
     return [p for p in pieces if len(p) >= 4]
 
 
 def _em_assign_refit(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]:
+    """Give each point to its best-fitting arc, then refit every arc from its points.
+
+    Requires ``arr`` sorted by t (extract_arcs sorts it): each arc's claim
+    window is then one index range, and only that slice is scored.
+    """
     if not arcs:
         return []
     t = arr[:, 0]
     best_res = np.full(len(arr), np.inf)
     best_arc = np.full(len(arr), -1, dtype=int)
     for k, arc in enumerate(arcs):
-        in_span = (t >= arc.t_start - _EM_TIME_MARGIN) & (t <= arc.t_end + _EM_TIME_MARGIN)
-        res_both = np.maximum(y_residuals(arc, arr), x_residuals(arc, arr))
-        res = np.where(in_span, res_both, np.inf)
-        better = res < best_res
-        best_res[better] = res[better]
-        best_arc[better] = k
+        lo = np.searchsorted(t, arc.t_start - _EM_TIME_MARGIN, side="left")
+        hi = np.searchsorted(t, arc.t_end + _EM_TIME_MARGIN, side="right")
+        win = arr[lo:hi]
+        res = np.maximum(y_residuals(arc, win), x_residuals(arc, win))
+        better = res < best_res[lo:hi]
+        best_res[lo:hi][better] = res[better]
+        best_arc[lo:hi][better] = k
     best_arc[best_res > 2 * resid_tol] = -1
 
+    # stable, so each arc's members reach fit_arc in ascending row order, as
+    # np.where gave them; fit_arc's own sort is unstable on tied timestamps
+    order = np.argsort(best_arc, kind="stable")
+    bounds = np.searchsorted(best_arc[order], np.arange(len(arcs) + 1), side="left")
     out: list[Arc] = []
     for k in range(len(arcs)):
-        member = np.where(best_arc == k)[0]
+        member = order[bounds[k] : bounds[k + 1]]
         if len(member) >= 3:
             try:
                 out.append(fit_arc(arr[member]))
@@ -291,9 +421,17 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
     outright when the two fragments' fitted x-velocities point in opposite
     directions with meaningful magnitude -- the structural signature of a
     crossing rather than one continuous flight.
+
+    Requires ``arr`` sorted by t (extract_arcs sorts it), so a union's rows
+    come from two index ranges. A union whose closed-form fit misses either
+    acceptance bound by more than ``_exact_margin`` is rejected without
+    fit_arc; every other union takes fit_arc's acceptance test unchanged.
     """
     arcs = sorted(arcs, key=lambda a: a.t_start)
+    margin = _exact_margin(arr)
     t = arr[:, 0]
+    lo = np.searchsorted(t, [a.t_start for a in arcs], side="left").tolist()
+    hi = np.searchsorted(t, [a.t_end for a in arcs], side="right").tolist()
     n = len(arcs)
     used = [False] * n
     merged: list[Arc] = []
@@ -314,13 +452,23 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
             # the union.
             if a.bx * b.bx < 0 and abs(a.bx) > 0.02 and abs(b.bx) > 0.02:
                 continue
-            sel = ((t >= a.t_start) & (t <= a.t_end)) | ((t >= b.t_start) & (t <= b.t_end))
-            pts = arr[sel]
+            # sorted by t_start, so lo[i] <= lo[j]: overlapping or touching
+            # spans are one slice, disjoint ones two
+            if lo[j] <= hi[i]:
+                pts = arr[lo[i] : max(hi[i], hi[j])]
+            else:
+                pts = np.concatenate((arr[lo[i] : hi[i]], arr[lo[j] : hi[j]]))
             keep_a = y_residuals(a, pts) < 2 * resid_tol
             keep_b = y_residuals(b, pts) < 2 * resid_tol
             pts = pts[keep_a | keep_b]
             if len(pts) < 3:
                 continue
+            fast = _Moments.of(pts).fit_residuals(pts)
+            if fast is not None:
+                y_rmse, x_res = fast
+                if (y_rmse > resid_tol + margin
+                        or math.sqrt(float(np.mean(x_res**2))) > 2 * resid_tol + margin):
+                    continue
             try:
                 union = fit_arc(pts)
             except ValueError:

@@ -1,8 +1,19 @@
 import numpy as np
 import pytest
 
-from juggletrack.arcs.extract import dedup_parallel_arcs, extract_arcs, filter_static_detections
-from juggletrack.arcs.fit import points_array
+from juggletrack.arcs import extract
+from juggletrack.arcs.extract import (
+    _EM_TIME_MARGIN,
+    _em_assign_refit,
+    _link_fragments,
+    _merge_pass,
+    _Moments,
+    _split_ballistic,
+    dedup_parallel_arcs,
+    extract_arcs,
+    filter_static_detections,
+)
+from juggletrack.arcs.fit import fit_arc, points_array, x_residuals, y_residuals
 from juggletrack.sim import simulate_cascade
 from juggletrack.types import Arc, Detection
 
@@ -235,8 +246,6 @@ def test_dense_same_timestamp_clusters_do_not_crash():
 
 
 def test_x_residuals_flag_cross_ball_points():
-    from juggletrack.arcs.fit import fit_arc, x_residuals
-
     r = simulate_cascade(n_throws=1, fps=60.0, seed=0)
     arr = points_array(r.detections)
     arc = fit_arc(arr)
@@ -599,3 +608,509 @@ def test_dedup_parallel_arcs_validates_knobs():
     # boundary values stay valid
     assert dedup_parallel_arcs([a], overlap_frac=0.0, traj_tol=0.0) == [a]
     assert dedup_parallel_arcs([a], overlap_frac=1.0, traj_tol=0.0) == [a]
+
+
+# Frozen copies of the stages before their closed-form fast paths. The fast
+# paths must reproduce them exactly (Arc == compares every float).
+
+
+def _ref_split_ballistic(arr, idxs, resid_tol):
+    pieces = []
+    cur = []
+    for i in idxs:
+        cur.append(i)
+        if len(cur) >= 4:
+            arc = fit_arc(arr[cur])
+            x_bad = np.max(x_residuals(arc, arr[cur])) > 2 * resid_tol
+            if arc.rmse > resid_tol or x_bad:
+                pieces.append(cur[:-1])
+                cur = [i]
+    if len(cur) >= 4:
+        pieces.append(cur)
+    return [p for p in pieces if len(p) >= 4]
+
+
+def _ref_em_assign_refit(arr, arcs, resid_tol):
+    if not arcs:
+        return []
+    t = arr[:, 0]
+    best_res = np.full(len(arr), np.inf)
+    best_arc = np.full(len(arr), -1, dtype=int)
+    for k, arc in enumerate(arcs):
+        in_span = (t >= arc.t_start - _EM_TIME_MARGIN) & (t <= arc.t_end + _EM_TIME_MARGIN)
+        res_both = np.maximum(y_residuals(arc, arr), x_residuals(arc, arr))
+        res = np.where(in_span, res_both, np.inf)
+        better = res < best_res
+        best_res[better] = res[better]
+        best_arc[better] = k
+    best_arc[best_res > 2 * resid_tol] = -1
+
+    out = []
+    for k in range(len(arcs)):
+        member = np.where(best_arc == k)[0]
+        if len(member) >= 3:
+            try:
+                out.append(fit_arc(arr[member]))
+            except ValueError:
+                continue
+    return out
+
+
+def _ref_merge_pass(arr, arcs, resid_tol):
+    arcs = sorted(arcs, key=lambda a: a.t_start)
+    t = arr[:, 0]
+    n = len(arcs)
+    used = [False] * n
+    merged = []
+    for i in range(n):
+        if used[i]:
+            continue
+        a = arcs[i]
+        best_j, best_union = None, None
+        for j in range(i + 1, n):
+            if used[j]:
+                continue
+            b = arcs[j]
+            if b.t_start - a.t_end >= 0.2:
+                break
+            if a.bx * b.bx < 0 and abs(a.bx) > 0.02 and abs(b.bx) > 0.02:
+                continue
+            sel = ((t >= a.t_start) & (t <= a.t_end)) | ((t >= b.t_start) & (t <= b.t_end))
+            pts = arr[sel]
+            keep_a = y_residuals(a, pts) < 2 * resid_tol
+            keep_b = y_residuals(b, pts) < 2 * resid_tol
+            pts = pts[keep_a | keep_b]
+            if len(pts) < 3:
+                continue
+            try:
+                union = fit_arc(pts)
+            except ValueError:
+                continue
+            if union.rmse > resid_tol:
+                continue
+            dt = pts[:, 0] - union.t_start
+            x_pred = union.bx * dt + union.cx
+            x_rmse = float(np.sqrt(np.mean((x_pred - pts[:, 1]) ** 2)))
+            if x_rmse > 2 * resid_tol:
+                continue
+            if best_union is None or union.rmse < best_union.rmse:
+                best_j, best_union = j, union
+        if best_j is not None:
+            used[i] = used[best_j] = True
+            merged.append(best_union)
+        else:
+            merged.append(a)
+    return merged
+
+
+def _sorted_points(dets):
+    arr = points_array(dets)
+    return arr[np.lexsort((arr[:, 3], arr[:, 2], arr[:, 1], arr[:, 0]))]
+
+
+def _crossing_cloud():
+    dets = []
+    for f in range(31):
+        t = f / 30.0
+        y = 0.65 - 1.2 * t + 1.2 * t * t
+        dets.append(Detection(frame_idx=f, t=t, x=0.3 + 0.3 * t, y=y))
+        dets.append(Detection(frame_idx=f, t=t, x=0.6 - 0.3 * t, y=y + 0.001))
+    return dets
+
+
+def _duplicate_box_cloud():
+    rng = np.random.default_rng(7)
+    base = simulate_cascade(n_throws=8, fps=30.0, noise=0.002, seed=7).detections
+    dets = []
+    for d in base:
+        for _ in range(int(rng.integers(1, 4))):
+            dets.append(d.model_copy(update={
+                "x": d.x + float(rng.normal(0, 0.003)),
+                "y": d.y + float(rng.normal(0, 0.003)),
+                "confidence": float(rng.uniform(0.05, 1.0)),
+            }))
+    return dets
+
+
+def _low_confidence_cloud():
+    rng = np.random.default_rng(11)
+    base = simulate_cascade(n_throws=10, fps=30.0, noise=0.004, dropout=0.1, seed=11).detections
+    conf = rng.choice([0.0, 1e-6, 1e-3, 0.02, 0.3, 1.0], size=len(base),
+                      p=[0.08, 0.1, 0.2, 0.2, 0.2, 0.22])
+    return [d.model_copy(update={"confidence": float(c)}) for d, c in zip(base, conf)]
+
+
+def _random_cloud():
+    rng = np.random.default_rng(13)
+    frames = rng.integers(0, 120, size=500)
+    return [
+        Detection(frame_idx=int(f), t=f / 30.0, x=float(rng.uniform(0.2, 0.8)),
+                  y=float(rng.uniform(0.2, 0.8)), confidence=float(rng.uniform(0.01, 1.0)))
+        for f in frames
+    ]
+
+
+_CLOUDS = {
+    "clean": lambda: simulate_cascade(n_throws=12, fps=30.0, seed=1).detections,
+    "noisy": lambda: simulate_cascade(
+        n_throws=12, fps=30.0, noise=0.004, dropout=0.15, seed=2).detections,
+    "false-positives": lambda: simulate_cascade(
+        n_throws=12, fps=30.0, noise=0.003, false_positives_per_frame=0.5, seed=3).detections,
+    "drop": lambda: simulate_cascade(n_throws=12, fps=30.0, drop_at_throw=6, seed=4).detections,
+    "crossing": _crossing_cloud,
+    "duplicate-boxes": _duplicate_box_cloud,
+    "low-confidence": _low_confidence_cloud,
+    "random": _random_cloud,
+}
+
+
+def _window_arcs(arr, n, seed):
+    rng = np.random.default_rng(seed)
+    t = arr[:, 0]
+    arcs = []
+    while len(arcs) < n:
+        t0 = rng.uniform(t[0], t[-1])
+        win = arr[(t >= t0) & (t <= t0 + rng.uniform(0.05, 0.8))]
+        if len(win) >= 3 and win[-1, 0] > win[0, 0]:
+            arcs.append(fit_arc(win))
+    return arcs
+
+
+def _fragment(seed, n=24, y_noise=0.004, x_noise=0.004, weights=(0.05, 1.0), switch_at=None):
+    rng = np.random.default_rng(seed)
+    t = 10.0 + np.cumsum(rng.uniform(1 / 60, 1 / 12, n))
+    dt = t - t[0]
+    y = 0.7 - rng.uniform(1.0, 2.5) * dt + rng.uniform(2.0, 6.0) * dt**2
+    x = 0.3 + rng.uniform(-0.4, 0.4) * dt
+    if switch_at is not None:
+        x[switch_at:] = 0.6 - rng.uniform(0.2, 0.4) * dt[switch_at:]
+    lo, hi = weights
+    w = rng.uniform(lo, hi, n)
+    return np.column_stack([
+        t, x + rng.normal(0, x_noise, n), y + rng.normal(0, y_noise, n), w,
+    ])
+
+
+_FRAGMENTS = (
+    [_fragment(s) for s in range(20)]
+    + [_fragment(100 + s, n=60, y_noise=0.01, x_noise=0.01) for s in range(10)]
+    + [_fragment(200 + s, switch_at=12) for s in range(10)]
+    + [_fragment(300 + s, y_noise=0.002, weights=(1e-12, 1e-3)) for s in range(10)]
+    + [_fragment(400 + s, y_noise=0.0, x_noise=0.0) for s in range(5)]
+)
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+@pytest.mark.parametrize("cloud", sorted(_CLOUDS))
+@pytest.mark.parametrize("resid_tol", [0.005, 0.02, 0.08])
+def test_split_matches_reference_on_linked_fragments(cloud, resid_tol):
+    arr = _sorted_points(_CLOUDS[cloud]())
+    for frag in _link_fragments(arr, 0.18, 0.08):
+        assert _split_ballistic(arr, frag, resid_tol) == _ref_split_ballistic(arr, frag, resid_tol)
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+@pytest.mark.parametrize("resid_tol", [0.001, 0.004, 0.02])
+def test_split_matches_reference_on_synthetic_fragments(resid_tol):
+    for arr in _FRAGMENTS:
+        idxs = list(range(len(arr)))
+        assert _split_ballistic(arr, idxs, resid_tol) == _ref_split_ballistic(arr, idxs, resid_tol)
+
+
+def _prefix_stats(arr):
+    out = []
+    for k in range(4, len(arr) + 1):
+        arc = fit_arc(arr[:k])
+        out.append((arc.rmse, float(np.max(x_residuals(arc, arr[:k])))))
+    return out
+
+
+@pytest.mark.parametrize("stat", ["y-rmse", "x-max"])
+def test_split_matches_reference_when_a_statistic_ties_its_threshold(stat):
+    """The closed-form statistic differs from fit_arc's in the last bits, so at
+    a tie and one ulp either side only the margin keeps decisions identical."""
+    for seed in range(30):
+        if stat == "y-rmse":
+            arr = _fragment(500 + seed, y_noise=0.005, x_noise=1e-4)
+            tie = max(r for r, _ in _prefix_stats(arr))
+        else:
+            arr = _fragment(600 + seed, y_noise=1e-4, x_noise=0.005)
+            tie = max(x for _, x in _prefix_stats(arr)) / 2
+        idxs = list(range(len(arr)))
+        below = np.nextafter(tie, 0.0)
+        assert _ref_split_ballistic(arr, idxs, below) != _ref_split_ballistic(arr, idxs, tie)
+        for resid_tol in (below, tie, np.nextafter(tie, np.inf)):
+            assert (
+                _split_ballistic(arr, idxs, resid_tol)
+                == _ref_split_ballistic(arr, idxs, resid_tol)
+            ), (seed, resid_tol)
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_running_moments_reproduce_fit_arc_on_every_prefix(seed):
+    """A wrong x line can have a smaller max residual than fit_arc's, so the
+    running sums must reproduce fit_arc's statistics, not merely bound them."""
+    rng = np.random.default_rng(seed)
+    n = 40
+    t = 3.0 + np.cumsum(rng.uniform(1 / 60, 1 / 12, n))
+    dt = t - t[0]
+    y = 0.7 - 1.8 * dt + 4.0 * dt**2 + rng.normal(0, 0.01, n)
+    x = 0.3 + 0.2 * dt + 0.01 * rng.standard_t(2, n)
+    rows = np.column_stack([t, x, y, rng.uniform(0.05, 1.0, n)])
+    mom = _Moments(rows[0, 0])
+    for k, row in enumerate(rows.tolist()):
+        mom.add(*row)
+        if k < 3:
+            continue
+        pts = rows[: k + 1]
+        fast = mom.fit_residuals(pts)
+        assert fast is not None, k
+        arc = fit_arc(pts)
+        assert fast[0] == pytest.approx(arc.rmse, rel=1e-9), k
+        np.testing.assert_allclose(np.abs(fast[1]), x_residuals(arc, pts), rtol=1e-9, atol=1e-12)
+
+
+def _split_flight(seed, *, y_step, x_step, overlap):
+    """One flight cut into two arcs whose halves disagree by ``y_step`` in y and
+    ``x_step`` in x, so the union's misfit is the step alone."""
+    rng = np.random.default_rng(seed)
+    t = 20.0 + np.arange(28) / 30.0
+    cut = 20.45
+    lo_end, hi_start = (cut + 0.06, cut - 0.06) if overlap else (cut - 0.04, cut + 0.04)
+    half_a, half_b = t <= lo_end, t >= hi_start
+    dt = t - t[0]
+    y = 0.7 - 1.6 * dt + 4.0 * dt**2 + rng.normal(0, 1e-4, len(t))
+    x = 0.3 + 0.15 * dt + rng.normal(0, 1e-4, len(t))
+    pts_a = np.column_stack([t, x, y, rng.uniform(0.2, 1.0, len(t))])[half_a]
+    pts_b = np.column_stack([t, x + x_step, y + y_step, rng.uniform(0.2, 1.0, len(t))])[half_b]
+    arr = _sorted_points([
+        Detection(frame_idx=0, t=tt, x=xx, y=yy, confidence=c)
+        for tt, xx, yy, c in np.vstack([pts_a, pts_b])
+    ])
+    return arr, [fit_arc(pts_a), fit_arc(pts_b)]
+
+
+def _union_stats(arr, arcs):
+    a, b = arcs
+    t = arr[:, 0]
+    pts = arr[((t >= a.t_start) & (t <= a.t_end)) | ((t >= b.t_start) & (t <= b.t_end))]
+    union = fit_arc(pts)
+    dt = pts[:, 0] - union.t_start
+    return union.rmse, float(np.sqrt(np.mean((union.bx * dt + union.cx - pts[:, 1]) ** 2)))
+
+
+@pytest.mark.parametrize("stat", ["y-rmse", "x-rmse"])
+def test_merge_matches_reference_when_a_statistic_ties_its_threshold(stat):
+    """At a tie and one ulp either side, only the margin keeps the closed-form
+    pre-reject from dropping a union fit_arc would accept."""
+    for seed in range(30):
+        overlap = seed % 2 == 1
+        if stat == "y-rmse":
+            arr, arcs = _split_flight(seed, y_step=0.01, x_step=0.0, overlap=overlap)
+            tie = _union_stats(arr, arcs)[0]
+        else:
+            arr, arcs = _split_flight(seed, y_step=0.0, x_step=0.02, overlap=overlap)
+            tie = _union_stats(arr, arcs)[1] / 2
+        assert len(_ref_merge_pass(arr, arcs, tie)) == 1
+        assert len(_ref_merge_pass(arr, arcs, np.nextafter(tie, 0.0))) == 2
+        for resid_tol in (np.nextafter(tie, 0.0), tie, np.nextafter(tie, np.inf)):
+            assert _merge_pass(arr, arcs, resid_tol) == _ref_merge_pass(arr, arcs, resid_tol), (
+                seed, resid_tol,
+            )
+
+
+def _light_head_union(seed, *, gap, offset):
+    """A nearly weightless point ``gap`` seconds ahead of eleven dense ones puts
+    the union's polynomial basis far from its data, so its normal equations
+    are nearly singular."""
+    rng = np.random.default_rng(seed)
+    t = 20.0 + np.concatenate([[0.0], gap + np.arange(11) / 30.0])
+    dt = t - t[0]
+    ay, by, cy, bx, cx = 0.12, -0.5, 0.9 + offset, 0.2, 0.2
+    y = ay * dt**2 + by * dt + cy + rng.normal(0, 1e-7, len(t))
+    y[6:] += 5e-6
+    x = bx * dt + cx + rng.normal(0, 1e-7, len(t))
+    w = rng.uniform(0.2, 1.0, len(t))
+    w[0] = 1e-6
+    arr = _sorted_points([
+        Detection(frame_idx=0, t=tt, x=xx, y=yy, confidence=c)
+        for tt, xx, yy, c in np.column_stack([t, x, y, w])
+    ])
+    d = dt[6]
+    return arr, [
+        Arc(id=-1, t_start=t[0], t_end=t[5], ay=ay, by=by, cy=cy, bx=bx, cx=cx,
+            n_points=6, rmse=0.0),
+        Arc(id=-1, t_start=t[6], t_end=t[-1], ay=ay, by=by + 2 * ay * d,
+            cy=cy + by * d + ay * d * d + 5e-6, bx=bx, cx=cx + bx * d, n_points=6, rmse=0.0),
+    ]
+
+
+@pytest.mark.parametrize(("gap", "offset"), [
+    pytest.param(0.6, 1e6, id="far-from-origin"),
+    pytest.param(3.5, 0.0, id="below-det-floor"),
+])
+def test_merge_matches_reference_at_y_ties_on_ill_conditioned_unions(gap, offset):
+    """Far from the origin and below the conditioning floor the closed-form
+    y-rmse overstates the union's, so the margin must grow with the
+    coordinates and near-singular unions must reach fit_arc."""
+    for seed in range(20):
+        arr, arcs = _light_head_union(seed, gap=gap, offset=offset)
+        tie = _union_stats(arr, arcs)[0]
+        assert len(_ref_merge_pass(arr, arcs, tie)) == 1
+        assert len(_ref_merge_pass(arr, arcs, np.nextafter(tie, 0.0))) == 2
+        for resid_tol in (np.nextafter(tie, 0.0), tie, np.nextafter(tie, np.inf)):
+            assert _merge_pass(arr, arcs, resid_tol) == _ref_merge_pass(arr, arcs, resid_tol), (
+                seed, resid_tol,
+            )
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+def test_merge_matches_reference_on_two_timestamp_unions():
+    """Duplicate boxes can leave a union with only two distinct timestamps.
+    polyfit's rank-deficient fit then accepts unions that the normal equations
+    cannot even solve, so these must reach fit_arc's own acceptance test."""
+    merged = 0
+    for seed in range(40):
+        rng = np.random.default_rng(seed)
+        t = np.repeat([5.0, 5.0 + 1 / 30], rng.integers(2, 5, size=2))
+        pts = np.column_stack([
+            t,
+            0.4 + 0.3 * (t - 5.0) + rng.normal(0, 0.002, len(t)),
+            0.6 - 0.9 * (t - 5.0) + rng.normal(0, 0.002, len(t)),
+            rng.uniform(0.05, 1.0, len(t)),
+        ])
+        arr = _sorted_points([
+            Detection(frame_idx=0, t=tt, x=xx, y=yy, confidence=c) for tt, xx, yy, c in pts
+        ])
+        first = np.flatnonzero(arr[:, 0] == 5.0)
+        second = np.flatnonzero(arr[:, 0] > 5.0)
+        arcs = [
+            fit_arc(arr[np.concatenate([rng.choice(first, 2, replace=False), rng.choice(second, 1)])])
+            for _ in range(3)
+        ]
+        expected = _ref_merge_pass(arr, arcs, 0.02)
+        assert _merge_pass(arr, arcs, 0.02) == expected
+        merged += len(expected) < len(arcs)
+    assert merged > 0
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+@pytest.mark.parametrize("cloud", sorted(_CLOUDS))
+@pytest.mark.parametrize("resid_tol", [0.005, 0.02, 0.08])
+def test_em_and_merge_match_reference_through_extraction(cloud, resid_tol):
+    arr = _sorted_points(_CLOUDS[cloud]())
+    arcs = []
+    for frag in _link_fragments(arr, 0.18, 0.08):
+        for seed in _split_ballistic(arr, frag, resid_tol):
+            try:
+                arcs.append(fit_arc(arr[seed]))
+            except ValueError:
+                continue
+    for _ in range(3):
+        refit = _em_assign_refit(arr, arcs, resid_tol)
+        assert refit == _ref_em_assign_refit(arr, arcs, resid_tol)
+        merged = _merge_pass(arr, refit, resid_tol)
+        assert merged == _ref_merge_pass(arr, refit, resid_tol)
+        arcs = merged
+
+
+def test_em_claim_window_includes_points_exactly_at_the_margin():
+    arr = _sorted_points(simulate_cascade(n_throws=1, fps=30.0, seed=0).detections)
+    arc = fit_arc(arr)
+    lo, hi = arc.t_start - _EM_TIME_MARGIN, arc.t_end + _EM_TIME_MARGIN
+    edges = [lo, hi, np.nextafter(lo, -np.inf), np.nextafter(hi, np.inf)]
+    extra = np.array([[t, arc.x_at(t), arc.y_at(t), 1.0] for t in edges])
+    arr = _sorted_points([
+        Detection(frame_idx=0, t=t, x=x, y=y, confidence=c)
+        for t, x, y, c in np.vstack([arr, extra])
+    ])
+
+    refit = _em_assign_refit(arr, [arc], 0.02)
+
+    assert refit == _ref_em_assign_refit(arr, [arc], 0.02)
+    assert [(a.t_start, a.t_end, a.n_points) for a in refit] == [(lo, hi, arc.n_points + 2)]
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+@pytest.mark.parametrize("cloud", sorted(_CLOUDS))
+@pytest.mark.parametrize("resid_tol", [0.02, 0.2])
+def test_em_and_merge_match_reference_on_arbitrary_spans(cloud, resid_tol):
+    arr = _sorted_points(_CLOUDS[cloud]())
+    for seed in range(3):
+        arcs = _window_arcs(arr, 25, seed)
+        assert _em_assign_refit(arr, arcs, resid_tol) == _ref_em_assign_refit(arr, arcs, resid_tol)
+        assert _merge_pass(arr, arcs, resid_tol) == _ref_merge_pass(arr, arcs, resid_tol)
+
+
+def _fit_arc_counter(monkeypatch):
+    """Count fit_arc calls in extract and in the frozen copies above:
+    ``count(fn, *args)`` runs fn and returns how many calls it made."""
+    calls = 0
+    real = extract.fit_arc
+
+    def counting(arr, arc_id=-1):
+        nonlocal calls
+        calls += 1
+        return real(arr, arc_id)
+
+    monkeypatch.setattr(extract, "fit_arc", counting)
+    monkeypatch.setitem(globals(), "fit_arc", counting)
+
+    def count(fn, *args):
+        nonlocal calls
+        calls = 0
+        fn(*args)
+        return calls
+
+    return count
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+@pytest.mark.parametrize("cloud", ["clean", "noisy", "drop", "duplicate-boxes"])
+def test_fast_paths_spare_most_fit_arc_calls(cloud, monkeypatch):
+    """Every parity test still passes if the fast paths silently stop firing,
+    so pin how often fit_arc runs against the frozen copies, which call it at
+    every step. The clouds sit about 100 s from the origin, as a long live
+    session does, because moment sums taken about t=0 instead of the window's
+    first timestamp fail the conditioning check there and fall back to fit_arc
+    on every union."""
+    count = _fit_arc_counter(monkeypatch)
+    arr = _sorted_points(_CLOUDS[cloud]())
+    arr[:, 0] += 100.0
+    frags = _link_fragments(arr, 0.18, 0.08)
+    split = sum(count(_split_ballistic, arr, f, 0.02) for f in frags)
+    split_ref = sum(count(_ref_split_ballistic, arr, f, 0.02) for f in frags)
+    assert split <= split_ref / 100, (split, split_ref)
+
+    arcs = [fit_arc(arr[p]) for f in frags for p in _split_ballistic(arr, f, 0.02)]
+    arcs = _em_assign_refit(arr, arcs, 0.02)
+    merge = count(_merge_pass, arr, arcs, 0.02)
+    merge_ref = count(_ref_merge_pass, arr, arcs, 0.02)
+    assert merge <= merge_ref / 3, (merge, merge_ref)
+
+
+@pytest.mark.parametrize("bound", ["weight-ratio", "timestamp-gap"])
+def test_fast_paths_defer_to_fit_arc_outside_their_tested_bounds(bound, monkeypatch):
+    """Beyond these bounds the closed-form solve and fit_arc can disagree, so
+    fit_arc must make every decision there."""
+    count = _fit_arc_counter(monkeypatch)
+    frag = _fragment(700, n=40)
+    cloud = _sorted_points(_CLOUDS["clean"]())
+    if bound == "weight-ratio":
+        frag[20, 3] = 1e-9
+        cloud[len(cloud) // 2, 3] = 1e-9
+    else:
+        frag[20, 0] = frag[19, 0] + 5e-7
+        cloud = np.insert(cloud, 1, cloud[0] + [5e-7, 0.0, 0.0, 0.0], axis=0)
+
+    idxs = list(range(len(frag)))
+    assert count(_split_ballistic, frag, idxs, 0.02) == count(_ref_split_ballistic, frag, idxs, 0.02)
+    assert _split_ballistic(frag, idxs, 0.02) == _ref_split_ballistic(frag, idxs, 0.02)
+
+    arcs = [
+        fit_arc(cloud[p])
+        for f in _link_fragments(cloud, 0.18, 0.08)
+        for p in _ref_split_ballistic(cloud, f, 0.02)
+    ]
+    assert count(_merge_pass, cloud, arcs, 0.02) == count(_ref_merge_pass, cloud, arcs, 0.02)
+    assert _merge_pass(cloud, arcs, 0.02) == _ref_merge_pass(cloud, arcs, 0.02)

@@ -122,10 +122,8 @@ def test_analysis_stays_fast_and_reports_timing():
     assertion inherently depends on machine load, not just the code under
     test. Switched to median (robust to a handful of slow outlier cycles
     from scheduling jitter, unlike mean) with a load-tolerant bound: 150ms
-    is still 3-5x the typically-measured 27-43ms per cycle on this
-    machine (see realtime.py's module docstring), so it stays a real
-    regression guard (would still catch e.g. an accidental O(n^2) blowup)
-    without flaking under CI contention."""
+    stays a real regression guard (would still catch e.g. an accidental
+    O(n^2) blowup) without flaking under CI contention."""
     r = simulate_cascade(n_throws=24, fps=30.0, seed=3)
     states = stream(r, RealtimeAnalyzer())
     timings = sorted(s.last_analysis_ms for s in states if s.last_analysis_ms > 0)

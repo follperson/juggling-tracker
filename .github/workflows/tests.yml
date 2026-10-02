@@ -23,5 +23,5 @@ jobs:
       - name: Install OpenCV runtime libraries
         run: sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
       - run: uv sync --locked
-      - run: uv run --no-sync ruff check src tests
+      - run: uv run --no-sync ruff check src tests scripts
       - run: uv run --no-sync pytest -q
