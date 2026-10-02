@@ -1,5 +1,6 @@
 import json
 
+import numpy as np
 import pytest
 from typer.testing import CliRunner
 
@@ -189,6 +190,18 @@ def test_realtime_benchmark_rejects_inconsistent_timestamps(benchmark_manifest):
         run_benchmark(benchmark_manifest, realtime=True)
 
 
+def test_realtime_benchmark_rejects_a_frame_without_one_clock(benchmark_manifest):
+    from juggletrack.eval.benchmark import run_benchmark
+
+    dets = benchmark_manifest.parent / "detections.jsonl"
+    rows = [json.loads(line) for line in dets.read_text().splitlines()]
+    second_in_frame = next(b for a, b in zip(rows, rows[1:]) if a["frame_idx"] == b["frame_idx"])
+    second_in_frame["t"] += 1e-6  # still within the constant-rate tolerance
+    dets.write_text("\n".join(json.dumps(r) for r in rows))
+    with pytest.raises(ValueError, match="disagree on t"):
+        run_benchmark(benchmark_manifest, realtime=True)
+
+
 @pytest.mark.parametrize("destination", ["benchmark.json", "labels.json", "detections.jsonl",
                                          "config.json", "label-link.json"])
 def test_benchmark_cannot_overwrite_inputs(benchmark_manifest, destination):
@@ -219,3 +232,112 @@ def test_symlinked_manifest_protects_its_real_relative_inputs(benchmark_manifest
     result = CliRunner().invoke(app, ["benchmark", str(alias), "--out", str(labels)])
     assert result.exit_code == 2, result.output
     assert labels.read_bytes() == before
+
+
+class _RecordingDetector:
+    """Replays simulated detections stamped with the decoder's clock, as a real detector would."""
+
+    def __init__(self, dets):
+        from juggletrack.detect.fake import FakeDetector
+
+        self._fake = FakeDetector(dets)
+
+    def detect(self, frame, frame_idx, t):
+        return [d.model_copy(update={"t": t}) for d in self._fake.detect(frame, frame_idx, t)]
+
+
+@pytest.mark.parametrize("gap", [None, range(100, 105)], ids=["contiguous", "mid_run_gap"])
+def test_realtime_benchmark_feeds_the_analyzer_what_live_video_replay_does(
+    tmp_path, monkeypatch, gap,
+):
+    from juggletrack.detect.fake import FakeDetector
+    from juggletrack.eval.benchmark import run_benchmark
+    from juggletrack.pipeline.live import run_live
+    from juggletrack.pipeline.offline import detect_video
+    from juggletrack.pipeline.realtime import RealtimeAnalyzer
+    from juggletrack.video.reader import VideoReader
+    from tests.helpers import write_test_video
+
+    sim = simulate_cascade(n_throws=8, fps=30.0, seed=1)
+    n_frames = max(d.frame_idx for d in sim.detections) + 30  # empty tail
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=n_frames, fps=30.0, size=(64, 48))
+    # Empty lead-in frames, plus a few empty frames mid-run.
+    kept = [d for d in sim.detections
+            if d.frame_idx >= 10 and not (gap and d.frame_idx in gap)]
+    with VideoReader(video) as reader:
+        recorded = detect_video(reader, _RecordingDetector(kept))
+    save_detections_jsonl(recorded, tmp_path / "detections.jsonl")
+    (tmp_path / "labels.json").write_text(json.dumps({"video": "v", "runs": [], "drops": []}))
+    manifest = tmp_path / "benchmark.json"
+    manifest.write_text(json.dumps({
+        "schema_version": "1", "split": "development", "clips": [{
+            "video": "v", "detections": "detections.jsonl", "labels": "labels.json",
+            "label_source": "human_reviewed", "fps": 30, "frame_count": n_frames,
+        }],
+    }))
+
+    feeds = []
+    feed = RealtimeAnalyzer.feed
+
+    def recording_feed(self, dets, t):
+        feeds[-1].append((list(dets), t))
+        return feed(self, dets, t)
+
+    monkeypatch.setattr(RealtimeAnalyzer, "feed", recording_feed)
+    feeds.append([])
+    live, _ = run_live(str(video), FakeDetector(recorded), display=False)
+    feeds.append([])
+    replay = run_benchmark(manifest, realtime=True)["clips"][0]["realtime"]
+
+    live_feeds, replay_feeds = feeds
+    assert len(replay_feeds) == len(live_feeds) == n_frames
+    for (live_dets, live_t), (replay_dets, replay_t) in zip(live_feeds, replay_feeds):
+        assert replay_dets == live_dets
+        if live_dets:
+            assert replay_t == live_t  # the recorded clock, to the bit
+        else:
+            assert replay_t == pytest.approx(live_t, abs=1e-9)
+    assert (replay["runs"], replay["catches"], replay["drops"]) == (
+        live.runs_completed, live.catches_total, live.drops_total)
+
+
+def test_realtime_benchmark_extends_the_recorded_clock_over_empty_frames(tmp_path, monkeypatch):
+    from juggletrack.eval.benchmark import run_benchmark
+    from juggletrack.pipeline.realtime import RealtimeAnalyzer
+
+    fps = 30.0
+    sim = simulate_cascade(n_throws=8, fps=fps, seed=1)  # detections on frames 15..142
+    gap = range(60, 65)
+    # The recorded clock runs 4 us ahead of frame_idx / fps before the gap and
+    # 4 us behind after it: inside the constant-rate tolerance, but not idx / fps.
+    offset = {d.frame_idx: 4e-6 if d.frame_idx < gap.start else -4e-6
+              for d in sim.detections if d.frame_idx not in gap}
+    recorded = [d.model_copy(update={"t": d.frame_idx / fps + offset[d.frame_idx]})
+                for d in sim.detections if d.frame_idx in offset]
+    n_frames = max(offset) + 30
+    save_detections_jsonl(recorded, tmp_path / "detections.jsonl")
+    (tmp_path / "labels.json").write_text(json.dumps({"video": "v", "runs": [], "drops": []}))
+    manifest = tmp_path / "benchmark.json"
+    manifest.write_text(json.dumps({
+        "schema_version": "1", "split": "development", "clips": [{
+            "video": "v", "detections": "detections.jsonl", "labels": "labels.json",
+            "label_source": "human_reviewed", "fps": fps, "frame_count": n_frames,
+        }],
+    }))
+    times = []
+    feed = RealtimeAnalyzer.feed
+
+    def recording_feed(self, dets, t):
+        times.append(t)
+        return feed(self, dets, t)
+
+    monkeypatch.setattr(RealtimeAnalyzer, "feed", recording_feed)
+    run_benchmark(manifest, realtime=True)
+
+    known = sorted(offset)
+    # Lead-in and tail frames keep the nearest detected frame's offset (they
+    # step by 1 / fps); gap frames move linearly between the two offsets.
+    expected = np.arange(n_frames) / fps + np.interp(
+        np.arange(n_frames), known, [offset[i] for i in known])
+    assert times == pytest.approx(list(expected), abs=1e-9)

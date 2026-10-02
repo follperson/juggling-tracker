@@ -1,6 +1,7 @@
 """Reproducible saved-detection benchmarks against independently reviewed labels."""
 from __future__ import annotations
 
+import bisect
 import hashlib
 import math
 from importlib.metadata import version
@@ -68,6 +69,33 @@ def _validate_detections(dets: list[Detection], clip: BenchmarkClip) -> None:
             raise ValueError(f"{clip.video}: invalid detection at frame {d.frame_idx}")
 
 
+def _recorded_clock(frame_times: dict[int, float], frame_count: int, fps: float) -> list[float]:
+    """Each frame's time on the clock the detections were recorded with.
+
+    The realtime window evicts on ``d.t >= now - window_s``, so a clock that
+    differs from the recorded one by a rounding error can change results.
+    Empty frames between detected frames are interpolated; frames before the
+    first or after the last detected frame step by ``1 / fps`` from it.
+    """
+    known = sorted(frame_times)
+    clock = []
+    for idx in range(frame_count):
+        pos = bisect.bisect_left(known, idx)
+        if pos < len(known) and known[pos] == idx:
+            clock.append(frame_times[idx])
+        elif 0 < pos < len(known):
+            i0, i1 = known[pos - 1], known[pos]
+            t0, t1 = frame_times[i0], frame_times[i1]
+            clock.append(t0 + (t1 - t0) * (idx - i0) / (i1 - i0))
+        elif pos:
+            clock.append(frame_times[known[-1]] + (idx - known[-1]) / fps)
+        elif known:
+            clock.append(frame_times[known[0]] - (known[0] - idx) / fps)
+        else:
+            clock.append(idx / fps)
+    return clock
+
+
 def _replay(dets: list[Detection], clip: BenchmarkClip, cfg: RealtimeConfig) -> dict:
     """Replay CFR detections including empty frames; never substitute clocks silently."""
     by_frame: dict[int, list[Detection]] = {}
@@ -77,10 +105,15 @@ def _replay(dets: list[Detection], clip: BenchmarkClip, cfg: RealtimeConfig) -> 
                 f"{clip.video}: realtime benchmark requires constant-rate timestamps "
                 "starting at zero; use the live video replay for variable-rate footage"
             )
-        by_frame.setdefault(d.frame_idx, []).append(d)
+        frame = by_frame.setdefault(d.frame_idx, [])
+        if frame and frame[0].t != d.t:
+            raise ValueError(f"{clip.video}: detections in frame {d.frame_idx} disagree on t")
+        frame.append(d)
+    clock = _recorded_clock({i: ds[0].t for i, ds in by_frame.items()},
+                            clip.frame_count, clip.fps)
     analyzer = RealtimeAnalyzer(cfg)
-    for idx in range(clip.frame_count):
-        analyzer.feed(by_frame.get(idx, []), idx / clip.fps)
+    for idx, t in enumerate(clock):
+        analyzer.feed(by_frame.get(idx, []), t)
     final = analyzer.finalize()
     return {"runs": final.runs_completed, "catches": final.catches_total,
             "drops": final.drops_total}

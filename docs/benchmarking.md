@@ -67,8 +67,16 @@ reported explicitly. Metrics with no applicable observations are `null` in the
 aggregate, not a claimed perfect score.
 
 Realtime mode feeds every frame, including empty frames, and flushes the tail.
-This decoder-free mode requires constant-rate timestamps starting at zero;
-inconsistent timestamps are rejected. For variable-rate footage, use the
+It feeds the clock the detections were recorded with: a frame with detections
+uses their `t`, an empty frame between two detected frames is interpolated
+linearly, and empty frames before the first or after the last detected frame
+step by `1 / fps`. On detected frames this is exactly the clock that
+`live VIDEO --detections FILE` feeds for the same recording; on empty frames it
+agrees with the decoder's timestamps to within rounding. Substituting
+`frame_idx / fps` would differ by rounding errors that change which detections
+the sliding window keeps. This decoder-free mode requires constant-rate
+timestamps starting at zero; inconsistent timestamps, and detections in one
+frame with different `t`, are rejected. For variable-rate footage, use the
 existing `live VIDEO --detections FILE --no-display` path, which reads the
 video's presentation timestamps. Realtime reports compare total catches to
 labels and offline totals; they do not claim per-run IoU because the realtime
