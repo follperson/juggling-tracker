@@ -182,6 +182,10 @@ real juggler
 - **`alt2` is implied by `dom2`.** At `DOM_T = 0.99`, every meaningful arc
   shares a sign for any run under 200 meaningful arcs, so `alt2` is always 0
   or undefined when `dom2` passes. This predates the fix.
+  **Correction, 2026-10-01.** At 200 or more meaningful arcs, `dom2` alone
+  does not bound `alt2`. Non-meaningful arcs between meaningful ones shrink
+  its denominator. `sweeps` closes the gap, because 200 disjoint x-ranges at
+  least `DX_MIN` wide span at least 6 frame widths. `alt2` is now removed.
 
 ## Open question: keep the gate at all?
 

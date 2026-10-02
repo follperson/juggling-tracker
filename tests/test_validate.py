@@ -1,8 +1,10 @@
+import math
+
 import numpy as np
 import pytest
 
 from juggletrack.analyze import analyze_detections
-from juggletrack.events.validate import _sweeps, is_drift_cohort
+from juggletrack.events.validate import DOM_T, DX_MIN, _sweeps, is_drift_cohort
 from juggletrack.sim import CascadeParams, simulate_cascade
 from juggletrack.types import Arc, Detection
 
@@ -15,9 +17,6 @@ def _arc(t_start, dur, bx, cx, ay=0.1, by=-0.12, cy=0.6):
 
 
 def test_pinned_junk_cohort_is_flagged():
-    """The pinned test_slow_drift_junk_cohort_known_gap shape: 3 arcs marching
-    unidirectionally, same sign dx, no alternation -- dom2=1.0, mono=1.0,
-    alt2=0.0. Exactly the shape clause A targets."""
     arcs = [
         _arc(0.5, 1.2, bx=0.15, cx=0.15 + 0.22 * 0),
         _arc(1.2, 1.2, bx=0.15, cx=0.15 + 0.22 * 1),
@@ -27,9 +26,7 @@ def test_pinned_junk_cohort_is_flagged():
 
 
 def test_alternating_cascade_is_not_flagged():
-    """A real 2-hand cascade alternates dx sign every throw (ball goes left,
-    then right, then left...) -- dom2 stays far below 1.0 and alt2 is high,
-    so clause A must not fire."""
+    """Every term rejects it: signs alternate, x-origins don't march, x-ranges overlap."""
     arcs = [
         _arc(0.0, 1.1, bx=0.16, cx=0.41),
         _arc(0.45, 1.1, bx=-0.16, cx=0.59),
@@ -39,6 +36,25 @@ def test_alternating_cascade_is_not_flagged():
         _arc(2.25, 1.1, bx=-0.16, cx=0.59),
     ]
     assert is_drift_cohort(arcs) is False
+
+
+def test_mixed_sign_sweep_is_not_flagged():
+    """Marches (mono ~0.93) and sweeps, so only the middle arc's opposite
+    sign (dom2 = 1/3) keeps the gate from firing."""
+    arcs = [
+        _arc(0.0, 1.0, bx=0.10, cx=0.10),
+        _arc(1.0, 1.0, bx=-0.10, cx=0.35),
+        _arc(2.0, 1.0, bx=0.10, cx=0.40),
+    ]
+    assert is_drift_cohort(arcs) is False
+
+
+def test_a_minority_sign_cannot_fit_in_one_frame_width():
+    """is_drift_cohort has no alternation term because of this: a run that
+    passes dom2 with even one opposite-sign arc has so many meaningful arcs
+    that their disjoint x-ranges cannot sweep within one frame width."""
+    fewest_arcs_with_a_minority = math.ceil(2 / (1 - DOM_T))
+    assert fewest_arcs_with_a_minority * DX_MIN > 1
 
 
 def test_near_vertical_arcs_protected_by_dx_min():
@@ -52,9 +68,6 @@ def test_near_vertical_arcs_protected_by_dx_min():
 
 
 def test_too_few_arcs_for_mono_is_not_flagged():
-    """mono needs >= 3 points; fewer than that can't be judged monotonic, so
-    the gate must not fire regardless of dom2/alt2 (matches min_arcs=3 being
-    the pre-existing floor for a run to exist at all)."""
     arcs = [_arc(0.0, 1.0, bx=0.15, cx=0.1), _arc(1.0, 1.0, bx=0.15, cx=0.3)]
     assert is_drift_cohort(arcs) is False
 
