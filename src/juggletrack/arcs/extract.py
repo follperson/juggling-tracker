@@ -329,13 +329,15 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
     """
     pieces: list[list[int]] = []
     cur: list[int] = []
-    for i, row in zip(idxs, arr[idxs].tolist()):
+    rows = arr[idxs]
+    for k, (i, row) in enumerate(zip(idxs, rows.tolist())):
         if not cur:
             mom = _Moments(row[0])
         cur.append(i)
         mom.add(*row)
         if len(cur) >= 4:
-            fast = mom.fit_residuals(arr[cur])
+            # cur is always the run of idxs ending at k, so its rows are a slice
+            fast = mom.fit_residuals(rows[k + 1 - len(cur) : k + 1])
             if (
                 fast is not None
                 and fast[0] <= resid_tol - _EXACT_MARGIN
