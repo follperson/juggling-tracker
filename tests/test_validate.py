@@ -165,6 +165,30 @@ def test_real_juggling_cohorts_are_not_flagged(name):
     assert is_drift_cohort(REAL_JUGGLING_COHORTS[name]) is False
 
 
+def test_live_window_of_one_hand_throws_is_not_flagged():
+    """Real juggling that the pre-sweep gate deleted in live mode.
+
+    Provenance: outputs/meschke-val/ss42_id_010/detections.jsonl (shipped v3
+    detector) replayed through RealtimeAnalyzer on its recorded clock at
+    commit 324ad61. At feed time 8.967 s the 8 s window held one run of these
+    four arcs, and is_drift_cohort returned True. The Meschke labels show
+    siteswap 42 there: one hand throws two balls in a fountain while the
+    other holds the third. Every dx is negative and cx rises steadily, but
+    the x-ranges overlap, so the cohort does not sweep.
+    """
+    arcs = [
+        Arc(id=0, t_start=1.0000, t_end=2.9667, ay=0.1380, by=-0.0437, cy=0.2903,
+            bx=-0.0236, cx=0.3521, n_points=61, rmse=0.0095),
+        Arc(id=1, t_start=2.2333, t_end=5.1667, ay=0.1292, by=-0.2898, cy=0.5144,
+            bx=-0.0282, cx=0.4031, n_points=89, rmse=0.0180),
+        Arc(id=2, t_start=3.7667, t_end=7.0333, ay=0.1755, by=-0.5994, cy=0.7973,
+            bx=-0.0517, cx=0.4107, n_points=99, rmse=0.0079),
+        Arc(id=3, t_start=5.9000, t_end=8.9667, ay=0.1869, by=-0.6156, cy=0.8030,
+            bx=-0.0676, cx=0.4290, n_points=93, rmse=0.0062),
+    ]
+    assert is_drift_cohort(arcs) is False
+
+
 def test_real_junk_cohort_is_flagged():
     assert is_drift_cohort(PXL_182734164_MOTION_JUNK) is True
 
