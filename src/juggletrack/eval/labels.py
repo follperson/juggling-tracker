@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class LabeledRun(BaseModel):
-    model_config = ConfigDict(allow_inf_nan=False)
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     start_t: float
     end_t: float
@@ -20,7 +20,7 @@ class LabeledRun(BaseModel):
 
 
 class VideoLabels(BaseModel):
-    model_config = ConfigDict(allow_inf_nan=False)
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     video: str
     runs: list[LabeledRun] = Field(default_factory=list)

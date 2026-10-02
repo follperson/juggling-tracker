@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from juggletrack.eval.labels import LabeledRun, VideoLabels
 from juggletrack.eval.metrics import evaluate_session, temporal_iou
@@ -82,3 +83,13 @@ def test_labels_json_roundtrip(tmp_path):
     p = tmp_path / "labels.json"
     p.write_text(labels.model_dump_json(indent=2))
     assert VideoLabels.model_validate_json(p.read_text()) == labels
+
+
+@pytest.mark.parametrize("document", [
+    '{"video": "v.mp4", "runs": [], "drop": [6.0]}',
+    '{"video": "v.mp4", "runz": []}',
+    '{"video": "v.mp4", "runs": [{"start_t": 1, "end_t": 6, "catches": 12, "end_reasn": "drop"}]}',
+])
+def test_misspelled_label_keys_are_rejected(document):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        VideoLabels.model_validate_json(document)

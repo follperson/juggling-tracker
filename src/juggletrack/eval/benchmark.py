@@ -132,8 +132,13 @@ def run_benchmark(
         labels = VideoLabels.model_validate_json(label_path.read_text())
         if labels.video != clip.video:
             raise ValueError(f"{clip.video}: labels identify a different video: {labels.video}")
-        if any(r.end_t > clip.frame_count / clip.fps for r in labels.runs):
+        duration = clip.frame_count / clip.fps
+        if any(r.start_t < 0 for r in labels.runs):
+            raise ValueError(f"{clip.video}: labeled run starts before the video")
+        if any(r.end_t > duration for r in labels.runs):
             raise ValueError(f"{clip.video}: labeled run ends after the video")
+        if any(not 0 <= t <= duration for t in labels.drops):
+            raise ValueError(f"{clip.video}: labeled drop lies outside the video")
         dets = load_detections_jsonl(det_path)
         _validate_detections(dets, clip)
         session = analyze_detections(dets, cfg)

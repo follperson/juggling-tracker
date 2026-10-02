@@ -79,6 +79,67 @@ def test_benchmark_rejects_invalid_references(benchmark_manifest, change):
         run_benchmark(benchmark_manifest)
 
 
+def _edit_labels(manifest, edit):
+    path = manifest.parent / "labels.json"
+    labels = json.loads(path.read_text())
+    edit(labels)
+    path.write_text(json.dumps(labels))
+
+
+def _edit_first_detection(manifest, **fields):
+    path = manifest.parent / "detections.jsonl"
+    lines = path.read_text().splitlines()
+    lines[0] = json.dumps({**json.loads(lines[0]), **fields})
+    path.write_text("\n".join(lines))
+
+
+def _reuse_detections_for_second_video(manifest):
+    spec = json.loads(manifest.read_text())
+    (manifest.parent / "copy-labels.json").write_text(
+        json.dumps({"video": "cascade-copy", "runs": [], "drops": []}))
+    spec["clips"].append({**spec["clips"][0], "video": "cascade-copy",
+                          "labels": "copy-labels.json"})
+    manifest.write_text(json.dumps(spec))
+
+
+# The manifest's clip is 900 frames at 30 fps: 30 s long.
+@pytest.mark.parametrize(("corrupt", "message"), [
+    (_reuse_detections_for_second_video, "duplicate detection input"),
+    (lambda m: _edit_labels(m, lambda lab: lab.update(video="other")),
+     "labels identify a different video"),
+    (lambda m: _edit_labels(m, lambda lab: lab["runs"][1].update(end_t=30.5)),
+     "labeled run ends after the video"),
+    (lambda m: _edit_labels(m, lambda lab: lab["runs"][0].update(start_t=-0.5)),
+     "labeled run starts before the video"),
+    (lambda m: _edit_labels(m, lambda lab: lab.update(drops=[30.5])),
+     "labeled drop lies outside the video"),
+    (lambda m: _edit_labels(m, lambda lab: lab.update(drops=[-0.5])),
+     "labeled drop lies outside the video"),
+    (lambda m: _edit_first_detection(m, frame_idx=900), "invalid detection at frame 900"),
+    (lambda m: _edit_first_detection(m, confidence=1.5), "invalid detection"),
+    (lambda m: _edit_first_detection(m, t=31.0), "invalid detection"),
+], ids=["duplicate_detections", "video_mismatch", "run_past_end", "negative_start",
+        "drop_past_end", "negative_drop", "frame_past_end", "confidence_above_one",
+        "time_past_end"])
+def test_benchmark_rejects_inputs_inconsistent_with_the_clip(benchmark_manifest, corrupt, message):
+    from juggletrack.eval.benchmark import run_benchmark
+
+    corrupt(benchmark_manifest)
+    with pytest.raises(ValueError, match=message):
+        run_benchmark(benchmark_manifest)
+
+
+def test_benchmark_accepts_events_at_the_clip_boundaries(benchmark_manifest):
+    from juggletrack.eval.benchmark import run_benchmark
+
+    def edit(labels):
+        labels["runs"][1]["end_t"] = 30.0
+        labels["drops"] = [0.0, 30.0]
+
+    _edit_labels(benchmark_manifest, edit)
+    assert run_benchmark(benchmark_manifest)["summary"]["drop_fn"] == 2
+
+
 def test_benchmark_realtime_replays_without_video_or_weights(benchmark_manifest):
     from juggletrack.eval.benchmark import run_benchmark
 
