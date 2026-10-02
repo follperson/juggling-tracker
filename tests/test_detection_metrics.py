@@ -35,6 +35,33 @@ def test_one_to_one_matching_maximizes_matches_at_crossings():
     assert result["fp"] == result["fn"] == 0
 
 
+def test_matching_maximizes_gated_matches_before_minimizing_distance():
+    from juggletrack.eval.detection_metrics import evaluate_ball_centers
+
+    def px(x, y):
+        return point(0, x / 100, y / 100)
+
+    result = evaluate_ball_centers(
+        [px(4.18, 9.41), px(2.79, 13.19)], [px(5.11, 1.48), px(8.81, 12.98)],
+        width=100, height=100, frame_count=1, tolerance_px=6,
+    )
+    # Minimum total distance without the gate pairs both predictions with
+    # targets more than 6 px away and scores no match at all.
+    assert result["tp"] == 1
+    assert result["fp"] == result["fn"] == 1
+
+
+def test_mean_center_error_is_the_matched_pixel_distance():
+    from juggletrack.eval.detection_metrics import evaluate_ball_centers
+
+    result = evaluate_ball_centers(
+        [point(0, .53, .54)], [point(0, .5, .5)],
+        width=100, height=100, frame_count=1, tolerance_px=10,
+    )
+    assert result["tp"] == 1
+    assert result["mean_center_error_px"] == pytest.approx(5.0)
+
+
 def test_distances_use_pixels_on_non_square_video():
     from juggletrack.eval.detection_metrics import evaluate_ball_centers
 
