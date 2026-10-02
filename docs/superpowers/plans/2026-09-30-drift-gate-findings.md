@@ -130,8 +130,8 @@ drifting-juggler gap below, seen on real footage.
 `ss3_id_016`, feeding `frame_idx / fps` instead of the recorded clock moves
 each frame's time by at most 2.8e-14 s. With identical code, that changes the
 old gate's result from [9, 210, 7] to [8, 206, 8], and the new gate's from
-[9, 210, 8] to [8, 207, 9]. `benchmark --realtime` feeds `frame_idx / fps`.
-Only recorded-clock numbers are live numbers.
+[9, 210, 8] to [8, 207, 9]. Only recorded-clock numbers are live numbers.
+`benchmark --realtime` feeds the recorded clock for this reason.
 
 **Open follow-ups.**
 
