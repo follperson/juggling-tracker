@@ -938,6 +938,55 @@ def test_merge_matches_reference_when_a_statistic_ties_its_threshold(stat):
             )
 
 
+def _light_head_union(seed, *, gap, offset):
+    """One flight whose first detection is nearly weightless and ``gap`` seconds
+    ahead of eleven dense ones, cut into two exact arcs whose halves disagree
+    by 5e-6 in y. The union's polynomial basis is centred far from its data,
+    so its normal equations are nearly singular."""
+    rng = np.random.default_rng(seed)
+    t = 20.0 + np.concatenate([[0.0], gap + np.arange(11) / 30.0])
+    dt = t - t[0]
+    ay, by, cy, bx, cx = 0.12, -0.5, 0.9 + offset, 0.2, 0.2
+    y = ay * dt**2 + by * dt + cy + rng.normal(0, 1e-7, len(t))
+    y[6:] += 5e-6
+    x = bx * dt + cx + rng.normal(0, 1e-7, len(t))
+    w = rng.uniform(0.2, 1.0, len(t))
+    w[0] = 1e-6
+    arr = _sorted_points([
+        Detection(frame_idx=0, t=tt, x=xx, y=yy, confidence=c)
+        for tt, xx, yy, c in np.column_stack([t, x, y, w])
+    ])
+    d = dt[6]
+    return arr, [
+        Arc(id=-1, t_start=t[0], t_end=t[5], ay=ay, by=by, cy=cy, bx=bx, cx=cx,
+            n_points=6, rmse=0.0),
+        Arc(id=-1, t_start=t[6], t_end=t[-1], ay=ay, by=by + 2 * ay * d,
+            cy=cy + by * d + ay * d * d + 5e-6, bx=bx, cx=cx + bx * d, n_points=6, rmse=0.0),
+    ]
+
+
+@pytest.mark.parametrize(("gap", "offset"), [
+    # relative determinant ~3.5e-6, y a million units from the origin
+    pytest.param(0.6, 1e6, marks=pytest.mark.xfail(
+        strict=True, reason="_EXACT_MARGIN is absolute, not scaled to the coordinates")),
+    (3.5, 0.0),  # relative determinant ~3e-10, below _MIN_REL_DET
+])
+def test_merge_matches_reference_at_y_ties_on_ill_conditioned_unions(gap, offset):
+    """Here the closed-form y-rmse overestimates the union's by up to 1e-4 far
+    from the origin and by up to 2e-6 below the conditioning floor. Unless the
+    margin grows with the coordinates and the floor sends near-singular unions
+    to fit_arc, the pre-reject drops a union that fit_arc accepts."""
+    for seed in range(20):
+        arr, arcs = _light_head_union(seed, gap=gap, offset=offset)
+        tie = _union_stats(arr, arcs)[0]
+        assert len(_ref_merge_pass(arr, arcs, tie)) == 1
+        assert len(_ref_merge_pass(arr, arcs, np.nextafter(tie, 0.0))) == 2
+        for resid_tol in (np.nextafter(tie, 0.0), tie, np.nextafter(tie, np.inf)):
+            assert _merge_pass(arr, arcs, resid_tol) == _ref_merge_pass(arr, arcs, resid_tol), (
+                seed, resid_tol,
+            )
+
+
 @pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 def test_merge_matches_reference_on_two_timestamp_unions():
     """Duplicate boxes can leave a union with only two distinct timestamps.
