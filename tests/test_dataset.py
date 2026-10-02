@@ -81,3 +81,54 @@ def test_deterministic_split(tmp_path):
     a = assemble_dataset(sources, tmp_path / "dsA", val_fraction=0.4, seed=7)
     b = assemble_dataset(sources, tmp_path / "dsB", val_fraction=0.4, seed=7)
     assert a["val_sources"] == b["val_sources"]
+
+
+def test_rebuild_refuses_existing_dataset_without_modifying_it(tmp_path):
+    sources = [make_coco_source(tmp_path, f"vid{i}", 1) for i in range(4)]
+    out = tmp_path / "ds"
+    assemble_dataset(sources, out, seed=0)
+    before = {p.relative_to(out): p.read_bytes() for p in out.rglob("*") if p.is_file()}
+
+    with pytest.raises(ValueError, match="empty output directory"):
+        assemble_dataset(sources, out, seed=1)
+
+    after = {p.relative_to(out): p.read_bytes() for p in out.rglob("*") if p.is_file()}
+    assert after == before
+
+
+def test_duplicate_source_names_rejected_before_writing(tmp_path):
+    a = make_coco_source(tmp_path / "a", "clip", 1)
+    b = make_coco_source(tmp_path / "b", "clip", 1)
+    out = tmp_path / "ds"
+    with pytest.raises(ValueError, match="unique"):
+        assemble_dataset([a, b], out)
+    assert not out.exists()
+
+
+def test_source_aliases_cannot_cross_splits(tmp_path):
+    src = make_coco_source(tmp_path, "clip", 1)
+    alias = tmp_path / "alias"
+    alias.symlink_to(src, target_is_directory=True)
+    with pytest.raises(ValueError, match="unique"):
+        assemble_dataset([src, alias], tmp_path / "ds")
+
+
+@pytest.mark.parametrize("fraction", [0, 1, -0.1, 1.1, float("nan")])
+def test_invalid_validation_fraction_rejected_before_writing(tmp_path, fraction):
+    sources = [make_coco_source(tmp_path, f"v{i}", 1) for i in range(2)]
+    out = tmp_path / "ds"
+    with pytest.raises(ValueError, match="val_fraction"):
+        assemble_dataset(sources, out, val_fraction=fraction)
+    assert not out.exists()
+
+
+def test_high_validation_fraction_keeps_a_training_source(tmp_path):
+    sources = [make_coco_source(tmp_path, f"v{i}", 1) for i in range(2)]
+    stats = assemble_dataset(sources, tmp_path / "ds", val_fraction=0.9)
+    assert stats["n_train_images"] == 1
+    assert stats["n_val_images"] == 1
+
+
+def test_empty_sources_rejected(tmp_path):
+    with pytest.raises(ValueError, match="at least one"):
+        assemble_dataset([], tmp_path / "ds")

@@ -1,4 +1,5 @@
 import json
+import re
 
 import numpy as np
 import pytest
@@ -10,6 +11,13 @@ from juggletrack.types import Detection, SessionResult
 from tests.helpers import write_test_video
 
 runner = CliRunner()
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(output: str) -> str:
+    """Rich splits a styled option token, so "--model" is absent from coloured bytes."""
+    return _ANSI.sub("", output)
 
 
 @pytest.fixture()
@@ -82,6 +90,23 @@ def test_analyze_no_overlay(workspace):
     assert result.exit_code == 0, result.output
     assert (out / "analysis.json").exists()
     assert not (out / "overlay.mp4").exists()
+
+
+@pytest.mark.parametrize("value", ["inf", "nan"])
+def test_analyze_rejects_non_finite_link_distance_as_usage_error(workspace, value):
+    from juggletrack.cli import app
+
+    _, video, dets, tmp = workspace
+    out = tmp / "out_nonfinite"
+    result = runner.invoke(app, [
+        "analyze", str(video), "--out", str(out), "--detections", str(dets),
+        "--link-max-dist", value,
+    ])
+    output = plain(result.output)
+    assert result.exit_code == 2, output
+    assert re.search(r"Invalid value for '?--link-max-dist'?: Input should be a finite number",
+                     output), output
+    assert not out.exists()
 
 
 def test_analyze_dots_option_passthrough(workspace):
@@ -264,3 +289,54 @@ def test_live_command_non_ascii_digit_source_stays_a_string(workspace, monkeypat
     ])
     assert result.exit_code == 0, result.output
     assert captured["src"] == "²"
+
+
+@pytest.mark.parametrize("command", ["analyze", "live", "coverage", "label"])
+def test_inference_commands_explain_missing_default_model(workspace, monkeypatch, command):
+    from juggletrack.cli import app
+
+    def unexpected_model_load(*args, **kwargs):
+        raise AssertionError("missing defaults must fail before loading/downloading weights")
+
+    monkeypatch.setattr("juggletrack.detect.yolo.YOLODetector", unexpected_model_load)
+    _, video, _, tmp = workspace
+    monkeypatch.chdir(tmp)
+    monkeypatch.delenv("JUGGLETRACK_MODEL", raising=False)
+    result = runner.invoke(app, [command, str(video)])
+    output = " ".join(plain(result.output).replace("│", " ").split())
+    assert result.exit_code == 2, output
+    # No --model was passed, so the error must not blame that option.
+    assert not re.search(r"Invalid value for '?--model", output)
+    assert "relative to the current directory" in output
+    assert "--model" in output
+    assert "JUGGLETRACK_MODEL" in output
+
+
+@pytest.mark.parametrize(("args", "environment", "expected"), [
+    (["--model", "x.pt"], None, "x.pt"),
+    ([], "y.pt", "y.pt"),
+    (["--model", "x.pt"], "y.pt", "x.pt"),
+])
+def test_analyze_forwards_selected_model_to_detector(
+    workspace, monkeypatch, args, environment, expected,
+):
+    from juggletrack.cli import app
+    from juggletrack.detect.fake import FakeDetector
+
+    sim, video, _, tmp = workspace
+    captured = {}
+
+    def capturing_detector(model_path, **kwargs):
+        captured["model_path"] = model_path
+        return FakeDetector(sim.detections)
+
+    monkeypatch.setattr("juggletrack.detect.yolo.YOLODetector", capturing_detector)
+    monkeypatch.chdir(tmp)
+    monkeypatch.delenv("JUGGLETRACK_MODEL", raising=False)
+    if environment is not None:
+        monkeypatch.setenv("JUGGLETRACK_MODEL", environment)
+    result = runner.invoke(app, [
+        "analyze", str(video), "--out", str(tmp / "out"), "--no-overlay", *args,
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["model_path"] == expected

@@ -1,0 +1,27 @@
+name: Tests
+
+on:
+  # pull_request already covers PR branches, so pushes run only for main.
+  # It has no branch filter because PRs here stack on non-main bases.
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Install OpenCV runtime libraries
+        run: sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
+      - run: uv sync --locked
+      - run: uv run --no-sync ruff check src tests
+      - run: uv run --no-sync pytest -q

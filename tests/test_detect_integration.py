@@ -1,14 +1,16 @@
 """Integration tests that exercise real YOLO weights. Deselected by default
 (pytest addopts -m 'not detector'); run with: uv run pytest -m detector -v
 """
+import os
 from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.detector
 
-REAL_VIDEO = Path("/Users/andrew.follmann/personal-projects/juggling/data/raw/af2.mp4")
-LOCAL_WEIGHTS = Path("/Users/andrew.follmann/personal-projects/juggling/yolo11n.pt")
+ROOT = Path(__file__).resolve().parents[1]
+REAL_VIDEO = Path(os.environ.get("JUGGLETRACK_TEST_VIDEO", ROOT / "data/raw/af2.mp4"))
+LOCAL_WEIGHTS = ROOT / "yolo11n.pt"
 
 
 def test_yolo_detects_balls_in_real_juggling_video():

@@ -20,13 +20,31 @@ def assemble_dataset(
     val_fraction: float = 0.2,
     seed: int = 0,
 ) -> dict:
+    """Write a dataset into an empty directory, splitting by source video.
+
+    Reusing a populated output can leave old images in the opposite split.
+    Refuse that operation before writing; use a new versioned directory.
+    A single source remains useful for training smoke tests, but its
+    validation path aliases training and is not an accuracy measurement.
+    """
     sources = [Path(s) for s in source_dirs]
-    rng = np.random.default_rng(seed)
-    order = list(rng.permutation(len(sources)))
-    n_val = max(1, round(val_fraction * len(sources))) if len(sources) >= 2 else 0
-    val_idx = set(order[:n_val])
+    if not sources:
+        raise ValueError("provide at least one source directory")
+    if not 0.0 < val_fraction < 1.0:
+        raise ValueError("val_fraction must be between 0 and 1 (exclusive)")
+    if (len({s.name for s in sources}) != len(sources)
+            or len({s.resolve() for s in sources}) != len(sources)):
+        raise ValueError("source directories must have unique names and unique resolved paths")
 
     out = Path(out_dir)
+    if out.exists() and (not out.is_dir() or any(out.iterdir())):
+        raise ValueError(f"use an empty output directory: {out} already contains data")
+
+    rng = np.random.default_rng(seed)
+    order = list(rng.permutation(len(sources)))
+    n_val = min(len(sources) - 1, max(1, round(val_fraction * len(sources))))
+    val_idx = set(order[:n_val])
+
     for split in ("train", "val"):
         (out / "images" / split).mkdir(parents=True, exist_ok=True)
         (out / "labels" / split).mkdir(parents=True, exist_ok=True)
