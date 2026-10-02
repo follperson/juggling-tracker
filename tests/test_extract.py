@@ -858,6 +858,89 @@ def test_split_matches_reference_when_a_statistic_ties_its_threshold(stat):
             ), (seed, resid_tol)
 
 
+def _split_flight(seed, *, y_step, x_step):
+    """One flight cut into two arcs whose halves disagree by ``y_step`` in y and
+    ``x_step`` in x. Each arc fits its own half almost exactly, so every point
+    passes _merge_pass's keep filter and the union's misfit is the step alone.
+    Even seeds leave a gap between the halves, odd seeds overlap them."""
+    rng = np.random.default_rng(seed)
+    t = 20.0 + np.arange(28) / 30.0
+    cut = 20.45
+    lo_end, hi_start = (cut - 0.04, cut + 0.04) if seed % 2 == 0 else (cut + 0.06, cut - 0.06)
+    half_a, half_b = t <= lo_end, t >= hi_start
+    dt = t - t[0]
+    y = 0.7 - 1.6 * dt + 4.0 * dt**2 + rng.normal(0, 1e-4, len(t))
+    x = 0.3 + 0.15 * dt + rng.normal(0, 1e-4, len(t))
+    pts_a = np.column_stack([t, x, y, rng.uniform(0.2, 1.0, len(t))])[half_a]
+    pts_b = np.column_stack([t, x + x_step, y + y_step, rng.uniform(0.2, 1.0, len(t))])[half_b]
+    arr = _sorted_points([
+        Detection(frame_idx=0, t=tt, x=xx, y=yy, confidence=c)
+        for tt, xx, yy, c in np.vstack([pts_a, pts_b])
+    ])
+    return arr, [fit_arc(pts_a), fit_arc(pts_b)]
+
+
+def _union_stats(arr, arcs):
+    """fit_arc's (rmse, unweighted x-rmse) of the union _merge_pass forms from two arcs."""
+    a, b = arcs
+    t = arr[:, 0]
+    pts = arr[((t >= a.t_start) & (t <= a.t_end)) | ((t >= b.t_start) & (t <= b.t_end))]
+    union = fit_arc(pts)
+    dt = pts[:, 0] - union.t_start
+    return union.rmse, float(np.sqrt(np.mean((union.bx * dt + union.cx - pts[:, 1]) ** 2)))
+
+
+@pytest.mark.parametrize("stat", ["y-rmse", "x-rmse"])
+def test_merge_matches_reference_when_a_statistic_ties_its_threshold(stat):
+    """Set resid_tol so the union's reference statistic lands exactly on its
+    acceptance bound (rmse <= resid_tol, x-rmse <= 2*resid_tol), then one ulp
+    either side. Only the margin keeps the closed-form pre-reject from
+    rejecting a union fit_arc would accept."""
+    for seed in range(30):
+        if stat == "y-rmse":
+            arr, arcs = _split_flight(seed, y_step=0.01, x_step=0.0)
+            tie = _union_stats(arr, arcs)[0]
+        else:
+            arr, arcs = _split_flight(seed, y_step=0.0, x_step=0.02)
+            tie = _union_stats(arr, arcs)[1] / 2
+        assert len(_ref_merge_pass(arr, arcs, tie)) == 1
+        assert len(_ref_merge_pass(arr, arcs, np.nextafter(tie, 0.0))) == 2
+        for resid_tol in (np.nextafter(tie, 0.0), tie, np.nextafter(tie, np.inf)):
+            assert _merge_pass(arr, arcs, resid_tol) == _ref_merge_pass(arr, arcs, resid_tol), (
+                seed, resid_tol,
+            )
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+def test_merge_matches_reference_on_two_timestamp_unions():
+    """Duplicate boxes can leave a union with only two distinct timestamps.
+    polyfit's rank-deficient fit then accepts unions that the normal equations
+    cannot even solve, so these must reach fit_arc's own acceptance test."""
+    merged = 0
+    for seed in range(40):
+        rng = np.random.default_rng(seed)
+        t = np.repeat([5.0, 5.0 + 1 / 30], rng.integers(2, 5, size=2))
+        pts = np.column_stack([
+            t,
+            0.4 + 0.3 * (t - 5.0) + rng.normal(0, 0.002, len(t)),
+            0.6 - 0.9 * (t - 5.0) + rng.normal(0, 0.002, len(t)),
+            rng.uniform(0.05, 1.0, len(t)),
+        ])
+        arr = _sorted_points([
+            Detection(frame_idx=0, t=tt, x=xx, y=yy, confidence=c) for tt, xx, yy, c in pts
+        ])
+        first = np.flatnonzero(arr[:, 0] == 5.0)
+        second = np.flatnonzero(arr[:, 0] > 5.0)
+        arcs = [
+            fit_arc(arr[np.concatenate([rng.choice(first, 2, replace=False), rng.choice(second, 1)])])
+            for _ in range(3)
+        ]
+        expected = _ref_merge_pass(arr, arcs, 0.02)
+        assert _merge_pass(arr, arcs, 0.02) == expected
+        merged += len(expected) < len(arcs)
+    assert merged > 0
+
+
 @pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 @pytest.mark.parametrize("cloud", sorted(_CLOUDS))
 @pytest.mark.parametrize("resid_tol", [0.005, 0.02, 0.08])

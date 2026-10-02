@@ -236,6 +236,16 @@ class _Moments:
         self.sy = [0.0] * 3
         self.sx = [0.0] * 2
 
+    @classmethod
+    def of(cls, pts: np.ndarray) -> _Moments:
+        """Moments of ``pts`` sorted by t, so ``t0`` is fit_arc's ``t_start``."""
+        m = cls(float(pts[0, 0]))
+        pw = np.vander(pts[:, 0] - m.t0, 5, increasing=True) * (pts[:, 3] ** 2)[:, None]
+        m.s = pw.sum(axis=0).tolist()
+        m.sy = (pts[:, 2] @ pw[:, :3]).tolist()
+        m.sx = (pts[:, 1] @ pw[:, :2]).tolist()
+        return m
+
     def add(self, t: float, x: float, y: float, w: float) -> None:
         dt = t - self.t0
         s, sy, sx = self.s, self.sy, self.sx
@@ -407,6 +417,13 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
     Requires ``arr`` sorted by t (extract_arcs sorts it), so each arc's
     ``[t_start, t_end]`` span is one contiguous index range and a union's
     rows come from two slices instead of a mask over every point.
+
+    A union whose closed-form least-squares fit (``_Moments``) misses either
+    acceptance bound by more than ``_EXACT_MARGIN`` is rejected without
+    running fit_arc; every other union goes through fit_arc's acceptance test
+    unchanged. Rejecting on y-rmse rests on the solve being accurate, which
+    ``_MIN_REL_DET`` guards: duplicate timestamps leaving fewer than three
+    distinct times fall below it and keep polyfit's own handling.
     """
     arcs = sorted(arcs, key=lambda a: a.t_start)
     t = arr[:, 0]
@@ -442,6 +459,12 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
             keep_b = y_residuals(b, pts) < 2 * resid_tol
             pts = pts[keep_a | keep_b]
             if len(pts) < 3:
+                continue
+            fast = _Moments.of(pts).fit_residuals(pts)
+            if fast is not None and (
+                fast[0] > resid_tol + _EXACT_MARGIN
+                or math.sqrt(float(np.mean(fast[1] ** 2))) > 2 * resid_tol + _EXACT_MARGIN
+            ):
                 continue
             try:
                 union = fit_arc(pts)
