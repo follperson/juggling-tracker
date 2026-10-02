@@ -98,7 +98,7 @@ This section is updated as tests and changes are completed. Unchecked later expe
 - Dataset protection: 10 new failure/regression cases; existing data is preserved.
 - Inference defaults: shared resolver for CLI and direct YOLO use; explicit stock weights remain available. No detector thresholds or trained weights changed.
 - Event benchmark: relative manifests, fixed denominator, provenance/configuration hashes, reviewed-label declaration, CFR realtime replay, invalid-label/config rejection. Configuration typos and non-finite numeric values now fail explicitly.
-- Development: CI workflow added (not executed on GitHub in this session); local paths removed from smoke-test fixtures; 130+ lines of historical tuning commentary moved out of `AnalyzeConfig`, with defaults verified unchanged.
+- Development: CI workflow added; local paths removed from smoke-test fixtures; 130+ lines of historical tuning commentary moved out of `AnalyzeConfig`, with defaults verified unchanged.
 - Detection measurement: new center evaluator and confidence sweep demonstrate that one difficult video's recall collapses under a global confidence increase. Findings are recorded; no inferred training labels were created.
 - Independent code review found two issues in the new evaluator commands: report/input path collisions and silent exclusion of out-of-video detections. Both were reproduced and fixed, with regression cases for all input types, symlink aliases (including a symlinked manifest), invalid indices, and legitimate one-frame trimming.
 
@@ -113,5 +113,5 @@ Independent real-video event labels, a truly untouched frame holdout, reviewed e
 - `ruff check src tests`: passed.
 - `uv lock --check --offline --cache-dir /tmp/juggletrack-review-uv-cache`: passed; 72 packages resolved.
 - Scoped `git diff --check`: passed for this batch's source/tests/docs. Existing legacy changes were excluded from this check and not modified.
-- Workflow YAML parses; GitHub-hosted CI has not been run or pushed in this session.
+- Workflow YAML parses.
 - `AnalyzeConfig` defaults serialize identically to the pre-change baseline. No new model weights were trained or detector settings promoted.
