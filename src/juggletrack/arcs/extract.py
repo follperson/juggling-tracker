@@ -289,10 +289,8 @@ class _Moments:
         cx = (s2 * self.sx[0] - s1 * self.sx[1]) / c11
 
         dt = pts[:, 0] - self.t0
-        ry = ay * dt * dt + by * dt + cy - pts[:, 2]
-        w2 = pts[:, 3] * pts[:, 3]
-        y_rmse = math.sqrt(float(w2 @ (ry * ry)) / s0)
-        return y_rmse, bx * dt + cx - pts[:, 1]
+        ry = ((ay * dt + by) * dt + cy - pts[:, 2]) * pts[:, 3]
+        return math.sqrt(float(ry @ ry) / s0), bx * dt + cx - pts[:, 1]
 
 
 def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list[list[int]]:
@@ -339,7 +337,7 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
             if (
                 fast is not None
                 and fast[0] <= resid_tol - _EXACT_MARGIN
-                and np.max(np.abs(fast[1])) <= 2 * resid_tol - _EXACT_MARGIN
+                and np.abs(fast[1]).max() <= 2 * resid_tol - _EXACT_MARGIN
             ):
                 continue
             arc = fit_arc(arr[cur])
