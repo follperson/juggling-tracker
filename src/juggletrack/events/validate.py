@@ -11,9 +11,8 @@ from juggletrack.types import Arc
 # near-vertical throws (e.g. a siteswap-4 "columns" pattern, or multiplex
 # throws) from having their sign flip on measurement noise alone.
 DX_MIN = 0.03
-DOM_T = 0.99   # dom2 >= this: every meaningful arc drifts the same direction
+DOM_T = 0.99
 MONO_T = 0.9   # mono >= this: throw x-origins march monotonically with index
-ALT_T = 0.2    # alt2 <= this (or undefined): essentially never alternates
 
 
 def is_drift_cohort(arcs: list[Arc]) -> bool:
@@ -32,23 +31,20 @@ def is_drift_cohort(arcs: list[Arc]) -> bool:
       arc index -- the signature of one cohort drifting, not a cascade
       alternating hands). Needs >= 3 arcs and nonzero variance in cx;
       otherwise 0.0 (can't be judged monotonic).
-    - ``alt2`` = fraction of ADJACENT arc pairs (in the full sorted
-      sequence, both meaningful) whose dx sign flips; ``None`` (undefined)
-      when there are no such pairs.
     - ``sweeps`` = every arc after the first has an x-range
       ``[min(cx_i, cx_i + dx_i), max(...)]`` disjoint from the hull of all
       earlier arcs' x-ranges (touching counts as overlap).
 
-    Reject iff ``dom2 >= DOM_T AND mono >= MONO_T AND (alt2 is None or
-    alt2 <= ALT_T) AND sweeps``.
+    Reject iff ``dom2 >= DOM_T AND mono >= MONO_T AND sweeps``.
+
+    No alternation term is needed. ``dom2 >= DOM_T`` allows one minority
+    sign only per 200 meaningful arcs, and a sweep of 200 meaningful arcs
+    spans at least ``200 * DX_MIN`` = 6 frame widths. So inside the frame,
+    every meaningful arc of a rejected run shares a sign.
     """
     ordered = sorted(arcs, key=lambda a: a.t_start)
     dx = np.array([a.bx * a.duration() for a in ordered])
     meaningful = np.abs(dx) >= DX_MIN
-
-    pairs = [(dx[i], dx[i + 1]) for i in range(len(dx) - 1)
-             if meaningful[i] and meaningful[i + 1]]
-    alt2 = (sum(1 for u, v in pairs if u * v < 0) / len(pairs)) if pairs else None
 
     mdx = dx[meaningful]
     dom2 = float(abs(np.mean(np.sign(mdx)))) if len(mdx) else 0.0
@@ -57,8 +53,7 @@ def is_drift_cohort(arcs: list[Arc]) -> bool:
     mono = (float(abs(np.corrcoef(cx, np.arange(len(cx)))[0, 1]))
             if len(cx) >= 3 and np.std(cx) > 1e-9 else 0.0)
 
-    return (dom2 >= DOM_T and mono >= MONO_T and (alt2 is None or alt2 <= ALT_T)
-            and _sweeps(cx, dx))
+    return dom2 >= DOM_T and mono >= MONO_T and _sweeps(cx, dx)
 
 
 def _sweeps(cx: np.ndarray, dx: np.ndarray) -> bool:

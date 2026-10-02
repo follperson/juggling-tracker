@@ -407,12 +407,9 @@ def test_slow_drift_junk_cohort_known_gap():
     invalidate a cohort that agrees with itself -- arc EXTRACTION still
     fits these three smooth drift paths as plausible arcs (asserted below).
 
-    The gap is closed one stage later, at run-validation time: this cohort
-    is unidirectional (dom2=1.0), monotonically marching across the frame
-    (mono=1.0), never alternates (alt2=0.0), and sweeps -- exactly the drift-cohort
-    shape events.validate.is_drift_cohort rejects. analyze_detections now
-    drops this run entirely (0 runs), even though its 3 arcs still exist in
-    sr.arcs (the gate removes runs, not arcs -- see analyze._events_from_arcs).
+    analyze_detections now drops this run entirely (0 runs), even though its
+    3 arcs still exist in sr.arcs (the gate removes runs, not arcs -- see
+    analyze._events_from_arcs).
 
     Note the paths must be spatially SEPARATED and drift briskly: slow
     drifters sharing spatial bins are already killed by
