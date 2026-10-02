@@ -208,6 +208,85 @@ def _link_fragments(arr: np.ndarray, max_dt: float, max_dist: float) -> list[lis
     return [f for f in done if len(f) >= 4]
 
 
+# A closed-form fit statistic must clear its threshold by this much before it
+# may stand in for fit_arc; anything closer is re-decided by fit_arc itself.
+_EXACT_MARGIN = 1e-7
+# Normal equations whose determinant is below this fraction of the product of
+# their diagonal (det of the column-normalized Gram matrix, in (0, 1]) are too
+# ill-conditioned to trust the closed-form solve. Measured: the closed-form
+# statistics stay within 3e-14 of fit_arc's above 1e-6 but drift to 4e-7 by
+# 1e-10, and real-session fits sit at 3e-6 and up.
+_MIN_REL_DET = 1e-6
+
+
+class _Moments:
+    """Weighted power sums of a point set, with dt measured from ``t0``.
+
+    The weight w is the detection confidence, fit_arc's polyfit weight, so
+    polyfit minimizes sum((w*resid)^2) and every sum carries w^2:
+    ``s[k] = sum(w^2 dt^k)`` for k = 0..4, ``sy[k] = sum(w^2 dt^k y)`` for
+    k = 0..2 and ``sx[k] = sum(w^2 dt^k x)`` for k = 0..1.
+    """
+
+    __slots__ = ("t0", "s", "sy", "sx")
+
+    def __init__(self, t0: float) -> None:
+        self.t0 = t0
+        self.s = [0.0] * 5
+        self.sy = [0.0] * 3
+        self.sx = [0.0] * 2
+
+    def add(self, t: float, x: float, y: float, w: float) -> None:
+        dt = t - self.t0
+        s, sy, sx = self.s, self.sy, self.sx
+        p = w * w
+        s[0] += p
+        sy[0] += p * y
+        sx[0] += p * x
+        p *= dt
+        s[1] += p
+        sy[1] += p * y
+        sx[1] += p * x
+        p *= dt
+        s[2] += p
+        sy[2] += p * y
+        p *= dt
+        s[3] += p
+        s[4] += p * dt
+
+    def fit_residuals(self, pts: np.ndarray) -> tuple[float, np.ndarray] | None:
+        """Solve the weighted least-squares parabola y(dt) and line x(dt) from
+        the sums, then evaluate them on ``pts`` (the summed points): returns
+        the weighted y-rmse exactly as fit_arc defines it and the signed x
+        residuals, or None when either system is too ill-conditioned."""
+        s0, s1, s2, s3, s4 = self.s
+        c11 = s2 * s0 - s1 * s1  # also the determinant of the x system
+        c12 = s2 * s1 - s3 * s0
+        c13 = s3 * s1 - s2 * s2
+        det = s4 * c11 + s3 * c12 + s2 * c13
+        if not (
+            math.isfinite(det)
+            and det > _MIN_REL_DET * s4 * s2 * s0
+            and c11 > _MIN_REL_DET * s2 * s0
+        ):
+            return None
+        c22 = s4 * s0 - s2 * s2
+        c23 = s3 * s2 - s4 * s1
+        c33 = s4 * s2 - s3 * s3
+        r0, r1, r2 = self.sy
+        ay = (c11 * r2 + c12 * r1 + c13 * r0) / det
+        by = (c12 * r2 + c22 * r1 + c23 * r0) / det
+        cy = (c13 * r2 + c23 * r1 + c33 * r0) / det
+        bx = (s0 * self.sx[1] - s1 * self.sx[0]) / c11
+        cx = (s2 * self.sx[0] - s1 * self.sx[1]) / c11
+
+        dt = pts[:, 0] - self.t0
+        ry = ay * dt * dt + by * dt + cy - pts[:, 2]
+        w2 = pts[:, 3] * pts[:, 3]
+        y_rmse = math.sqrt(float(w2 @ (ry * ry)) / s0)
+        return y_rmse, bx * dt + cx - pts[:, 1]
+
+
 def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list[list[int]]:
     """Split a fragment wherever one parabola -- or one x(t) line -- stops explaining it.
 
@@ -226,12 +305,33 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
     The threshold constant `2*resid_tol` is reused by `_merge_pass`, but this
     check gates on the MAX x-residual (stricter), while `_merge_pass` gates on
     x-RMSE (looser) — deliberate, because rmse dilutes the tail-point signal.
+
+    Fast path: running weighted moments of the current piece give its
+    least-squares fit in closed form, so most steps skip fit_arc. That fit
+    only ever decides "keep extending", and only when its y-rmse and max
+    x-residual both clear their thresholds by ``_EXACT_MARGIN``; every other
+    step, including every split, is decided by fit_arc as before. The y side
+    is safe even for an imperfect solve, because any parabola's rmse is at
+    least the least-squares minimum fit_arc finds; the x side relies on the
+    well-conditioned 2x2 solve plus the margin. Requires ``idxs`` in strictly
+    increasing t (``_link_fragments`` links only forward in time), so the
+    piece's first point is fit_arc's ``t_start``.
     """
     pieces: list[list[int]] = []
     cur: list[int] = []
-    for i in idxs:
+    for i, row in zip(idxs, arr[idxs].tolist()):
+        if not cur:
+            mom = _Moments(row[0])
         cur.append(i)
+        mom.add(*row)
         if len(cur) >= 4:
+            fast = mom.fit_residuals(arr[cur])
+            if (
+                fast is not None
+                and fast[0] <= resid_tol - _EXACT_MARGIN
+                and np.max(np.abs(fast[1])) <= 2 * resid_tol - _EXACT_MARGIN
+            ):
+                continue
             arc = fit_arc(arr[cur])
             x_bad = np.max(x_residuals(arc, arr[cur])) > 2 * resid_tol
             # Known gap: some crossing-ball fusions are invisible to both curvature
@@ -239,6 +339,8 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
             if arc.rmse > resid_tol or x_bad:
                 pieces.append(cur[:-1])
                 cur = [i]
+                mom = _Moments(row[0])
+                mom.add(*row)
     if len(cur) >= 4:
         pieces.append(cur)
     return [p for p in pieces if len(p) >= 4]

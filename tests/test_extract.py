@@ -613,6 +613,22 @@ def test_dedup_parallel_arcs_validates_knobs():
 # every float), with fit_arc still the only producer of a returned Arc.
 
 
+def _ref_split_ballistic(arr, idxs, resid_tol):
+    pieces = []
+    cur = []
+    for i in idxs:
+        cur.append(i)
+        if len(cur) >= 4:
+            arc = fit_arc(arr[cur])
+            x_bad = np.max(x_residuals(arc, arr[cur])) > 2 * resid_tol
+            if arc.rmse > resid_tol or x_bad:
+                pieces.append(cur[:-1])
+                cur = [i]
+    if len(cur) >= 4:
+        pieces.append(cur)
+    return [p for p in pieces if len(p) >= 4]
+
+
 def _ref_em_assign_refit(arr, arcs, resid_tol):
     if not arcs:
         return []
@@ -764,6 +780,82 @@ def _window_arcs(arr, n, seed):
         if len(win) >= 3 and win[-1, 0] > win[0, 0]:
             arcs.append(fit_arc(win))
     return arcs
+
+
+def _fragment(seed, n=24, y_noise=0.004, x_noise=0.004, weights=(0.05, 1.0), switch_at=None):
+    """One ball's points in strictly increasing t (as _link_fragments emits them),
+    optionally jumping onto a second ball's x-line at ``switch_at`` (a crossing)."""
+    rng = np.random.default_rng(seed)
+    t = 10.0 + np.cumsum(rng.uniform(1 / 60, 1 / 12, n))
+    dt = t - t[0]
+    y = 0.7 - rng.uniform(1.0, 2.5) * dt + rng.uniform(2.0, 6.0) * dt**2
+    x = 0.3 + rng.uniform(-0.4, 0.4) * dt
+    if switch_at is not None:
+        x[switch_at:] = 0.6 - rng.uniform(0.2, 0.4) * dt[switch_at:]
+    lo, hi = weights
+    w = rng.uniform(lo, hi, n)
+    return np.column_stack([
+        t, x + rng.normal(0, x_noise, n), y + rng.normal(0, y_noise, n), w,
+    ])
+
+
+_FRAGMENTS = (
+    [_fragment(s) for s in range(20)]
+    + [_fragment(100 + s, n=60, y_noise=0.01, x_noise=0.01) for s in range(10)]
+    + [_fragment(200 + s, switch_at=12) for s in range(10)]
+    + [_fragment(300 + s, y_noise=0.002, weights=(1e-12, 1e-3)) for s in range(10)]
+    + [_fragment(400 + s, y_noise=0.0, x_noise=0.0) for s in range(5)]
+)
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+@pytest.mark.parametrize("cloud", sorted(_CLOUDS))
+@pytest.mark.parametrize("resid_tol", [0.005, 0.02, 0.08])
+def test_split_matches_reference_on_linked_fragments(cloud, resid_tol):
+    arr = _sorted_points(_CLOUDS[cloud]())
+    for frag in _link_fragments(arr, 0.18, 0.08):
+        assert _split_ballistic(arr, frag, resid_tol) == _ref_split_ballistic(arr, frag, resid_tol)
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+@pytest.mark.parametrize("resid_tol", [0.001, 0.004, 0.02])
+def test_split_matches_reference_on_synthetic_fragments(resid_tol):
+    for arr in _FRAGMENTS:
+        idxs = list(range(len(arr)))
+        assert _split_ballistic(arr, idxs, resid_tol) == _ref_split_ballistic(arr, idxs, resid_tol)
+
+
+def _prefix_stats(arr):
+    """fit_arc's (rmse, max |x residual|) of every prefix of ``arr`` with >= 4 points."""
+    out = []
+    for k in range(4, len(arr) + 1):
+        arc = fit_arc(arr[:k])
+        out.append((arc.rmse, float(np.max(x_residuals(arc, arr[:k])))))
+    return out
+
+
+@pytest.mark.parametrize("stat", ["y-rmse", "x-max"])
+def test_split_matches_reference_when_a_statistic_ties_its_threshold(stat):
+    """Set resid_tol so the reference statistic of one prefix lands exactly on
+    its threshold (rmse <= resid_tol keeps, max |x residual| <= 2*resid_tol
+    keeps), then one ulp either side. The closed-form statistic differs from
+    fit_arc's in the last bits, so only the margin plus the fit_arc fallback
+    can keep these decisions identical."""
+    for seed in range(30):
+        if stat == "y-rmse":
+            arr = _fragment(500 + seed, y_noise=0.005, x_noise=1e-4)
+            tie = max(r for r, _ in _prefix_stats(arr))
+        else:
+            arr = _fragment(600 + seed, y_noise=1e-4, x_noise=0.005)
+            tie = max(x for _, x in _prefix_stats(arr)) / 2
+        idxs = list(range(len(arr)))
+        below = np.nextafter(tie, 0.0)
+        assert _ref_split_ballistic(arr, idxs, below) != _ref_split_ballistic(arr, idxs, tie)
+        for resid_tol in (below, tie, np.nextafter(tie, np.inf)):
+            assert (
+                _split_ballistic(arr, idxs, resid_tol)
+                == _ref_split_ballistic(arr, idxs, resid_tol)
+            ), (seed, resid_tol)
 
 
 @pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
