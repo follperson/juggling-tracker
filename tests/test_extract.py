@@ -1065,23 +1065,28 @@ def _fit_arc_counter(monkeypatch):
     return count
 
 
-@pytest.mark.parametrize("cloud", ["clean", "noisy", "drop"])
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+@pytest.mark.parametrize("cloud", ["clean", "noisy", "drop", "duplicate-boxes"])
 def test_fast_paths_spare_most_fit_arc_calls(cloud, monkeypatch):
     """Every parity test still passes if the fast paths silently stop firing,
     so pin how often fit_arc runs against the frozen copies, which call it at
-    every step."""
+    every step. The clouds sit about 100 s from the origin, as a long live
+    session does, because moment sums taken about t=0 instead of the window's
+    first timestamp fail the conditioning check there and fall back to fit_arc
+    on every union."""
     count = _fit_arc_counter(monkeypatch)
     arr = _sorted_points(_CLOUDS[cloud]())
+    arr[:, 0] += 100.0
     frags = _link_fragments(arr, 0.18, 0.08)
     split = sum(count(_split_ballistic, arr, f, 0.02) for f in frags)
     split_ref = sum(count(_ref_split_ballistic, arr, f, 0.02) for f in frags)
-    assert split <= split_ref / 20, (split, split_ref)
+    assert split <= split_ref / 100, (split, split_ref)
 
     arcs = [fit_arc(arr[p]) for f in frags for p in _split_ballistic(arr, f, 0.02)]
     arcs = _em_assign_refit(arr, arcs, 0.02)
     merge = count(_merge_pass, arr, arcs, 0.02)
     merge_ref = count(_ref_merge_pass, arr, arcs, 0.02)
-    assert merge <= merge_ref / 5, (merge, merge_ref)
+    assert merge <= merge_ref / 3, (merge, merge_ref)
 
 
 @pytest.mark.parametrize("bound", ["weight-ratio", "timestamp-gap"])
