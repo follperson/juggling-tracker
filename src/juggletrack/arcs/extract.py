@@ -268,17 +268,15 @@ class _Moments:
         """Solve the weighted least-squares parabola y(dt) and line x(dt) from
         the sums, then evaluate them on ``pts`` (the summed points): returns
         the weighted y-rmse exactly as fit_arc defines it and the signed x
-        residuals, or None when either system is too ill-conditioned."""
+        residuals, or None when the y system is too ill-conditioned. The x
+        system is its leading 2x2 block, so by Fischer's inequality the x
+        system's relative determinant is at least the y system's."""
         s0, s1, s2, s3, s4 = self.s
         c11 = s2 * s0 - s1 * s1  # also the determinant of the x system
         c12 = s2 * s1 - s3 * s0
         c13 = s3 * s1 - s2 * s2
         det = s4 * c11 + s3 * c12 + s2 * c13
-        if not (
-            math.isfinite(det)
-            and det > _MIN_REL_DET * s4 * s2 * s0
-            and c11 > _MIN_REL_DET * s2 * s0
-        ):
+        if not (math.isfinite(det) and det > _MIN_REL_DET * s4 * s2 * s0):
             return None
         c22 = s4 * s0 - s2 * s2
         c23 = s3 * s2 - s4 * s1
