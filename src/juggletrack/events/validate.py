@@ -1,15 +1,5 @@
 """Run-level structural validators (spec §4): junk-cohort defenses that
 inspect a whole run's arcs, not any single arc in isolation.
-
-Turn-4 cascade-structure-gate bake-off: this drift-cohort clause (clause A)
-was measured discriminating and safe across the full battery -- the pinned
-junk-cohort fixture (tests/test_extract.py::test_slow_drift_junk_cohort_known_gap)
-is the only run in the battery with dom2=1.0 AND mono=1.0 simultaneously.
-The bake-off's other clause ("freg", rejecting runs with irregular throw
-intervals) was tuned against a since-corrected target (the old merged-cloud
-Meschke oracle undercounted ss3_id_016 at 23 catches; the per-ball oracle
-now reports 52 -- see data.meschke_import.oracle_events) and is
-intentionally NOT shipped here.
 """
 from __future__ import annotations
 
@@ -45,12 +35,12 @@ def is_drift_cohort(arcs: list[Arc]) -> bool:
     - ``alt2`` = fraction of ADJACENT arc pairs (in the full sorted
       sequence, both meaningful) whose dx sign flips; ``None`` (undefined)
       when there are no such pairs.
+    - ``sweeps`` = every arc after the first has an x-range
+      ``[min(cx_i, cx_i + dx_i), max(...)]`` disjoint from the hull of all
+      earlier arcs' x-ranges (touching counts as overlap).
 
     Reject iff ``dom2 >= DOM_T AND mono >= MONO_T AND (alt2 is None or
-    alt2 <= ALT_T)``: unidirectional, monotonically marching, and never
-    alternating side to side -- a real cascade alternates hands and so
-    flips dx sign often; a self-consistent slow-drift cohort, by
-    construction, does not.
+    alt2 <= ALT_T) AND sweeps``.
     """
     ordered = sorted(arcs, key=lambda a: a.t_start)
     dx = np.array([a.bx * a.duration() for a in ordered])
@@ -67,4 +57,13 @@ def is_drift_cohort(arcs: list[Arc]) -> bool:
     mono = (float(abs(np.corrcoef(cx, np.arange(len(cx)))[0, 1]))
             if len(cx) >= 3 and np.std(cx) > 1e-9 else 0.0)
 
-    return dom2 >= DOM_T and mono >= MONO_T and (alt2 is None or alt2 <= ALT_T)
+    return (dom2 >= DOM_T and mono >= MONO_T and (alt2 is None or alt2 <= ALT_T)
+            and _sweeps(cx, dx))
+
+
+def _sweeps(cx: np.ndarray, dx: np.ndarray) -> bool:
+    lo, hi = np.minimum(cx, cx + dx), np.maximum(cx, cx + dx)
+    for i in range(1, len(lo)):
+        if not (hi[i] < lo[:i].min() or lo[i] > hi[:i].max()):
+            return False
+    return True

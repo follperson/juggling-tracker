@@ -59,6 +59,8 @@ ss3_id_016, ss441_id_013, sim seed sweep) before any implementation:
 | Periodicity threshold gate | **REFUSED** | Same corrupted-reference problem; quality *fixes* shipped instead (`e333cd7`: short-window "can't judge" ≠ 0.0, arc-span scoring, adaptive lag band) with **no gating** — quality is scored and stored only |
 | Split-stitch (lane 3 stage B) | **SHIPPED** (`db3b5e3`, final pass in `extract_arcs`) | Repairs gap-split flights (2 genuine af1 repairs, 59 → 57 arcs with all thrown windows still covered); crossing-balls guard verified from a second angle |
 
+**Correction, 2026-09-30.** "Zero real-run casualties" held for this battery only. In offline analysis of wider footage the drift-cohort gate also deleted three real juggling runs. In live mode it deleted runs in many 8 s windows of real juggling. It now requires the cohort to sweep onto new ground. See [the drift-gate findings](2026-09-30-drift-gate-findings.md).
+
 ## 5. THE ORACLE CORRECTION: ss3 reference 23 → 52 (commit `0288b2a`)
 
 The turn-3 headline problem — "v3 over-counts ss3_id_016: 39 catches vs oracle 23" — was an
