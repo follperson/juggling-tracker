@@ -2,10 +2,11 @@
 confirmation.
 
 CONSCIOUS SPEC DEVIATION (documented in the plan header): spec §3 called for
-a bespoke online two-mode Kalman tracker; measured extraction cost (~0.01s
-per 8s window) makes re-running the proven offline core affordable at frame
-rate. This buys MEASURED, not by-construction, offline parity: the sliding
-window re-derives events/runs/drops from scratch every cadence tick, and
+a bespoke online two-mode Kalman tracker; measured re-analysis cost
+(scripts/event_core_parity.py --realtime reports it per session) makes
+re-running the proven offline core affordable at frame rate. This buys
+MEASURED, not by-construction, offline parity: the sliding window
+re-derives events/runs/drops from scratch every cadence tick, and
 that windowed re-derivation is a real, quantified source of divergence from
 a single whole-video offline pass (see docs/superpowers/plans/
 2026-07-19-plan4-bench-findings.md §7-8 for the measured envelope: agreement
