@@ -245,23 +245,33 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
 
 
 def _em_assign_refit(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]:
+    """Hand each point to its best-fitting arc, then refit every arc from its points.
+
+    Requires ``arr`` sorted by t (extract_arcs sorts it), so each arc's claim
+    window ``[t_start - _EM_TIME_MARGIN, t_end + _EM_TIME_MARGIN]`` is one
+    contiguous index range and only that slice is scored.
+    """
     if not arcs:
         return []
     t = arr[:, 0]
     best_res = np.full(len(arr), np.inf)
     best_arc = np.full(len(arr), -1, dtype=int)
     for k, arc in enumerate(arcs):
-        in_span = (t >= arc.t_start - _EM_TIME_MARGIN) & (t <= arc.t_end + _EM_TIME_MARGIN)
-        res_both = np.maximum(y_residuals(arc, arr), x_residuals(arc, arr))
-        res = np.where(in_span, res_both, np.inf)
-        better = res < best_res
-        best_res[better] = res[better]
-        best_arc[better] = k
+        lo = np.searchsorted(t, arc.t_start - _EM_TIME_MARGIN, side="left")
+        hi = np.searchsorted(t, arc.t_end + _EM_TIME_MARGIN, side="right")
+        win = arr[lo:hi]
+        res = np.maximum(y_residuals(arc, win), x_residuals(arc, win))
+        better = res < best_res[lo:hi]
+        best_res[lo:hi][better] = res[better]
+        best_arc[lo:hi][better] = k
     best_arc[best_res > 2 * resid_tol] = -1
 
+    # stable, so each arc's members stay in ascending row order
+    order = np.argsort(best_arc, kind="stable")
+    bounds = np.searchsorted(best_arc[order], np.arange(len(arcs) + 1), side="left")
     out: list[Arc] = []
     for k in range(len(arcs)):
-        member = np.where(best_arc == k)[0]
+        member = order[bounds[k] : bounds[k + 1]]
         if len(member) >= 3:
             try:
                 out.append(fit_arc(arr[member]))
@@ -291,9 +301,15 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
     outright when the two fragments' fitted x-velocities point in opposite
     directions with meaningful magnitude -- the structural signature of a
     crossing rather than one continuous flight.
+
+    Requires ``arr`` sorted by t (extract_arcs sorts it), so each arc's
+    ``[t_start, t_end]`` span is one contiguous index range and a union's
+    rows come from two slices instead of a mask over every point.
     """
     arcs = sorted(arcs, key=lambda a: a.t_start)
     t = arr[:, 0]
+    lo = np.searchsorted(t, [a.t_start for a in arcs], side="left").tolist()
+    hi = np.searchsorted(t, [a.t_end for a in arcs], side="right").tolist()
     n = len(arcs)
     used = [False] * n
     merged: list[Arc] = []
@@ -314,8 +330,12 @@ def _merge_pass(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]
             # the union.
             if a.bx * b.bx < 0 and abs(a.bx) > 0.02 and abs(b.bx) > 0.02:
                 continue
-            sel = ((t >= a.t_start) & (t <= a.t_end)) | ((t >= b.t_start) & (t <= b.t_end))
-            pts = arr[sel]
+            # sorted by t_start, so lo[i] <= lo[j]: overlapping or touching
+            # spans are one slice, disjoint ones two
+            if lo[j] <= hi[i]:
+                pts = arr[lo[i] : max(hi[i], hi[j])]
+            else:
+                pts = np.concatenate((arr[lo[i] : hi[i]], arr[lo[j] : hi[j]]))
             keep_a = y_residuals(a, pts) < 2 * resid_tol
             keep_b = y_residuals(b, pts) < 2 * resid_tol
             pts = pts[keep_a | keep_b]

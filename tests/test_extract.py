@@ -1,8 +1,17 @@
 import numpy as np
 import pytest
 
-from juggletrack.arcs.extract import dedup_parallel_arcs, extract_arcs, filter_static_detections
-from juggletrack.arcs.fit import points_array
+from juggletrack.arcs.extract import (
+    _EM_TIME_MARGIN,
+    _em_assign_refit,
+    _link_fragments,
+    _merge_pass,
+    _split_ballistic,
+    dedup_parallel_arcs,
+    extract_arcs,
+    filter_static_detections,
+)
+from juggletrack.arcs.fit import fit_arc, points_array, x_residuals, y_residuals
 from juggletrack.sim import simulate_cascade
 from juggletrack.types import Arc, Detection
 
@@ -235,8 +244,6 @@ def test_dense_same_timestamp_clusters_do_not_crash():
 
 
 def test_x_residuals_flag_cross_ball_points():
-    from juggletrack.arcs.fit import fit_arc, x_residuals
-
     r = simulate_cascade(n_throws=1, fps=60.0, seed=0)
     arr = points_array(r.detections)
     arc = fit_arc(arr)
@@ -599,3 +606,209 @@ def test_dedup_parallel_arcs_validates_knobs():
     # boundary values stay valid
     assert dedup_parallel_arcs([a], overlap_frac=0.0, traj_tol=0.0) == [a]
     assert dedup_parallel_arcs([a], overlap_frac=1.0, traj_tol=0.0) == [a]
+
+
+# Frozen copies of the extraction stages as they were before the fast paths
+# in extract.py. Those paths must reproduce these exactly (Arc == compares
+# every float), with fit_arc still the only producer of a returned Arc.
+
+
+def _ref_em_assign_refit(arr, arcs, resid_tol):
+    if not arcs:
+        return []
+    t = arr[:, 0]
+    best_res = np.full(len(arr), np.inf)
+    best_arc = np.full(len(arr), -1, dtype=int)
+    for k, arc in enumerate(arcs):
+        in_span = (t >= arc.t_start - _EM_TIME_MARGIN) & (t <= arc.t_end + _EM_TIME_MARGIN)
+        res_both = np.maximum(y_residuals(arc, arr), x_residuals(arc, arr))
+        res = np.where(in_span, res_both, np.inf)
+        better = res < best_res
+        best_res[better] = res[better]
+        best_arc[better] = k
+    best_arc[best_res > 2 * resid_tol] = -1
+
+    out = []
+    for k in range(len(arcs)):
+        member = np.where(best_arc == k)[0]
+        if len(member) >= 3:
+            try:
+                out.append(fit_arc(arr[member]))
+            except ValueError:
+                continue
+    return out
+
+
+def _ref_merge_pass(arr, arcs, resid_tol):
+    arcs = sorted(arcs, key=lambda a: a.t_start)
+    t = arr[:, 0]
+    n = len(arcs)
+    used = [False] * n
+    merged = []
+    for i in range(n):
+        if used[i]:
+            continue
+        a = arcs[i]
+        best_j, best_union = None, None
+        for j in range(i + 1, n):
+            if used[j]:
+                continue
+            b = arcs[j]
+            if b.t_start - a.t_end >= 0.2:
+                break
+            if a.bx * b.bx < 0 and abs(a.bx) > 0.02 and abs(b.bx) > 0.02:
+                continue
+            sel = ((t >= a.t_start) & (t <= a.t_end)) | ((t >= b.t_start) & (t <= b.t_end))
+            pts = arr[sel]
+            keep_a = y_residuals(a, pts) < 2 * resid_tol
+            keep_b = y_residuals(b, pts) < 2 * resid_tol
+            pts = pts[keep_a | keep_b]
+            if len(pts) < 3:
+                continue
+            try:
+                union = fit_arc(pts)
+            except ValueError:
+                continue
+            if union.rmse > resid_tol:
+                continue
+            dt = pts[:, 0] - union.t_start
+            x_pred = union.bx * dt + union.cx
+            x_rmse = float(np.sqrt(np.mean((x_pred - pts[:, 1]) ** 2)))
+            if x_rmse > 2 * resid_tol:
+                continue
+            if best_union is None or union.rmse < best_union.rmse:
+                best_j, best_union = j, union
+        if best_j is not None:
+            used[i] = used[best_j] = True
+            merged.append(best_union)
+        else:
+            merged.append(a)
+    return merged
+
+
+def _sorted_points(dets):
+    """The (t, x, y, confidence) array exactly as extract_arcs orders it."""
+    arr = points_array(dets)
+    return arr[np.lexsort((arr[:, 3], arr[:, 2], arr[:, 1], arr[:, 0]))]
+
+
+def _crossing_cloud():
+    """Two balls on one y-parabola with opposite x-velocities, crossing at t=0.5."""
+    dets = []
+    for f in range(31):
+        t = f / 30.0
+        y = 0.65 - 1.2 * t + 1.2 * t * t
+        dets.append(Detection(frame_idx=f, t=t, x=0.3 + 0.3 * t, y=y))
+        dets.append(Detection(frame_idx=f, t=t, x=0.6 - 0.3 * t, y=y + 0.001))
+    return dets
+
+
+def _duplicate_box_cloud():
+    """One to three jittered boxes per detection in the same frame, as dense detectors emit."""
+    rng = np.random.default_rng(7)
+    base = simulate_cascade(n_throws=8, fps=30.0, noise=0.002, seed=7).detections
+    dets = []
+    for d in base:
+        for _ in range(int(rng.integers(1, 4))):
+            dets.append(d.model_copy(update={
+                "x": d.x + float(rng.normal(0, 0.003)),
+                "y": d.y + float(rng.normal(0, 0.003)),
+                "confidence": float(rng.uniform(0.05, 1.0)),
+            }))
+    return dets
+
+
+def _low_confidence_cloud():
+    """Mostly tiny or zero weights: weighted fits are dominated by a few points."""
+    rng = np.random.default_rng(11)
+    base = simulate_cascade(n_throws=10, fps=30.0, noise=0.004, dropout=0.1, seed=11).detections
+    conf = rng.choice([0.0, 1e-6, 1e-3, 0.02, 0.3, 1.0], size=len(base),
+                      p=[0.08, 0.1, 0.2, 0.2, 0.2, 0.22])
+    return [d.model_copy(update={"confidence": float(c)}) for d, c in zip(base, conf)]
+
+
+def _random_cloud():
+    """Uniform junk on a 30 fps grid, several points sharing most timestamps."""
+    rng = np.random.default_rng(13)
+    frames = rng.integers(0, 120, size=500)
+    return [
+        Detection(frame_idx=int(f), t=f / 30.0, x=float(rng.uniform(0.2, 0.8)),
+                  y=float(rng.uniform(0.2, 0.8)), confidence=float(rng.uniform(0.01, 1.0)))
+        for f in frames
+    ]
+
+
+_CLOUDS = {
+    "clean": lambda: simulate_cascade(n_throws=12, fps=30.0, seed=1).detections,
+    "noisy": lambda: simulate_cascade(
+        n_throws=12, fps=30.0, noise=0.004, dropout=0.15, seed=2).detections,
+    "false-positives": lambda: simulate_cascade(
+        n_throws=12, fps=30.0, noise=0.003, false_positives_per_frame=0.5, seed=3).detections,
+    "drop": lambda: simulate_cascade(n_throws=12, fps=30.0, drop_at_throw=6, seed=4).detections,
+    "crossing": _crossing_cloud,
+    "duplicate-boxes": _duplicate_box_cloud,
+    "low-confidence": _low_confidence_cloud,
+    "random": _random_cloud,
+}
+
+
+def _window_arcs(arr, n, seed):
+    """Arcs fit to random time windows of ``arr``: nested, overlapping, touching
+    and disjoint spans, many mixing points from several balls."""
+    rng = np.random.default_rng(seed)
+    t = arr[:, 0]
+    arcs = []
+    while len(arcs) < n:
+        t0 = rng.uniform(t[0], t[-1])
+        win = arr[(t >= t0) & (t <= t0 + rng.uniform(0.05, 0.8))]
+        if len(win) >= 3 and win[-1, 0] > win[0, 0]:
+            arcs.append(fit_arc(win))
+    return arcs
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+@pytest.mark.parametrize("cloud", sorted(_CLOUDS))
+@pytest.mark.parametrize("resid_tol", [0.005, 0.02, 0.08])
+def test_em_and_merge_match_reference_through_extraction(cloud, resid_tol):
+    arr = _sorted_points(_CLOUDS[cloud]())
+    arcs = []
+    for frag in _link_fragments(arr, 0.18, 0.08):
+        for seed in _split_ballistic(arr, frag, resid_tol):
+            try:
+                arcs.append(fit_arc(arr[seed]))
+            except ValueError:
+                continue
+    for _ in range(3):
+        refit = _em_assign_refit(arr, arcs, resid_tol)
+        assert refit == _ref_em_assign_refit(arr, arcs, resid_tol)
+        merged = _merge_pass(arr, refit, resid_tol)
+        assert merged == _ref_merge_pass(arr, refit, resid_tol)
+        arcs = merged
+
+
+def test_em_claim_window_includes_points_exactly_at_the_margin():
+    arr = _sorted_points(simulate_cascade(n_throws=1, fps=30.0, seed=0).detections)
+    arc = fit_arc(arr)
+    lo, hi = arc.t_start - _EM_TIME_MARGIN, arc.t_end + _EM_TIME_MARGIN
+    edges = [lo, hi, np.nextafter(lo, -np.inf), np.nextafter(hi, np.inf)]
+    extra = np.array([[t, arc.x_at(t), arc.y_at(t), 1.0] for t in edges])
+    arr = _sorted_points([
+        Detection(frame_idx=0, t=t, x=x, y=y, confidence=c)
+        for t, x, y, c in np.vstack([arr, extra])
+    ])
+
+    refit = _em_assign_refit(arr, [arc], 0.02)
+
+    assert refit == _ref_em_assign_refit(arr, [arc], 0.02)
+    assert [(a.t_start, a.t_end, a.n_points) for a in refit] == [(lo, hi, arc.n_points + 2)]
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+@pytest.mark.parametrize("cloud", sorted(_CLOUDS))
+@pytest.mark.parametrize("resid_tol", [0.02, 0.2])
+def test_em_and_merge_match_reference_on_arbitrary_spans(cloud, resid_tol):
+    arr = _sorted_points(_CLOUDS[cloud]())
+    for seed in range(3):
+        arcs = _window_arcs(arr, 25, seed)
+        assert _em_assign_refit(arr, arcs, resid_tol) == _ref_em_assign_refit(arr, arcs, resid_tol)
+        assert _merge_pass(arr, arcs, resid_tol) == _ref_merge_pass(arr, arcs, resid_tol)
