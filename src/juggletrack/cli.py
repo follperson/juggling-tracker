@@ -114,11 +114,18 @@ def analyze(
             model_path=_resolve_model(model), conf=conf, imgsz=imgsz, device=device
         )
 
-    session, analysed, _ = run_offline(
+    session, analysed, info = run_offline(
         video, source,
         out_dir=out_dir, save_intermediates=save_intermediates, stride=stride,
         config=config,
     )
+    decoded = session.meta.get("frames_decoded", info.frame_count)
+    if decoded < 0.9 * info.frame_count:
+        typer.echo(
+            f"warning: only decoded {decoded}/{info.frame_count} frames from {video}; "
+            "the video may be truncated",
+            err=True,
+        )
 
     if overlay:
         from juggletrack.pipeline.overlay import render_overlay

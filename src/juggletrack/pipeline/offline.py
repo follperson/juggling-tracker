@@ -14,17 +14,26 @@ from juggletrack.types import Detection, SessionResult
 from juggletrack.video.reader import VideoInfo, VideoReader
 
 
-def detect_video(
-    reader: VideoReader, detector: BallDetector, *, stride: int = 1
-) -> list[Detection]:
+def _detect_frames(
+    reader: VideoReader, detector: BallDetector, stride: int
+) -> tuple[list[Detection], int]:
+    """Return the detections and the number of frames decoded."""
     if stride < 1:
         raise ValueError(f"stride must be >= 1, got {stride}")
     dets: list[Detection] = []
+    decoded = 0
     for idx, t, frame in reader.frames():
+        decoded += 1
         if idx % stride:
             continue
         dets.extend(detector.detect(frame, idx, t))
-    return dets
+    return dets, decoded
+
+
+def detect_video(
+    reader: VideoReader, detector: BallDetector, *, stride: int = 1
+) -> list[Detection]:
+    return _detect_frames(reader, detector, stride)[0]
 
 
 def save_detections_jsonl(dets: list[Detection], path: str | Path) -> None:
@@ -69,8 +78,10 @@ def run_offline(
     """Detect (or take saved detections), analyse, and write artifacts.
 
     Saved detections are taken as they are: only the video's header is read
-    and no frame is decoded.
+    and no frame is decoded. A detector run records ``frames_decoded`` in
+    meta beside the header's ``frame_count``.
     """
+    frames_decoded = None
     with VideoReader(video_path) as reader:
         info = reader.info
         if isinstance(source, list):
@@ -78,13 +89,15 @@ def run_offline(
                 (d for d in source if d.frame_idx % stride == 0), key=lambda d: d.frame_idx
             )
         else:
-            dets = detect_video(reader, source, stride=stride)
+            dets, frames_decoded = _detect_frames(reader, source, stride)
 
     session = analyze_detections(dets, config)
     session.meta.update(
         video_path=info.path, fps=info.fps, width=info.width, height=info.height,
         frame_count=info.frame_count, duration_s=info.duration, stride=stride,
     )
+    if frames_decoded is not None:
+        session.meta["frames_decoded"] = frames_decoded
 
     if out_dir is not None:
         out = Path(out_dir)
