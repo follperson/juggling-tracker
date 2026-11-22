@@ -317,6 +317,21 @@ def test_label_command_without_negatives_skips_export(workspace):
     assert "negatives" not in result.output.lower()
 
 
+def expected_coverage(dets, n_sampled):
+    from collections import Counter
+
+    per_frame = Counter(d.frame_idx for d in dets)
+    return [
+        f"{sum(1 for v in per_frame.values() if v >= k) / n_sampled:.1%}" for k in (1, 2, 3)
+    ]
+
+
+def printed_coverage(output):
+    match = re.search(r"coverage >=1: (\S+)  >=2: (\S+)  >=3: (\S+)", output)
+    assert match, output
+    return list(match.groups())
+
+
 def test_coverage_command(workspace):
     from juggletrack.cli import app
 
@@ -325,8 +340,38 @@ def test_coverage_command(workspace):
         "coverage", str(video), "--detections", str(dets),
     ])
     assert result.exit_code == 0, result.output
-    assert f"detections {len(sim.detections)}" in result.output
-    assert ">=2:" in result.output and ">=3:" in result.output
+    assert f"detections {len(sim.detections)} over 197 sampled frames" in result.output
+    assert printed_coverage(result.output) == expected_coverage(sim.detections, 197)
+
+
+def test_coverage_with_stride_scores_the_sampled_frames(workspace):
+    from juggletrack.cli import app
+
+    sim, video, _, tmp = workspace
+    even = [d for d in sim.detections if d.frame_idx % 2 == 0]
+    strided = tmp / "stride2.jsonl"
+    save_detections_jsonl(even, strided)
+    result = runner.invoke(app, [
+        "coverage", str(video), "--detections", str(strided), "--stride", "2",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "over 99 sampled frames" in result.output
+    assert printed_coverage(result.output) == expected_coverage(even, 99)
+
+
+def test_coverage_rejects_detections_off_the_stride_grid(workspace):
+    from juggletrack.cli import app
+
+    sim, video, _, tmp = workspace
+    strided = tmp / "stride2.jsonl"
+    save_detections_jsonl([d for d in sim.detections if d.frame_idx % 2 == 0], strided)
+    result = runner.invoke(app, [
+        "coverage", str(video), "--detections", str(strided), "--stride", "3",
+    ])
+    output = flat(result.output)
+    assert result.exit_code == 2, output
+    assert re.search(r"Invalid value for '?--stride'?", output), output
+    assert "not on the --stride 3 grid" in output
 
 
 def test_live_command_file_replay(workspace):
