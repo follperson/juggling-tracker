@@ -82,7 +82,7 @@ def evaluate_session(
     label_drops = np.array(labels.drops)
     dist = np.abs(pred_drops[:, None] - label_drops[None, :])
     # One invalid assignment must cost more than all valid distances combined.
-    penalty = (min(dist.shape) + 1) * drop_tol_s
+    penalty = min(dist.shape) * drop_tol_s + 1.0
     rows, cols = linear_sum_assignment(np.where(dist <= drop_tol_s, dist, penalty))
     tp = int(np.sum(dist[rows, cols] <= drop_tol_s))
     fp = len(pred_drops) - tp
