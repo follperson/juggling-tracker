@@ -144,6 +144,32 @@ def test_analyze_replay_without_overlay_decodes_no_frames(workspace, monkeypatch
     assert [r.catches for r in sr.runs] == [12]
 
 
+def flat(output: str) -> str:
+    return " ".join(plain(output).replace("│", " ").split())
+
+
+@pytest.mark.parametrize("command", ["analyze", "live", "label", "coverage"])
+def test_detections_past_the_end_of_the_video_are_rejected(workspace, command):
+    from juggletrack.cli import app
+
+    sim, video, _, tmp = workspace
+    longer = tmp / "longer.jsonl"
+    with VideoReader(video) as reader:
+        frame_count = reader.info.frame_count
+    beyond = Detection(frame_idx=frame_count, t=frame_count / 30.0, x=0.5, y=0.5)
+    save_detections_jsonl([*sim.detections, beyond], longer)
+    args = [command, str(video), "--detections", str(longer)]
+    if command != "coverage":
+        args += ["--out", str(tmp / "out")]
+    if command == "live":
+        args.append("--no-display")
+    result = runner.invoke(app, args)
+    output = flat(result.output)
+    assert result.exit_code == 2, output
+    assert re.search(r"Invalid value for '?--detections'?", output), output
+    assert f"frame {frame_count}" in output and f"{frame_count} frames" in output
+
+
 def test_analyze_no_overlay(workspace):
     from juggletrack.cli import app
 
