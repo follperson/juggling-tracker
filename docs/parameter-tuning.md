@@ -163,9 +163,11 @@ Evidence, measured at `c772c28`:
 
 - Offline, 113 saved sessions: the gate judged 202 runs and rejected 1, in
   `flywheel-t2/labels-motion/182734164`. Those detections came from the
-  motion detector. No shipped command sends them through the gate, because
-  `label` calls `extract_arcs` directly. Without the gate that session goes
-  from 4 runs / 13 catches / 4 drops to 5 / 14 / 4. No other session changes.
+  motion detector, which only `label --detector motion` runs, and `label`
+  calls `extract_arcs` directly and never reaches the gate. They reach it only
+  when the saved file is fed back through `analyze --detections`. Without the
+  gate that session goes from 4 runs / 13 catches / 4 drops to 5 / 14 / 4. No
+  other session changes.
 - v3 detections of the same scene (t 5 to 35 s of `PXL_20260716_182734164`)
   form 4 runs and the gate rejects none.
 - Live, 646 verdicts across the replayed sessions: the gate rejected none of

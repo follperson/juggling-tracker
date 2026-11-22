@@ -419,8 +419,9 @@ def test_slow_drift_junk_cohort_known_gap():
     This used to expect 0 runs, because the drift-cohort run gate
     (events/validate.py) rejected the run. The gate was deleted (issue #22,
     see docs/parameter-tuning.md): across 113 saved sessions it rejected
-    one run, on motion-detector footage no shipped command sends through it,
-    and it never changed a live result.
+    one run, on motion-detector output that reaches it only when a saved file
+    is fed back through `analyze --detections`, and it never changed a live
+    result.
 
     Note the paths must be spatially SEPARATED and drift briskly: slow
     drifters sharing spatial bins are already killed by
