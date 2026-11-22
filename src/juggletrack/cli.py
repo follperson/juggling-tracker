@@ -135,7 +135,8 @@ def eval(
         if out is not None:
             _check_report_output(out, [analysis_json, labels_json])
         document = json.loads(analysis_json.read_text())
-        missing = [key for key in ("schema_version", "runs", "arcs") if key not in document]
+        keys = document if isinstance(document, dict) else {}
+        missing = [key for key in ("schema_version", "runs", "arcs") if key not in keys]
         if missing:
             raise ValueError(
                 f"{analysis_json} has no {', '.join(missing)} key; expected an analysis.json "
