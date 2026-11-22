@@ -41,6 +41,18 @@ def test_missing_environment_weights_path_names_the_variable(monkeypatch):
         resolve_model()
 
 
+@pytest.mark.parametrize("url", [
+    "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",
+    "http://localhost:8000/ball-detector",
+])
+def test_url_model_is_passed_through(monkeypatch, url):
+    from juggletrack.detect.weights import resolve_model
+
+    assert resolve_model(url) == url
+    monkeypatch.setenv("JUGGLETRACK_MODEL", url)
+    assert resolve_model() == url
+
+
 def test_exported_package_directory_is_accepted():
     from juggletrack.detect.weights import resolve_model
 
