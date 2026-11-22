@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import enum
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -49,6 +50,18 @@ def _load_replay(detections: Path, video: Path | str) -> list[Detection]:
     return dets
 
 
+def _make_out_dir(out: Path) -> Path:
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise typer.BadParameter(
+            f"cannot use {out} as an output directory: {exc.strerror}", param_hint="--out"
+        ) from exc
+    if not os.access(out, os.W_OK):
+        raise typer.BadParameter(f"output directory {out} is not writable", param_hint="--out")
+    return out
+
+
 def _check_report_output(out: Path, inputs: list[Path]) -> None:
     if out.is_dir():
         raise ValueError("report output must be a file")
@@ -62,7 +75,7 @@ def _check_report_output(out: Path, inputs: list[Path]) -> None:
 @app.command()
 def analyze(
     video: Path = typer.Argument(..., exists=True, dir_okay=False),
-    out: Path | None = typer.Option(None, help="Output dir (default outputs/<stem>)"),
+    out: Path | None = typer.Option(None, help="Output directory (default outputs/<stem>)"),
     overlay: bool = typer.Option(True, help="Render debug overlay video"),
     save_intermediates: bool = typer.Option(False, help="Save detections.jsonl"),
     detections: Path | None = typer.Option(
@@ -92,7 +105,7 @@ def analyze(
         config = AnalyzeConfig(link_max_dist=link_max_dist)
     except ValidationError as exc:
         raise typer.BadParameter(exc.errors()[0]["msg"], param_hint="--link-max-dist") from exc
-    out_dir = out or Path("outputs") / video.stem
+    out_dir = _make_out_dir(out or Path("outputs") / video.stem)
     if detections is not None:
         source = _load_replay(detections, video)
     else:
@@ -204,7 +217,9 @@ def _get_detections(video, detections, model, conf, imgsz, stride, device):
 @app.command()
 def label(
     video: Path = typer.Argument(..., exists=True, dir_okay=False),
-    out: Path | None = typer.Option(None, help="Output dir (default outputs/labels/<stem>)"),
+    out: Path | None = typer.Option(
+        None, help="Output directory (default outputs/labels/<stem>)",
+    ),
     detections: Path | None = typer.Option(
         None, exists=True, dir_okay=False,
         help="Replay saved detections.jsonl instead of running the detector",
@@ -249,7 +264,7 @@ def label(
         select_autolabels,
     )
 
-    out_dir = out or Path("outputs") / "labels" / video.stem
+    out_dir = _make_out_dir(out or Path("outputs") / "labels" / video.stem)
     if detector == DetectorBackend.motion:
         if stride > 1:
             typer.echo(
@@ -445,7 +460,7 @@ def live(
     device: str | None = typer.Option(None),
     display: bool = typer.Option(True, "--display/--no-display"),
     max_frames: int | None = typer.Option(None),
-    out: Path | None = typer.Option(None, help="Write live_session.json here"),
+    out: Path | None = typer.Option(None, help="Directory to write live_session.json into"),
 ) -> None:
     """Live juggling tracker: webcam or file, realtime HUD."""
     from juggletrack.pipeline.live import run_live
@@ -464,6 +479,8 @@ def live(
     # index has no frames to replay against.
     if detections is not None and isinstance(src, int):
         raise typer.BadParameter("--detections requires a file source")
+    if out is not None:
+        _make_out_dir(out)
     if detections is not None:
         from juggletrack.detect.fake import FakeDetector
 
@@ -480,7 +497,6 @@ def live(
         display=display, max_frames=max_frames,
     )
     if out is not None:
-        out.mkdir(parents=True, exist_ok=True)
         (out / "live_session.json").write_text(final.model_dump_json(indent=2))
     typer.echo(
         f"{final.runs_completed} runs, {final.catches_total} catches, "
