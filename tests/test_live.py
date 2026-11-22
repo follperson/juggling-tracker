@@ -305,6 +305,94 @@ def test_run_live_max_frames_stop_does_not_warn(sim_video, monkeypatch, capsys):
     assert "stream may have ended early" not in err
 
 
+def _session(state):
+    """The finalized session without the wall-clock analysis timing."""
+    return state.model_dump(exclude={"last_analysis_ms"})
+
+
+class _RaiseAtFrameDetector:
+    def __init__(self, real, frame_idx, exc):
+        self._real = real
+        self._frame_idx = frame_idx
+        self._exc = exc
+
+    def detect(self, frame, idx, t):
+        if idx == self._frame_idx:
+            raise self._exc
+        return self._real.detect(frame, idx, t)
+
+
+def test_run_live_ctrl_c_returns_finalized_session(sim_video, capsys):
+    """Ctrl-C must end the session the way q does: run_live returns the
+    finalized state for every frame processed so far, so the CLI can print
+    the summary and write --out. With --no-display it is the only way to
+    stop a webcam session."""
+    sim, video = sim_video
+    expected, _ = run_live(str(video), FakeDetector(sim.detections), display=False,
+                           max_frames=60)
+    capsys.readouterr()
+
+    final, _ = run_live(
+        str(video),
+        _RaiseAtFrameDetector(FakeDetector(sim.detections), 60, KeyboardInterrupt()),
+        display=False,
+    )
+
+    assert _session(final) == _session(expected)
+    assert "stream may have ended early" not in capsys.readouterr().err
+
+
+def test_run_live_q_press_does_not_warn(sim_video, monkeypatch, capsys):
+    """Pressing q is a deliberate stop, not a truncated file."""
+    import cv2
+
+    sim, video = sim_video
+    keys = iter([-1] * 59 + [ord("q")])
+    monkeypatch.setattr(cv2, "imshow", lambda name, frame: None)
+    monkeypatch.setattr(cv2, "waitKey", lambda delay: next(keys))
+    monkeypatch.setattr(cv2, "destroyAllWindows", lambda: None)
+
+    final, _ = run_live(str(video), FakeDetector(sim.detections), display=True)
+
+    expected, _ = run_live(str(video), FakeDetector(sim.detections), display=False,
+                           max_frames=60)
+    assert _session(final) == _session(expected)
+    assert "stream may have ended early" not in capsys.readouterr().err
+
+
+def test_run_live_detector_error_propagates_without_short_read_warning(sim_video, capsys):
+    """A detector failure is not a truncated file: the error reaches the
+    caller and the short-read warning stays quiet."""
+    sim, video = sim_video
+    with pytest.raises(RuntimeError, match="detector broke"):
+        run_live(
+            str(video),
+            _RaiseAtFrameDetector(FakeDetector(sim.detections), 60,
+                                  RuntimeError("detector broke")),
+            display=False,
+        )
+    assert "stream may have ended early" not in capsys.readouterr().err
+
+
+def test_run_live_imshow_failure_continues_headless(sim_video, monkeypatch, capsys):
+    """A display backend that cannot open a window falls back to headless
+    and still processes the whole stream."""
+    import cv2
+
+    sim, video = sim_video
+
+    def broken_imshow(name, frame):
+        raise cv2.error("no display")
+
+    monkeypatch.setattr(cv2, "imshow", broken_imshow)
+
+    final, _ = run_live(str(video), FakeDetector(sim.detections), display=True)
+
+    expected, _ = run_live(str(video), FakeDetector(sim.detections), display=False)
+    assert _session(final) == _session(expected)
+    assert "continuing headless" in capsys.readouterr().err
+
+
 def test_run_live_webcam_source_retries_transient_read_failures(monkeypatch):
     """S6: a webcam source gets a bounded retry (not an immediate
     end-of-stream conclusion) on a transient read() failure -- e.g. a
