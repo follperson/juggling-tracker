@@ -93,6 +93,27 @@ def test_export_bbox_matches_normalized_center(tmp_path):
     assert coco["annotations"][0]["bbox"] == pytest.approx([144.0, 96.0, 32.0, 48.0])
 
 
+def test_export_clips_boxes_at_every_frame_edge(tmp_path):
+    # 32x48 px boxes centred 4 px inside each edge of a 320x240 frame: each
+    # keeps only the part inside the frame, the same way on all four sides.
+    w, h = 320, 240
+    labels = [
+        Detection(frame_idx=0, t=0.0, x=4 / w, y=0.5, w=0.1, h=0.2),
+        Detection(frame_idx=0, t=0.0, x=316 / w, y=0.5, w=0.1, h=0.2),
+        Detection(frame_idx=0, t=0.0, x=0.5, y=4 / h, w=0.1, h=0.2),
+        Detection(frame_idx=0, t=0.0, x=0.5, y=236 / h, w=0.1, h=0.2),
+    ]
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=1, fps=30.0, size=(w, h))
+    out = tmp_path / "edges"
+    export_video_labels(video, labels, out)
+    boxes = [a["bbox"] for a in json.loads((out / "annotations.json").read_text())["annotations"]]
+    assert boxes[0] == pytest.approx([0.0, 96.0, 20.0, 48.0])
+    assert boxes[1] == pytest.approx([300.0, 96.0, 20.0, 48.0])
+    assert boxes[2] == pytest.approx([144.0, 0.0, 32.0, 28.0])
+    assert boxes[3] == pytest.approx([144.0, 212.0, 32.0, 28.0])
+
+
 def _hand_crafted_arc(arc_id: int = 0, t_start: float = 0.0, n_points: int = 16) -> Arc:
     """Same flight shape as tests/test_drops.py's `_make_floor_candidate`: thrown
     from hand_line=0.65 with g=2.0 (ay=1.0). apex at dt=0.55, catch at dt=1.1.
