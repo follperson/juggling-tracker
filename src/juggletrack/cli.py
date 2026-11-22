@@ -39,10 +39,10 @@ def _load_replay(detections: Path, video: Path | str) -> list[Detection]:
     from juggletrack.pipeline.offline import check_frames_in_video, load_detections_jsonl
     from juggletrack.video.reader import VideoReader
 
-    dets = load_detections_jsonl(detections)
     with VideoReader(video) as reader:
         frame_count = reader.info.frame_count
     try:
+        dets = load_detections_jsonl(detections)
         check_frames_in_video(dets, frame_count)
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="--detections") from exc

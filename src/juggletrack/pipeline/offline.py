@@ -5,8 +5,11 @@ Intermediates are persisted (spec: stages re-runnable independently) —
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import NamedTuple
+
+from pydantic import ValidationError
 
 from juggletrack.analyze import AnalyzeConfig, analyze_detections
 from juggletrack.detect import BallDetector
@@ -42,9 +45,31 @@ def save_detections_jsonl(dets: list[Detection], path: str | Path) -> None:
             f.write(d.model_dump_json() + "\n")
 
 
+_FINITE_FIELDS = ("t", "x", "y", "w", "h", "confidence")
+
+
 def load_detections_jsonl(path: str | Path) -> list[Detection]:
+    """Raise ValueError naming the file and line of a row that does not parse,
+    or whose time, position, size or confidence is NaN or infinite."""
+    dets: list[Detection] = []
     with open(path) as f:
-        return [Detection.model_validate_json(line) for line in f if line.strip()]
+        for lineno, line in enumerate(f, start=1):
+            if not line.strip():
+                continue
+            try:
+                d = Detection.model_validate_json(line)
+            except ValidationError as exc:
+                err = exc.errors()[0]
+                field = ".".join(map(str, err["loc"]))
+                raise ValueError(
+                    f"{path}:{lineno}: {field + ': ' if field else ''}{err['msg']}"
+                ) from exc
+            bad = next((name for name in _FINITE_FIELDS if not math.isfinite(getattr(d, name))),
+                       None)
+            if bad is not None:
+                raise ValueError(f"{path}:{lineno}: {bad} is not finite ({getattr(d, bad)})")
+            dets.append(d)
+    return dets
 
 
 def check_frames_in_video(dets: list[Detection], frame_count: int) -> None:
