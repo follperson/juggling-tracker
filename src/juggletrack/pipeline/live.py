@@ -56,8 +56,8 @@ def run_live(
     on_state: Callable[[RealtimeState, np.ndarray], None] | None = None,
 ) -> tuple[RealtimeState, float]:
     """Run the realtime engine over a webcam (``source: int``) or file
-    (``source: str``) until the stream ends, ``max_frames`` is reached, or
-    (when ``display``) the user presses ``q``.
+    (``source: str``) until the stream ends, ``max_frames`` is reached,
+    the user presses Ctrl-C, or (when ``display``) the user presses ``q``.
 
     Returns ``(final_state, mean_processing_fps)`` -- ``final_state`` comes
     from ``RealtimeAnalyzer.finalize()`` so a run still open at the last
@@ -84,7 +84,7 @@ def run_live(
     run_history: list[int] = []
     prev_runs_completed = 0
     prev_catches_current_run = 0
-    stopped_by_max_frames = False
+    stream_ended = False
     # File-source PTS health rule -- same algorithm as VideoReader.frames()
     # (video/reader.py): trust CAP_PROP_POS_MSEC until a frame with idx>0
     # reports a non-monotonic or zero value (a common "unsupported"
@@ -109,13 +109,13 @@ def run_live(
     try:
         while True:
             if max_frames is not None and idx >= max_frames:
-                stopped_by_max_frames = True
                 break
             ok, frame = cap.read()
             if not ok:
                 if not is_file and read_retries_left > 0:
                     read_retries_left -= 1
                     continue
+                stream_ended = True
                 break
             read_retries_left = 3
             now_wall = time.monotonic()
@@ -210,17 +210,19 @@ def run_live(
                 if quit_pressed:
                     break
             idx += 1
+    except KeyboardInterrupt:
+        pass
     finally:
         cap.release()
         if display:
             cv2.destroyAllWindows()
-        # A file source that stopped well short of its own reported frame
-        # count (and wasn't just cut off by --max-frames) likely hit a
-        # decode problem partway through, not a clean end-of-stream. 90%:
-        # tolerates a handful of trailing frames a container's metadata
-        # over-counts without flagging a real, much-larger truncation.
+        # A file whose reads failed well short of its own reported frame
+        # count likely hit a decode problem partway through, not a clean
+        # end-of-stream. 90%: tolerates a handful of trailing frames a
+        # container's metadata over-counts without flagging a real,
+        # much-larger truncation.
         if (
-            is_file and not stopped_by_max_frames
+            is_file and stream_ended
             and expected_frames > 0 and idx < 0.9 * expected_frames
         ):
             print(
