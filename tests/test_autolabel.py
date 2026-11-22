@@ -33,6 +33,24 @@ def test_select_autolabels_filters_unverified(sim_with_junk):
     assert 10 in review and 40 in review
 
 
+def test_select_autolabels_keeps_one_label_per_arc_per_frame():
+    # A detector that fires a weaker echo box 0.006 beside the ball on every
+    # frame: both boxes sit on the one arc, but only one ball is there.
+    fps, g = 30.0, 1.2
+    dets = []
+    for i in range(30):
+        t = i / fps
+        x, y = 0.3 + 0.2 * t, 0.8 - 1.0 * t + 0.5 * g * t * t
+        dets.append(Detection(frame_idx=i, t=t, x=x, y=y, w=0.03, h=0.03, confidence=0.9))
+        dets.append(Detection(frame_idx=i, t=t, x=x + 0.006, y=y, w=0.03, h=0.03,
+                              confidence=0.4))
+    arcs = extract_arcs(dets)
+    labels, _ = select_autolabels(dets, arcs)
+    per_frame = [sum(lb.frame_idx == f for lb in labels) for f in range(30)]
+    assert max(per_frame) == 1
+    assert sum(per_frame) >= 25
+
+
 def test_export_writes_coco_and_frames(tmp_path, sim_with_junk):
     r, dets = sim_with_junk
     arcs = extract_arcs(dets)
