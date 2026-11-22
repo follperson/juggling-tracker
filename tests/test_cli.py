@@ -621,3 +621,20 @@ def test_live_camera_that_will_not_open_is_a_usage_error(workspace, monkeypatch)
     assert result.exit_code == 2, output
     assert re.search(r"Invalid value for '?source'?", output, re.IGNORECASE), output
     assert "could not open source: 7" in output and "camera" in output
+
+
+def test_detections_with_a_non_finite_value_are_a_usage_error(workspace):
+    from juggletrack.cli import app
+
+    sim, video, _, tmp = workspace
+    bad = tmp / "nan.jsonl"
+    save_detections_jsonl(sim.detections[:3], bad)
+    with bad.open("a") as f:
+        f.write('{"frame_idx": 20, "t": 0.67, "x": NaN, "y": 0.5}\n')
+    result = runner.invoke(app, [
+        "analyze", str(video), "--detections", str(bad), "--out", str(tmp / "out"),
+    ], env={"COLUMNS": "1000"})
+    output = flat(result.output)
+    assert result.exit_code == 2, output
+    assert re.search(r"Invalid value for '?--detections'?", output), output
+    assert f"{bad}:4: x is not finite (nan)" in output
