@@ -82,8 +82,8 @@ def analyze(
         help="Replay saved detections.jsonl instead of running the detector",
     ),
     model: str | None = typer.Option(None, help="Weights (default: env or local v3 model)"),
-    conf: float = typer.Option(0.05, help="Detector confidence threshold"),
-    imgsz: int = typer.Option(640, help="Detector input size"),
+    conf: float = typer.Option(0.05, min=0, max=1, help="Detector confidence threshold"),
+    imgsz: int = typer.Option(640, min=32, help="Detector input size"),
     stride: int = typer.Option(1, min=1, help="Detect every Nth frame"),
     device: str | None = typer.Option(None, help="Torch device (mps/cpu/cuda)"),
     link_max_dist: float = typer.Option(
@@ -233,8 +233,8 @@ def label(
         "underestimate ball size and vary with speed.",
     ),
     model: str | None = typer.Option(None, help="Weights (default: env or local v3 model)"),
-    conf: float = typer.Option(0.05),
-    imgsz: int = typer.Option(640),
+    conf: float = typer.Option(0.05, min=0, max=1),
+    imgsz: int = typer.Option(640, min=32),
     stride: int = typer.Option(1, min=1),
     device: str | None = typer.Option(None),
     link_max_dist: float = typer.Option(
@@ -318,8 +318,8 @@ def coverage(
         help="Score saved detections.jsonl (pass the SAME --stride it was made with)",
     ),
     model: str | None = typer.Option(None, help="Weights (default: env or local v3 model)"),
-    conf: float = typer.Option(0.05),
-    imgsz: int = typer.Option(640),
+    conf: float = typer.Option(0.05, min=0, max=1),
+    imgsz: int = typer.Option(640, min=32),
     stride: int = typer.Option(1, min=1),
     device: str | None = typer.Option(None),
 ) -> None:
@@ -454,11 +454,11 @@ def live(
         None, exists=True, dir_okay=False,
         help="Replay saved detections.jsonl (file sources only; no detector run)",
     ),
-    conf: float = typer.Option(0.05),
-    imgsz: int = typer.Option(640),
+    conf: float = typer.Option(0.05, min=0, max=1),
+    imgsz: int = typer.Option(640, min=32),
     device: str | None = typer.Option(None),
     display: bool = typer.Option(True, "--display/--no-display"),
-    max_frames: int | None = typer.Option(None),
+    max_frames: int | None = typer.Option(None, min=1),
     out: Path | None = typer.Option(None, help="Directory to write live_session.json into"),
 ) -> None:
     """Live juggling tracker: webcam or file, realtime HUD."""
