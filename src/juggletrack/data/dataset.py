@@ -1,15 +1,15 @@
 """Assemble ultralytics-ready datasets from COCO source dirs.
 
 COCO stays canonical (spec: framework-neutral); this derives the YOLO layout.
-Split is BY SOURCE VIDEO — never by frame (spec §6).
+Split is BY RECORDING — never by frame (spec §6).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
 
-import numpy as np
 import yaml
 
 
@@ -19,8 +19,16 @@ def assemble_dataset(
     *,
     val_fraction: float = 0.2,
     seed: int = 0,
+    recordings: dict[str, str] | None = None,
 ) -> dict:
-    """Write a dataset into an empty directory, splitting by source video.
+    """Write a dataset into an empty directory, splitting by recording.
+
+    `recordings` maps a source directory's name to its recording id, so the
+    labels, negatives and crops of one recording land on the same side. A
+    source it does not name is its own recording. Validation takes the
+    `n_val` recordings that rank first by a hash of the seed and the
+    recording id, so reordering sources moves nothing and adding one can
+    displace at most the recording at the edge of the validation set.
 
     Reusing a populated output can leave old images in the opposite split.
     Refuse that operation before writing; use a new versioned directory.
@@ -40,10 +48,11 @@ def assemble_dataset(
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise ValueError(f"use an empty output directory: {out} already contains data")
 
-    rng = np.random.default_rng(seed)
-    order = list(rng.permutation(len(sources)))
-    n_val = min(len(sources) - 1, max(1, round(val_fraction * len(sources))))
-    val_idx = set(order[:n_val])
+    recording_of = {s.name: (recordings or {}).get(s.name, s.name) for s in sources}
+    rec_ids = set(recording_of.values())
+    n_val = min(len(rec_ids) - 1, max(1, round(val_fraction * len(rec_ids))))
+    ranked = sorted(rec_ids, key=lambda r: hashlib.sha256(f"{seed}:{r}".encode()).hexdigest())
+    val_recs = set(ranked[:n_val])
 
     for split in ("train", "val"):
         (out / "images" / split).mkdir(parents=True, exist_ok=True)
@@ -53,8 +62,8 @@ def assemble_dataset(
              "n_train_images": 0, "n_val_images": 0,
              "n_train_boxes": 0, "n_val_boxes": 0}
 
-    for i, src in enumerate(sources):
-        split = "val" if i in val_idx else "train"
+    for src in sources:
+        split = "val" if recording_of[src.name] in val_recs else "train"
         stats[f"{split}_sources"].append(src.name)
         coco = json.loads((src / "annotations.json").read_text())
         anns_by_image: dict[int, list[dict]] = {}
