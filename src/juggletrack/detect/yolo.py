@@ -62,6 +62,12 @@ class YOLODetector:
             classes if classes is not None
             else resolve_ball_classes(self._model.names or {})
         )
+        if device is None:
+            import torch
+
+            # Ultralytics picks CUDA itself when device is None, but never MPS.
+            if not torch.cuda.is_available() and torch.backends.mps.is_available():
+                device = "mps"
         self.device = device
 
     def detect(self, frame: np.ndarray, frame_idx: int, t: float) -> list[Detection]:
