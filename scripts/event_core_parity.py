@@ -148,6 +148,12 @@ def snapshot(args: argparse.Namespace) -> int:
     if not paths:
         print(f"no detections.jsonl under {root}", file=sys.stderr)
         return 2
+    rels = [p.relative_to(root).as_posix() for p in paths]
+    unmatched = [s for s in args.realtime if not any(s in rel for rel in rels)]
+    for s in unmatched:
+        print(f"--realtime {s} matched no session under {root}", file=sys.stderr)
+    if unmatched:
+        return 2
 
     # Stamp the code identity before analysing: the run can take minutes, and
     # the checkout may move on while it does.
