@@ -15,10 +15,6 @@ def is_floor_bound(arc: Arc, hand_line: float, *, floor_margin: float = FLOOR_MA
     ends below that threshold kept descending toward the floor -- the shape
     a real drop leaves, as opposed to an arc that's merely unwitnessed past
     that point (extraction miss, occlusion) while still airborne.
-
-    Single source of truth for this predicate: shared by `detect_drops`
-    (drop candidacy) and `segment_runs` (which uncaught arcs may truncate a
-    run's end_t).
     """
     return arc.y_at(arc.t_end) > hand_line + floor_margin
 
@@ -89,7 +85,12 @@ def detect_drops(
     drops.sort(key=lambda d: d.t)
     updated: list[Run] = []
     for run in runs:
-        period = run.period_s or 0.5
-        ends_in_drop = any(abs(d.t - run.end_t) <= period for d in drops)
-        updated.append(run.model_copy(update={"end_reason": "drop"}) if ends_in_drop else run)
+        # Only a confirmed drop ends a run: a low catch the juggler recovers
+        # from also leaves a floor-bound arc, but it is not a drop.
+        ids = set(run.arc_ids)
+        first = next((d for d in drops if d.arc_id in ids), None)
+        updated.append(
+            run if first is None
+            else run.model_copy(update={"end_t": first.t, "end_reason": "drop"})
+        )
     return drops, updated

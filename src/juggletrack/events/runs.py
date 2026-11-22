@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from juggletrack.events import FLOOR_MARGIN
 from juggletrack.events.catches import hand_line_crossings
-from juggletrack.events.drops import is_floor_bound
 from juggletrack.events.periodicity import periodicity_score
 from juggletrack.types import Arc, CatchEvent, Run, ThrowEvent
 
@@ -26,12 +24,6 @@ def segment_runs(
     gap_factor: float = 1.3,
     min_arcs: int = 3,
     default_period: float = 0.5,
-    # detect_drops already exposes this as a parameter; segment_runs used to
-    # hardcode is_floor_bound's own default instead, so the two truncation-
-    # relevant predicates (drop candidacy here, run-span truncation there)
-    # could silently diverge if floor_margin were ever tuned in one place
-    # and not the other. Threading it through keeps them in lockstep.
-    floor_margin: float = FLOOR_MARGIN,
 ) -> list[Run]:
     throw_arc_ids = {e.arc_id for e in throws}
     juggling_arcs = sorted((a for a in arcs if a.id in throw_arc_ids), key=lambda a: a.t_start)
@@ -53,8 +45,6 @@ def segment_runs(
             groups[-1].append(a)
             cur_end = max(cur_end, arc_end(a))
 
-    catch_arc_ids = {e.arc_id for e in catches}
-
     runs: list[Run] = []
     for group in groups:
         if len(group) < min_arcs:
@@ -63,40 +53,13 @@ def segment_runs(
         run_throws = sorted(e.t for e in throws if e.arc_id in ids)
         run_catches = [e for e in catches if e.arc_id in ids]
         start_t = run_throws[0]
-        # A thrown arc with no matching catch AND that is floor-bound (kept
-        # descending toward the floor rather than ending near the hands,
-        # per `is_floor_bound`) is a real miss: everything after it in this
-        # group is either the ball still descending past the hand line
-        # (uncaught) or arcs from throws the juggler made before noticing
-        # the drop. The run itself ended at that first floor-bound miss's
-        # scheduled (falling-crossing) time, not at whatever later arc
-        # happens to have the largest arc_end.
-        #
-        # An uncaught arc that is NOT floor-bound is merely unwitnessed --
-        # an extraction miss or occlusion cut its catch out of the
-        # detection stream while it was still airborne, not evidence the
-        # run actually ended there -- and must not truncate the span
-        # (measured at scale, ss42_id_011: one unwitnessed catch mid-run
-        # truncated a reported end_t to 38.7s while the run's 95 arcs, and
-        # its 93 counted catches, span 0..200s). Only fall back to the max
-        # over all arcs when no floor-bound miss exists in the group (every
-        # throw was caught, or every uncaught arc was merely unwitnessed).
-        ordered = sorted(group, key=lambda a: a.t_start)
-        first_miss = next(
-            (
-                a for a in ordered
-                if a.id not in catch_arc_ids
-                and is_floor_bound(a, hand_line, floor_margin=floor_margin)
-            ),
-            None,
-        )
-        end_t = arc_end(first_miss) if first_miss is not None else max(arc_end(a) for a in group)
+        end_t = max(arc_end(a) for a in group)
         p = float(np.median(np.diff(run_throws))) if len(run_throws) >= 3 else None
         # Score periodicity over the arcs' OWN span (min t_start .. max
-        # arc-end), not [start_t, end_t]: end_t now truncates only at the
-        # first FLOOR-BOUND miss (see is_floor_bound above), which can land
-        # mid-group while the pattern continued -- throws the juggler made
-        # before noticing the drop are still in this group but fall after
+        # arc-end), not [start_t, end_t]: detect_drops later moves end_t to
+        # the run's first drop, which can land mid-group -- throws the
+        # juggler made before noticing the drop, or after picking the
+        # pattern back up, are still in this group but fall after that
         # end_t -- scoring that truncated sliver makes quality garbage
         # (measured: a real run scored 0.004 there vs 0.351 over its own arc
         # span). Lag band is adaptive to the run's

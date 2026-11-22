@@ -65,58 +65,55 @@ def test_drop_run_ends_at_missed_catch():
     assert runs[0].catches == len(r.catch_times)
 
 
-def test_custom_floor_margin_changes_truncation_behavior():
-    """Task 3 minor (floor_margin passthrough): `segment_runs` hardcoded
-    `is_floor_bound`'s default floor_margin while `detect_drops` already
-    exposed it as a parameter -- the two truncation-relevant predicates
-    could silently diverge if floor_margin were ever tuned in one place and
-    not the other. `segment_runs` now accepts `floor_margin` and threads it
-    into its own `is_floor_bound` call for `first_miss` selection.
+def test_drop_floor_margin_decides_where_a_low_last_throw_ends_the_run():
+    """floor_margin is a detect_drops keyword, and through it alone decides
+    whether an uncaught last throw is a drop that ends its run. This used to
+    be a segment_runs keyword as well, because segment_runs cut runs at
+    floor-bound misses itself and the two margins had to be kept in step;
+    now only detect_drops ends a run, so there is one margin to tune.
 
     Constructed directly at the Arc/event level (no sim) so the exact
-    threshold crossing is unambiguous: four arcs at hand_line=0.6, each
-    ay=by=0 so `y_at(t_end) == cy` and `arc_end(a) == a.t_end` (`ay <= 0`
-    short-circuits `hand_line_crossings` to None). Three are caught
-    (cy=0.6, at the hand line); the third-in-time arc is uncaught with
-    cy=0.68 -- above `hand_line + 0.05` (0.65) but below
-    `hand_line + FLOOR_MARGIN` (0.10 -> 0.70). So at the default
-    floor_margin it is NOT floor-bound (no truncation: end_t falls back to
-    the group max, the last arc's own t_end=1.9); at floor_margin=0.05 it
-    IS floor-bound and becomes `first_miss`, truncating end_t to its own
-    t_end=1.4.
+    threshold crossing is unambiguous: four arcs at hand_line=0.6 with
+    ay=0, so `hand_line_crossings` returns None and each arc ends at its
+    own t_end. Three are caught at the hand line. The last-thrown arc is
+    uncaught and still descending (by=0.2) when it ends at y=0.68 -- below
+    `hand_line + 0.05` (0.65) but above `hand_line + FLOOR_MARGIN` (0.70) --
+    and no throw follows it. Arc 2 was thrown before it and lands after it.
+    At the default margin the arc is not a drop candidate, so the run ends
+    where its last arc lands (1.9). At floor_margin=0.05 it is a drop
+    (floor_descent and periodicity_collapse), and the run ends there (1.4).
     """
     from juggletrack.types import CatchEvent, ThrowEvent
 
     hand_line = 0.6
 
-    def mk(id, t_start, t_end, cy):
-        return Arc(id=id, t_start=t_start, t_end=t_end, ay=0.0, by=0.0, cy=cy,
-                    bx=0.0, cx=0.5, n_points=10, rmse=0.005)
+    def mk(id, t_start, t_end, cy, by=0.0):
+        return Arc(id=id, t_start=t_start, t_end=t_end, ay=0.0, by=by, cy=cy,
+                   bx=0.0, cx=0.5, n_points=10, rmse=0.005)
 
     arcs = [
         mk(0, 0.0, 0.4, 0.60),
         mk(1, 0.5, 0.9, 0.60),
-        mk(2, 1.0, 1.4, 0.68),  # the candidate miss: uncaught
-        mk(3, 1.5, 1.9, 0.60),
+        mk(2, 0.9, 1.9, 0.60),  # in flight across the miss, caught after it
+        mk(3, 1.0, 1.4, 0.60, by=0.2),  # the candidate miss: uncaught, last throw
     ]
     throws = [ThrowEvent(t=a.t_start, x=0.5, arc_id=a.id) for a in arcs]
     catches = [
-        CatchEvent(t=a.t_end, x=0.5, arc_id=a.id) for a in arcs if a.id != 2
+        CatchEvent(t=a.t_end, x=0.5, arc_id=a.id) for a in arcs if a.id != 3
     ]
+    runs = segment_runs(arcs, throws, catches, hand_line)
 
-    default_runs = segment_runs(arcs, throws, catches, hand_line)
+    drops, default_runs = detect_drops(arcs, runs, hand_line)
+    assert drops == []
     assert len(default_runs) == 1
-    assert default_runs[0].end_t == pytest.approx(1.9), (
-        "default floor_margin: the mid-run miss is not floor-bound, so "
-        "end_t must fall back to the group's own max arc_end"
-    )
+    assert default_runs[0].end_t == pytest.approx(1.9)
+    assert default_runs[0].end_reason == "stop"
 
-    tight_runs = segment_runs(arcs, throws, catches, hand_line, floor_margin=0.05)
+    drops, tight_runs = detect_drops(arcs, runs, hand_line, floor_margin=0.05)
+    assert [d.arc_id for d in drops] == [3]
     assert len(tight_runs) == 1
-    assert tight_runs[0].end_t == pytest.approx(1.4), (
-        "floor_margin=0.05: the same arc now IS floor-bound and must "
-        "truncate end_t to its own crossing/t_end"
-    )
+    assert tight_runs[0].end_t == pytest.approx(1.4)
+    assert tight_runs[0].end_reason == "drop"
 
 
 def test_unwitnessed_miss_does_not_truncate_run_span():
