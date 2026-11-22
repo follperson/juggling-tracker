@@ -409,16 +409,18 @@ def test_held_balls_survive_filter():
 
 
 def test_slow_drift_junk_cohort_known_gap():
-    """GAP CLOSED (turn-4 drift-cohort run gate, events/validate.py): the
-    framing fix (gravity floor ay 0.25 -> 0.05, commit 73b0b0f) admitted
-    SELF-consistent slow-drift junk cohorts that the old absolute floor
-    rejected, because _gravity_prune is median-relative and cannot
-    invalidate a cohort that agrees with itself -- arc EXTRACTION still
-    fits these three smooth drift paths as plausible arcs (asserted below).
+    """KNOWN GAP, accepted: the framing fix (gravity floor ay 0.25 -> 0.05,
+    commit 73b0b0f) admitted SELF-consistent slow-drift junk cohorts that the
+    old absolute floor rejected, because _gravity_prune is median-relative
+    and cannot invalidate a cohort that agrees with itself. Arc extraction
+    fits these three smooth drift paths as plausible arcs, and
+    analyze_detections counts them as one 3-catch run.
 
-    analyze_detections now drops this run entirely (0 runs), even though its
-    3 arcs still exist in sr.arcs (the gate removes runs, not arcs -- see
-    analyze._events_from_arcs).
+    This used to expect 0 runs, because the drift-cohort run gate
+    (events/validate.py) rejected the run. The gate was deleted (issue #22,
+    see docs/parameter-tuning.md): across 113 saved sessions it rejected
+    one run, on motion-detector footage no shipped command sends through it,
+    and it never changed a live result.
 
     Note the paths must be spatially SEPARATED and drift briskly: slow
     drifters sharing spatial bins are already killed by
@@ -441,8 +443,8 @@ def test_slow_drift_junk_cohort_known_gap():
                 y=0.6 - v0 * dt + a * dt * dt,
             ))
     sr = analyze_detections(dets)
-    assert len(sr.arcs) == 3, "drift paths still fit as plausible arcs (extraction is unchanged)"
-    assert sr.runs == [], "drift-cohort run gate must reject this cohort's run"
+    assert len(sr.arcs) == 3, "drift paths still fit as plausible arcs"
+    assert [(r.catches, r.end_reason) for r in sr.runs] == [(3, "stop")]
 
 
 def test_split_flight_gets_stitched_back_into_one_arc():

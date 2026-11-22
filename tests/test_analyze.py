@@ -31,29 +31,19 @@ def test_end_to_end_drop_run():
     assert sr.drops[0].t == pytest.approx(r.missed_catch_t, abs=0.1)
 
 
-def test_drift_cohort_gate_runs_before_drop_detection():
-    """A rejected drift-cohort run must not leak a DropEvent into sr.drops.
+def test_drift_cohort_with_falling_tail_reports_its_drop_inside_its_run():
+    """The turn-4 drift-cohort fixture (tests/test_extract.py::
+    test_slow_drift_junk_cohort_known_gap), with the LAST path given a
+    longer tail so it keeps falling well past its own hand-line crossing.
+    That tail trips both drop signals (``floor_descent`` and
+    ``periodicity_collapse``), so the cohort is one run that ends in a drop,
+    and the drop sits on an arc of that run.
 
-    Reuses the turn-4 drift-cohort fixture (tests/test_extract.py::
-    test_slow_drift_junk_cohort_known_gap: 3 spatially-separated, briskly
-    drifting paths that each fit as a plausible arc but are structurally
-    not-juggling as a run -- unidirectional, monotonic, never alternating).
-    That test already confirms ``sr.runs == []``. The bug this fixture adds
-    on top: give the LAST path a longer tail so it keeps being "detected"
-    well past its own hand-line crossing, ending far below hand height
-    (``y`` far past ``hand_line + FLOOR_MARGIN``) while still descending
-    (``vy_at(t_end) > 0``) and with no later arc to continue the pattern --
-    exactly the two-signal combination (``floor_descent`` +
-    ``periodicity_collapse``) ``detect_drops`` mints a DropEvent for. Before
-    the fix, ``_events_from_arcs`` ran ``detect_drops`` on the ungated runs
-    and only filtered ``runs`` afterward, so this junk run's drop survived
-    into ``sr.drops`` even though the run itself was correctly rejected.
-    Gating before drop detection means the junk run's arcs never reach
-    ``detect_drops`` at all.
-
-    The control (reusing ``test_end_to_end_drop_run``'s real cascade-drop
-    scenario) confirms the fix doesn't just suppress drops outright: a
-    genuine drop in a genuine (non-drift-cohort) run is still detected.
+    This used to expect no run and no drop: the drift-cohort run gate
+    rejected the run before ``detect_drops`` ran, and the test pinned that
+    ordering so a rejected run could not leak a DropEvent. The gate was
+    deleted (issue #22, see docs/parameter-tuning.md), so the junk run now
+    survives and its drop is reported with it.
     """
     fps = 30.0
     dets = []
@@ -73,14 +63,12 @@ def test_drift_cohort_gate_runs_before_drop_detection():
                 x=0.15 + 0.22 * k + 0.15 * dt,
                 y=0.6 - v0 * dt + a * dt * dt,
             ))
-    sr_junk = analyze_detections(dets)
-    assert sr_junk.runs == [], "drift-cohort run gate must still reject this cohort's run"
-    assert sr_junk.drops == [], "a gated-out junk run must not leak a DropEvent"
-
-    r = simulate_cascade(n_throws=20, fps=30.0, drop_at_throw=8, seed=1)
-    sr_control = analyze_detections(r.detections)
-    assert len(sr_control.runs) == 1
-    assert len(sr_control.drops) == 1, "a real drop in a real run must still be detected"
+    sr = analyze_detections(dets)
+    assert [(r.catches, r.end_reason) for r in sr.runs] == [(2, "drop")]
+    assert [(d.arc_id, d.signals) for d in sr.drops] == [
+        (2, ["floor_descent", "periodicity_collapse"]),
+    ]
+    assert sr.drops[0].arc_id in sr.runs[0].arc_ids
 
 
 def test_video_end_run():
