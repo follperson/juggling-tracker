@@ -239,21 +239,38 @@ def test_quality_scored_over_arc_span_not_truncated_end_t():
 def test_adaptive_lag_band_scores_meschke_style_slow_period():
     """The in-repo default lag band (0.2, 1.2) can miss a run's true period
     entirely on differently-framed footage (Meschke ground truth: period
-    1.19-2.89s, wholly outside (0.2, 1.2)). segment_runs must search around
-    the run's OWN estimated period -- [max(0.1, 0.5p), 1.5p] -- not a fixed
-    band tuned to one framing. Reproduce with a slow-period simulated
-    cascade whose true period sits outside the fixed default band.
+    1.19-2.89s, wholly outside (0.2, 1.2)). There it does not score low: it
+    peaks at its 0.2s edge, which measures near-zero-lag smoothness rather
+    than periodicity, and on this fixture scores higher than the true period
+    does (measured 0.719 vs 0.570), so a bare quality floor cannot catch it.
+    segment_runs must search around the run's OWN estimated period --
+    [max(0.1, 0.5p), 1.5p] -- so quality is the score at the true period.
+    Reproduce with a slow-period simulated cascade whose true period sits
+    outside the fixed default band.
     """
     slow = CascadeParams(period_s=1.5, dwell_s=0.9, g=0.25)
     r = simulate_cascade(n_throws=12, fps=30.0, seed=1, params=slow)
-    _, _, _, _, runs = pipeline(r.detections)
+    arcs, hl, _, _, runs = pipeline(r.detections)
     assert len(runs) == 1
     run = runs[0]
-    assert run.period_s == pytest.approx(1.5, abs=0.05)
+    p = run.period_s
+    assert p == pytest.approx(1.5, abs=0.05)
     # Confirm this period truly sits outside the fixed default band -- the
     # regression this test pins would be invisible if it didn't.
-    assert not (0.2 <= run.period_s <= 1.2)
+    assert not (0.2 <= p <= 1.2)
     assert run.quality > 0.3
+
+    def arc_end(a: Arc) -> float:
+        crossings = hand_line_crossings(a, hl)
+        return crossings[1] if crossings else a.t_end
+
+    group = [a for a in arcs if a.id in run.arc_ids]
+    span = (min(a.t_start for a in group), max(arc_end(a) for a in group))
+    own, lag = periodicity_score(group, *span, lag_range=(0.5 * p, 1.5 * p))
+    fixed, _ = periodicity_score(group, *span, lag_range=(0.2, 1.2))
+    assert lag == pytest.approx(1.5, abs=0.1)
+    assert abs(fixed - own) > 0.1, "fixture must tell the two bands apart"
+    assert run.quality == pytest.approx(own, abs=0.05)
 
 
 def test_unjudgeable_quality_stores_zero():
