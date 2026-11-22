@@ -122,7 +122,12 @@ def eval(
     out: Path | None = typer.Option(None, help="Write EvalReport JSON here"),
 ) -> None:
     from juggletrack.eval.labels import VideoLabels
-    from juggletrack.eval.metrics import CATCH_ERROR_PASS, RUN_IOU_PASS, evaluate_session
+    from juggletrack.eval.metrics import (
+        CATCH_ERROR_PASS,
+        RUN_IOU_PASS,
+        aggregate_scores,
+        evaluate_session,
+    )
     from juggletrack.types import SessionResult
 
     try:
@@ -139,14 +144,18 @@ def eval(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     report = evaluate_session(session, labels)
+    scores = aggregate_scores([report])
+
+    def fmt(key: str, spec: str) -> str:
+        return "n/a" if scores[key] is None else format(scores[key], spec)
 
     typer.echo(f"video: {report.video}")
     typer.echo(f"runs: {report.n_pred_runs} predicted / {report.n_labeled_runs} labeled")
-    typer.echo(f"run boundary IoU>={RUN_IOU_PASS}: {report.frac_runs_iou90:.0%}")
-    typer.echo(f"catch count within +/-{CATCH_ERROR_PASS}: {report.frac_catch_within_1:.0%}")
+    typer.echo(f"run boundary IoU>={RUN_IOU_PASS}: {fmt('frac_runs_iou90', '.0%')}")
+    typer.echo(f"catch count within +/-{CATCH_ERROR_PASS}: {fmt('frac_catch_within_1', '.0%')}")
     typer.echo(
-        f"drops: precision {report.drop_precision:.2f} "
-        f"recall {report.drop_recall:.2f} "
+        f"drops: precision {fmt('drop_precision', '.2f')} "
+        f"recall {fmt('drop_recall', '.2f')} "
         f"(tp={report.drop_tp} fp={report.drop_fp} fn={report.drop_fn})"
     )
     if out is not None:
