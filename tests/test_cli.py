@@ -170,6 +170,43 @@ def test_detections_past_the_end_of_the_video_are_rejected(workspace, command):
     assert f"frame {frame_count}" in output and f"{frame_count} frames" in output
 
 
+class _NeverDetects:
+    def detect(self, frame, frame_idx, t):
+        raise AssertionError("detection started before --out was checked")
+
+
+@pytest.mark.parametrize("command", ["analyze", "label", "live"])
+def test_unusable_out_fails_before_detection(workspace, monkeypatch, command):
+    from juggletrack.cli import app
+
+    _, video, _, tmp = workspace
+    monkeypatch.setattr(
+        "juggletrack.detect.yolo.YOLODetector", lambda model_path, **kwargs: _NeverDetects(),
+    )
+    taken = tmp / "taken"
+    taken.write_text("")
+    args = [command, str(video), "--model", "x.pt", "--out", str(taken)]
+    if command == "live":
+        args.append("--no-display")
+    result = runner.invoke(app, args)
+    output = flat(result.output)
+    assert result.exit_code == 2, output
+    assert re.search(r"Invalid value for '?--out'?", output), output
+
+
+@pytest.mark.parametrize(("command", "help_text"), [
+    ("analyze", "Output directory (default outputs/<stem>)"),
+    ("label", "Output directory (default outputs/labels/<stem>)"),
+    ("live", "Directory to write live_session.json into"),
+])
+def test_out_help_says_it_is_a_directory(command, help_text):
+    from juggletrack.cli import app
+
+    result = runner.invoke(app, [command, "--help"])
+    assert result.exit_code == 0
+    assert help_text in flat(result.output)
+
+
 def test_analyze_no_overlay(workspace):
     from juggletrack.cli import app
 
