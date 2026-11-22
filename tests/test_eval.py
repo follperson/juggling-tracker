@@ -127,6 +127,13 @@ def test_aggregate_drop_scores(predicted, labeled, counts, precision, recall):
     assert scores["drop_recall"] == pytest.approx(recall)
 
 
+def test_zero_drop_tolerance_matches_identical_times():
+    times = [1.0, 2.0, 3.0, 4.0]
+    labels = VideoLabels(video="v.mp4", runs=[], drops=times[::-1])
+    rep = evaluate_session(session(drops=times), labels, drop_tol_s=0)
+    assert (rep.drop_tp, rep.drop_fp, rep.drop_fn) == (4, 0, 0)
+
+
 def test_run_iou_tie_does_not_depend_on_label_order():
     halves = [LabeledRun(start_t=0, end_t=5, catches=5), LabeledRun(start_t=5, end_t=10, catches=10)]
     reports = [
