@@ -21,7 +21,7 @@ def train_detector(
     model = YOLO(base_model)
     results = model.train(
         data=str(data_yaml), epochs=epochs, imgsz=imgsz, device=device,
-        project=str(project), name=name, exist_ok=True, plots=False,
+        project=str(Path(project).resolve()), name=name, exist_ok=False, plots=False,
     )
     best = Path(results.save_dir) / "weights" / "best.pt"
     if not best.exists():

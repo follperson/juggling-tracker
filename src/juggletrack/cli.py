@@ -397,8 +397,12 @@ def train(
     epochs: int = typer.Option(40, min=1),
     imgsz: int = typer.Option(640),
     device: str | None = typer.Option(None),
-    project: Path = typer.Option(Path("runs/finetune")),
-    name: str = typer.Option("juggletrack"),
+    project: Path = typer.Option(
+        Path("runs/finetune"), help="Run directory parent, relative to the current directory",
+    ),
+    name: str = typer.Option(
+        "juggletrack", help="Run name; an existing run gets a numbered suffix, never overwritten",
+    ),
 ) -> None:
     """Fine-tune the ball detector on an assembled dataset."""
     from juggletrack.train.finetune import train_detector
