@@ -5,9 +5,11 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
+from juggletrack.detect.fake import FakeDetector
 from juggletrack.pipeline.offline import save_detections_jsonl
 from juggletrack.sim import simulate_cascade
 from juggletrack.types import Detection, SessionResult
+from juggletrack.video.reader import VideoReader
 from tests.helpers import write_test_video
 
 runner = CliRunner()
@@ -76,6 +78,70 @@ def test_analyze_with_saved_detections(workspace):
     assert sr.runs and sr.runs[0].catches == 12
     assert (out / "overlay.mp4").exists()
     assert "catches" in result.output
+
+
+def _replay_as_yolo(monkeypatch, dets):
+    monkeypatch.setattr(
+        "juggletrack.detect.yolo.YOLODetector",
+        lambda model_path, **kwargs: FakeDetector(dets),
+    )
+
+
+def _overlay_frames(out_dir):
+    with VideoReader(out_dir / "overlay.mp4") as reader:
+        return [frame for _, _, frame in reader.frames()]
+
+
+def test_analyze_overlay_draws_the_detections_it_analysed(workspace, monkeypatch):
+    from juggletrack.cli import app
+
+    sim, video, _, tmp = workspace
+    _replay_as_yolo(monkeypatch, sim.detections)
+    for dots in ("all", "none"):
+        result = runner.invoke(app, [
+            "analyze", str(video), "--model", "x.pt", "--out", str(tmp / dots), "--dots", dots,
+        ])
+        assert result.exit_code == 0, result.output
+    with_dots, without_dots = _overlay_frames(tmp / "all"), _overlay_frames(tmp / "none")
+    assert any(not np.array_equal(a, b) for a, b in zip(with_dots, without_dots))
+
+
+def test_analyze_overlay_ignores_stale_detections_in_out_dir(workspace, monkeypatch):
+    from juggletrack.cli import app
+
+    sim, video, _, tmp = workspace
+    _replay_as_yolo(monkeypatch, sim.detections)
+    stale = tmp / "stale"
+    stale.mkdir()
+    save_detections_jsonl(
+        [Detection(frame_idx=i, t=i / 30.0, x=0.02, y=0.02) for i in range(5)],
+        stale / "detections.jsonl",
+    )
+    for out in (stale, tmp / "clean"):
+        result = runner.invoke(app, [
+            "analyze", str(video), "--model", "x.pt", "--out", str(out), "--dots", "all",
+        ])
+        assert result.exit_code == 0, result.output
+    stale_frames, clean_frames = _overlay_frames(stale), _overlay_frames(tmp / "clean")
+    assert all(np.array_equal(a, b) for a, b in zip(stale_frames, clean_frames))
+
+
+def test_analyze_replay_without_overlay_decodes_no_frames(workspace, monkeypatch):
+    from juggletrack.cli import app
+
+    _, video, dets, tmp = workspace
+
+    def no_decoding(self):
+        raise AssertionError("a frame was decoded")
+
+    monkeypatch.setattr(VideoReader, "frames", no_decoding)
+    out = tmp / "replay"
+    result = runner.invoke(app, [
+        "analyze", str(video), "--out", str(out), "--detections", str(dets), "--no-overlay",
+    ])
+    assert result.exit_code == 0, result.output
+    sr = SessionResult.model_validate_json((out / "analysis.json").read_text())
+    assert [r.catches for r in sr.runs] == [12]
 
 
 def test_analyze_no_overlay(workspace):
