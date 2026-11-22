@@ -43,7 +43,9 @@ These are format examples, not reviewed footage or measured results. Inspect
 the real video and count events before marking labels `human_reviewed`.
 `oracle_events` derives events from Meschke trajectories using the same
 downstream algorithm as predictions. It is useful diagnostically, but it is
-not an independent event oracle. The manifest's provenance flag records your
+not an independent event oracle. For a reference that does not use the
+extractor, see the [flight reference check](#flight-reference-check). The
+manifest's provenance flag records your
 assertion of review; software cannot verify that a person reviewed a video.
 
 ```bash
@@ -132,6 +134,91 @@ both snapshots with the same copy of the script. The saved detections are
 local, gitignored data, so CI does not run this check. A change that is meant
 to alter results fails `compare` by design. In that case, review the
 per-session run, catch and drop counts that each snapshot records instead.
+
+## Flight reference check
+
+`scripts/flight_score.py` compares the offline catch count with the flights
+that the Meschke ball labels show. `juggletrack.eval.flight_reference` reads
+those flights off each labelled ball's track. It fits no parabola and imports
+nothing from the arc extractor or the event stages, so an extractor loss shows
+up as a missed flight instead of cancelling out.
+
+A flight is a labelled ball that rises from a low point to an apex and falls
+back, where each swing is at least 10% of the clip's pattern height. The ball
+lands when it comes back down to hand level, which is a quarter of the rise
+above the low point. A flight counts when the labels show all of it and the
+ball does not go on to the floor.
+
+```bash
+uv run --no-sync python scripts/flight_score.py flight-score.json
+uv run --no-sync python scripts/flight_score.py controls.json \
+  --only ss3_id_987 --controls
+```
+
+The first command scores every `<clip>/detections.jsonl` under
+`outputs/meschke-val/post-hardening-2b` that has labels in
+`data/raw/meschke/csv` and a video in `data/raw/meschke/videos`. Use `--root`,
+`--csv-dir` and `--video-dir` for other locations. The video supplies fps and
+frame size only. The script prints one row per clip and writes a JSON report
+with the input hashes, the source hash, and the times of every missed flight
+and unmatched catch. It refuses a report path that would replace an input, and
+two runs on the same inputs write identical bytes.
+
+Each row has these columns.
+
+- `flights`: the reference flights that count.
+- `catches`: the catches in the runs that `analyze_detections` kept.
+- `matched`: the flights that got a catch. Matching is one to one. A catch can
+  match a flight when it comes within 0.2 of that flight's own duration of the
+  landing, and within 0.3 of the pattern width of the landing position. Both
+  bounds follow the footage, so slow motion and real time are held to the same
+  standard.
+- `duplicates`: the catches on a flight that already has one.
+- `unmatched`: the catches near no flight.
+- `ignored`: the catches outside the labelled span, or on a flight that the
+  labels do not show whole. These catches count neither for nor against.
+- `missed`: the flights with no catch.
+- `count_error`: `matched + duplicates + unmatched - flights`.
+- `explained`: the flights with at least one extracted arc that is in flight
+  at the apex time and passes within 0.1 of the pattern height of the apex.
+  This column judges the extractor alone. `repeated` counts the flights with
+  more than one such arc.
+
+The flight count must not depend on the 10% threshold. The script repeats the
+count at 5%, 15%, 20% and 30%. When the five counts differ by more than 3%, the
+row says `FLAGGED` and stays out of the `TRUSTED` totals. Patterns that mix
+high throws with low passes are flagged, and so are clips where a held ball
+drifts in the hand.
+
+`--controls` adds three seeded faults per clip, to show that the scorer can
+see each kind of error. It deletes every tenth catch, doubles every tenth
+catch, and moves every catch 2 s later. The faults must appear as `missed`,
+`duplicates` and `unmatched`.
+
+On 2026-11-22 the default root gave 1,485 flights and 1,041 catches over 22
+clips, with 1,016 flights matched. Six clips were trusted, with 501 flights
+and 344 matched. On `ss3_id_016` the labels show 177 flights, the extractor
+explains 53 of them, and the pipeline counts 41 catches.
+
+Limits:
+
+- The check counts flights, not human-reviewed catches. Release-grade accuracy
+  claims still need human-reviewed labels.
+- A flagged clip has no dependable flight count. Sixteen of the 22 clips are
+  flagged, most of them multi-height patterns.
+- The Meschke clips were also used for tuning, so they are development data
+  and not a holdout.
+- The scorer sees only the time and x position of a catch. A catch that is
+  late by about one landing interval of the same hand looks like a catch of
+  the next flight. A 2 s shift is that close on `ss3_id_016` and on the `ss42`
+  clips, so the shift control proves nothing there.
+- The pipeline's hand line and the reference hand level are different heights,
+  and the 0.2 time bound absorbs the difference. A change that moves catch
+  times by less than that bound is invisible to this check.
+- The saved detections must be on the `frame_idx / fps` clock that the labels
+  use. The script stops when they are not.
+- The check scores offline analysis only. It needs per-ball labels, which only
+  the Meschke clips have.
 
 ## Detector center benchmark
 
