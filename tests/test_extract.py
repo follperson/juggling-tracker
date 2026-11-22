@@ -194,7 +194,6 @@ def test_merge_does_not_fuse_crossing_balls():
     )
 
 
-@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 def test_dense_same_timestamp_clusters_do_not_crash():
     """Regression: extract_arcs used to crash end-to-end with
     numpy.linalg.LinAlgError on real dense footage.
@@ -211,14 +210,6 @@ def test_dense_same_timestamp_clusters_do_not_crash():
     The exact output (arcs may legitimately be empty; this slice is too
     short/sparse to pass the usual min_points/min_duration gates) doesn't
     matter here -- only that the call completes without raising.
-
-    T9 (final-review fix wave): this fixture's dense, near-degenerate
-    point clusters are EXPECTED to poorly-condition np.polyfit (that's
-    what "same-timestamp cluster" means numerically) -- np.polyfit's own
-    RankWarning firing here is the well-conditioned-input assumption
-    correctly not holding, not a bug this test is checking for. Suppressed
-    at the source (this one test, via a marker) rather than globally, so a
-    RankWarning anywhere else in the suite still surfaces normally.
     """
     dets = [
         Detection(frame_idx=860, t=28.620932, x=0.758729, y=0.596699, confidence=0.255003),
@@ -800,7 +791,6 @@ _FRAGMENTS = (
 )
 
 
-@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 @pytest.mark.parametrize("cloud", sorted(_CLOUDS))
 @pytest.mark.parametrize("resid_tol", [0.005, 0.02, 0.08])
 def test_split_matches_reference_on_linked_fragments(cloud, resid_tol):
@@ -809,7 +799,6 @@ def test_split_matches_reference_on_linked_fragments(cloud, resid_tol):
         assert _split_ballistic(arr, frag, resid_tol) == _ref_split_ballistic(arr, frag, resid_tol)
 
 
-@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 @pytest.mark.parametrize("resid_tol", [0.001, 0.004, 0.02])
 def test_split_matches_reference_on_synthetic_fragments(resid_tol):
     for arr in _FRAGMENTS:
@@ -964,7 +953,6 @@ def test_merge_matches_reference_at_y_ties_on_ill_conditioned_unions(gap, offset
             )
 
 
-@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 def test_merge_matches_reference_on_two_timestamp_unions():
     """Duplicate boxes can leave a union with only two distinct timestamps.
     polyfit's rank-deficient fit then accepts unions that the normal equations
@@ -994,7 +982,6 @@ def test_merge_matches_reference_on_two_timestamp_unions():
     assert merged > 0
 
 
-@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 @pytest.mark.parametrize("cloud", sorted(_CLOUDS))
 @pytest.mark.parametrize("resid_tol", [0.005, 0.02, 0.08])
 def test_em_and_merge_match_reference_through_extraction(cloud, resid_tol):
@@ -1031,7 +1018,6 @@ def test_em_claim_window_includes_points_exactly_at_the_margin():
     assert [(a.t_start, a.t_end, a.n_points) for a in refit] == [(lo, hi, arc.n_points + 2)]
 
 
-@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 @pytest.mark.parametrize("cloud", sorted(_CLOUDS))
 @pytest.mark.parametrize("resid_tol", [0.02, 0.2])
 def test_em_and_merge_match_reference_on_arbitrary_spans(cloud, resid_tol):
@@ -1065,7 +1051,6 @@ def _fit_arc_counter(monkeypatch):
     return count
 
 
-@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 @pytest.mark.parametrize("cloud", ["clean", "noisy", "drop", "duplicate-boxes"])
 def test_fast_paths_spare_most_fit_arc_calls(cloud, monkeypatch):
     """Every parity test still passes if the fast paths silently stop firing,
