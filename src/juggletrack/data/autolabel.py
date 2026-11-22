@@ -27,17 +27,31 @@ def select_autolabels(
     resid_tol: float = 0.02,
     default_box: float = 0.04,
 ) -> tuple[list[Detection], list[int]]:
+    """Arc-verified labels, at most one per (arc, frame), plus review frames.
+
+    One arc is one ball, so when several detections on a frame fit the same
+    arc only the one closest to it becomes a label.
+    """
     assignment = assign_detections(dets, arcs, resid_tol=resid_tol)
-    labels: list[Detection] = []
+    arc_by_id = {a.id: a for a in arcs}
+    best: dict[tuple[int, int], tuple[float, Detection]] = {}
     review_frames: set[int] = set()
     for d, arc_id in zip(dets, assignment):
         if arc_id == -1:
             review_frames.add(d.frame_idx)
             continue
-        labels.append(d.model_copy(update={
+        arc = arc_by_id[arc_id]
+        resid = max(abs(arc.y_at(d.t) - d.y), abs(arc.x_at(d.t) - d.x))
+        key = (arc_id, d.frame_idx)
+        if key not in best or resid < best[key][0]:
+            best[key] = (resid, d)
+    labels = [
+        d.model_copy(update={
             "w": d.w if d.w > 0 else default_box,
             "h": d.h if d.h > 0 else default_box,
-        }))
+        })
+        for _, d in best.values()
+    ]
     return labels, sorted(review_frames)
 
 

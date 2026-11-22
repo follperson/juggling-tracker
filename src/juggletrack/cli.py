@@ -231,13 +231,15 @@ def label(
     ),
 ) -> None:
     """Auto-label a video: arc-verified detections become COCO 'ball' boxes."""
-    from juggletrack.arcs.extract import extract_arcs
+    from juggletrack.analyze import AnalyzeConfig
+    from juggletrack.arcs.extract import dedup_parallel_arcs, extract_arcs
     from juggletrack.data.autolabel import (
         calibrate_label_boxes,
         export_hard_negatives,
         export_video_labels,
         select_autolabels,
     )
+    from juggletrack.detect.cluster import cluster_detections
 
     out_dir = out or Path("outputs") / "labels" / video.stem
     if detector == DetectorBackend.motion:
@@ -260,7 +262,12 @@ def label(
                 dets = detect_video(reader, MotionDetector(), stride=stride)
     else:
         dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
-    arcs = extract_arcs(dets, link_max_dist=link_max_dist)
+    cfg = AnalyzeConfig()
+    dets = cluster_detections(dets, merge_dist=cfg.cluster_merge_dist)
+    arcs = dedup_parallel_arcs(
+        extract_arcs(dets, link_max_dist=link_max_dist),
+        overlap_frac=cfg.arc_dedup_overlap_frac, traj_tol=cfg.arc_dedup_traj_tol,
+    )
     labels, review = select_autolabels(dets, arcs)
     if detector == DetectorBackend.motion:
         labels = calibrate_label_boxes(labels, arcs)
