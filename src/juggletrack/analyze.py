@@ -1,7 +1,7 @@
 """Detections -> SessionResult: the full event core in one call (spec §3 data flow)."""
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from juggletrack.arcs.extract import (
     ARC_DEDUP_OVERLAP_FRAC,
@@ -23,8 +23,8 @@ class AnalyzeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     g_range: tuple[float, float] = (0.1, 8.0)
-    resid_tol: float = 0.02
-    min_points: int = 6
+    resid_tol: float = Field(0.02, gt=0)
+    min_points: int = Field(6, ge=1)
     min_duration: float = 0.15
     # Greedy linker's per-step gates (extract_arcs defaults): how far ahead in
     # time / normalized distance a fragment may look for its next point.
@@ -37,9 +37,9 @@ class AnalyzeConfig(BaseModel):
     # old budget and cost 60% of that video's real misses (see
     # docs/superpowers/sdd/turn4-diagnosis.md). 0.18s tolerates 3 missed
     # frames at 24fps. Mirrors extract_arcs's default -- keep them in sync.
-    link_max_dt: float = 0.18
-    link_max_dist: float = 0.08
-    em_iters: int = 5
+    link_max_dt: float = Field(0.18, gt=0)
+    link_max_dist: float = Field(0.08, gt=0)
+    em_iters: int = Field(5, ge=1)
     gap_factor: float = 1.3
     min_arcs: int = 3
     # Static-detection pre-filter (extract_arcs's filter_static_detections):
@@ -47,7 +47,7 @@ class AnalyzeConfig(BaseModel):
     # static_max_span_s of video -- background false positives that would
     # otherwise poison the greedy linker (see docs/superpowers/plans/
     # 2026-07-16-plan3-flywheel-turn2-findings.md).
-    static_cell: float = 0.03
+    static_cell: float = Field(0.03, gt=0)
     static_max_span_s: float = 1.5
     # Seconds of overshoot tolerance before an unconfirmed "stop" is
     # reclassified "video_end". Matches events.catches's
@@ -67,6 +67,8 @@ class AnalyzeConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_cluster_merge_dist(self) -> "AnalyzeConfig":
+        if not self.g_range[0] < self.g_range[1]:
+            raise ValueError(f"g_range must be (low, high) with low < high (got {self.g_range})")
         if self.cluster_merge_dist < 0:
             raise ValueError(
                 f"cluster_merge_dist must be >= 0 (got {self.cluster_merge_dist})"
