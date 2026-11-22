@@ -317,6 +317,13 @@ def coverage(
     from juggletrack.video.reader import VideoReader
 
     dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
+    off_grid = next((d.frame_idx for d in dets if d.frame_idx % stride), None)
+    if off_grid is not None:
+        raise typer.BadParameter(
+            f"detection at frame {off_grid} is not on the --stride {stride} grid; "
+            "pass the stride the detections were made with",
+            param_hint="--stride",
+        )
     with VideoReader(video) as reader:
         n_sampled = math.ceil(reader.info.frame_count / stride)
     per_frame = Counter(d.frame_idx for d in dets)
