@@ -566,3 +566,21 @@ def test_out_of_range_detector_options_are_usage_errors(
     output = flat(result.output)
     assert result.exit_code == 2, output
     assert re.search(rf"Invalid value for '?{option}'?", output), output
+
+
+def test_analyze_warns_when_the_video_ends_early(workspace, monkeypatch):
+    from juggletrack.cli import app
+    from tests.test_pipeline_offline import decode_only_first
+
+    sim, video, _, tmp = workspace
+    _replay_as_yolo(monkeypatch, sim.detections)
+    args = ["analyze", str(video), "--model", "x.pt", "--no-overlay"]
+    full = runner.invoke(app, [*args, "--out", str(tmp / "full")])
+    assert full.exit_code == 0, full.output
+    assert "warning" not in full.stderr
+
+    decode_only_first(monkeypatch, 100)
+    cut = runner.invoke(app, [*args, "--out", str(tmp / "cut")])
+    assert cut.exit_code == 0, cut.output
+    assert "warning: only decoded 100/197 frames" in cut.stderr
+    assert cut.stdout.splitlines()[-1].startswith("1 run(s)")

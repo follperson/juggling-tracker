@@ -76,3 +76,27 @@ def test_analyze_video_end_to_end(tmp_path, video_path, sim):
     assert load_detections_jsonl(out / "detections.jsonl") == sorted(
         sim.detections, key=lambda d: (d.frame_idx,)
     )
+
+
+def decode_only_first(monkeypatch, n):
+    frames = VideoReader.frames
+
+    def first_n(self):
+        for item in frames(self):
+            if item[0] >= n:
+                return
+            yield item
+
+    monkeypatch.setattr(VideoReader, "frames", first_n)
+
+
+def test_analyze_video_records_frames_decoded_beside_header_count(
+    video_path, sim, monkeypatch,
+):
+    full = analyze_video(video_path, FakeDetector(sim.detections))
+    assert full.meta["frames_decoded"] == full.meta["frame_count"]
+
+    decode_only_first(monkeypatch, 50)
+    cut = analyze_video(video_path, FakeDetector(sim.detections))
+    assert cut.meta["frames_decoded"] == 50
+    assert cut.meta["frame_count"] == full.meta["frame_count"]
