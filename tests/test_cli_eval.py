@@ -76,6 +76,17 @@ def test_eval_rejects_versioned_json_that_is_not_an_analysis(inputs, document):
     assert "predicted" not in result.output
 
 
+@pytest.mark.parametrize("text", ["null", "5"], ids=["null", "number"])
+def test_eval_rejects_analysis_that_is_not_an_object(inputs, text):
+    analysis, labels = inputs
+    analysis.write_text(text)
+    result = runner.invoke(app, ["eval", str(analysis), str(labels)])
+    assert result.exit_code == 2, result.output
+    assert "has no schema_version, runs, arcs key" in " ".join(
+        result.output.replace("│", " ").split()
+    )
+
+
 def test_eval_has_a_help_summary():
     result = runner.invoke(app, ["--help"])
     line = next(row for row in result.output.splitlines() if " eval " in row)
