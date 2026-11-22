@@ -97,12 +97,17 @@ def test_snapshot_fails_when_a_realtime_selection_matches_nothing(root_suffix, r
     assert not out.exists()
 
 
-def _snapshot_file(path, implementation):
+_OFFLINE_ROW = {"input_sha256": "i", "digest": "d", "seconds": 1.0, "arcs": 1, "runs": 1,
+                "catches": 1, "drops": 0}
+_REALTIME_ROW = {"digest": "r", "feed_seconds": 1.0, "analysis_ms_p50": 1.0,
+                 "analysis_ms_p95": 1.0, "final": [1, 14, 0]}
+
+
+def _snapshot_file(path, implementation, offline=None, realtime=None):
     meta = {"implementation_sha256": implementation, "python": "3", "numpy": "2",
             "platform": "p"}
-    row = {"input_sha256": "i", "digest": "d", "seconds": 1.0, "arcs": 1, "runs": 1,
-           "catches": 1, "drops": 0}
-    path.write_text(json.dumps({"meta": meta, "offline": {"s": row}, "realtime": {}}))
+    offline = {"s": _OFFLINE_ROW} if offline is None else offline
+    path.write_text(json.dumps({"meta": meta, "offline": offline, "realtime": realtime or {}}))
     return path
 
 
@@ -116,6 +121,27 @@ def test_compare_says_when_both_snapshots_ran_the_same_implementation(same, tmp_
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PARITY OK" in proc.stdout
     assert ("same implementation" in proc.stdout) == same
+
+
+@pytest.mark.parametrize("offline, realtime, line", [
+    ({"s": {**_OFFLINE_ROW, "digest": "e", "catches": 2}}, None,
+     "offline: MISMATCH s {'catches': (1, 2)}"),
+    ({"s": {**_OFFLINE_ROW, "input_sha256": "j"}}, None, "offline: INPUT CHANGED s"),
+    ({"s": _OFFLINE_ROW, "t": _OFFLINE_ROW}, None,
+     "offline: present in only one snapshot: t"),
+    (None, {"s": {**_REALTIME_ROW, "digest": "q", "final": [1, 21, 0]}},
+     "realtime: MISMATCH s {'final': ([1, 14, 0], [1, 21, 0])}"),
+], ids=["digest", "input", "missing-session", "realtime-only"])
+def test_compare_fails_on_any_difference(offline, realtime, line, tmp_path):
+    base = _snapshot_file(tmp_path / "base.json", "a" * 64, realtime={"s": _REALTIME_ROW})
+    new = _snapshot_file(tmp_path / "new.json", "b" * 64, offline=offline,
+                         realtime=realtime or {"s": _REALTIME_ROW})
+
+    proc = _parity("compare", base, new)
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert line in proc.stdout.splitlines()
+    assert "PARITY FAILED (1)" in proc.stdout
 
 
 def _load_script():
