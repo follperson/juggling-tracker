@@ -10,12 +10,14 @@ DEFAULT_MODEL = Path("models/juggletrack-v3/best.pt")
 def resolve_model(model: str | None = None) -> str:
     """Prefer explicit weights, then the environment, then the local champion.
 
-    Bare names such as ``yolo11n.pt`` are passed to Ultralytics, which can
-    download them. A path with a directory part must exist (a file, or an
-    exported ``.mlpackage`` directory). An absent default never silently
-    selects stock weights.
+    Bare names such as ``yolo11n.pt`` and URLs are passed to Ultralytics,
+    which can download them or reach a model server. A path with a directory
+    part must exist (a file, or an exported ``.mlpackage`` directory). An
+    absent default never silently selects stock weights.
     """
     selected = model or os.environ.get("JUGGLETRACK_MODEL")
+    if selected and "://" in selected:
+        return selected
     if selected:
         path = os.path.expanduser(selected)
         if os.path.dirname(path) and not os.path.exists(path):
