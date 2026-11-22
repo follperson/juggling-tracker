@@ -722,3 +722,54 @@ def test_analyze_summary_marks_a_run_that_began_before_the_clip(tmp_path):
         f"run 1: 0.00s to {session.runs[0].end_t:.2f}s (began before the clip)  "
         f"catches {session.runs[0].catches}  end={session.runs[0].end_reason}"
     )
+
+
+@pytest.fixture()
+def sparse_workspace(tmp_path):
+    """Every 4th frame of a 6-throw cascade: the default linker distance finds
+    no arcs here and a wider one finds them, so the knob visibly matters."""
+    sim = simulate_cascade(n_throws=6, fps=30.0, seed=1)
+    video = tmp_path / "six.mp4"
+    write_test_video(video, n_frames=max(d.frame_idx for d in sim.detections) + 1, fps=30.0)
+    dets = tmp_path / "sparse.jsonl"
+    save_detections_jsonl([d for d in sim.detections if d.frame_idx % 4 == 0], dets)
+    return video, dets, tmp_path
+
+
+def test_analyze_link_max_dist_reaches_the_linker(sparse_workspace):
+    video, dets, tmp = sparse_workspace
+    arcs = {
+        dist: len(_analyze_replay(video, dets, tmp / dist, "--link-max-dist", dist)[1].arcs)
+        for dist in ("0.08", "0.2")
+    }
+    assert arcs["0.08"] < arcs["0.2"], arcs
+
+
+def test_label_link_max_dist_reaches_the_linker(sparse_workspace):
+    from juggletrack.cli import app
+
+    video, dets, tmp = sparse_workspace
+    boxes = {}
+    for dist in ("0.08", "0.2"):
+        result = runner.invoke(app, [
+            "label", str(video), "--detections", str(dets), "--out", str(tmp / dist),
+            "--link-max-dist", dist,
+        ])
+        assert result.exit_code == 0, result.output
+        boxes[dist] = int(re.search(r"(\d+) boxes", result.output).group(1))
+    assert boxes["0.08"] < boxes["0.2"], boxes
+
+
+def test_live_max_frames_stops_the_replay_early(workspace):
+    from juggletrack.cli import app
+
+    _, video, dets, tmp = workspace
+    out = tmp / "live_short"
+    result = runner.invoke(app, [
+        "live", str(video), "--detections", str(dets), "--no-display",
+        "--max-frames", "60", "--out", str(out),
+    ])
+    assert result.exit_code == 0, result.output
+    saved = json.loads((out / "live_session.json").read_text())
+    assert saved["t"] < 2.0
+    assert saved["catches_total"] < 12
