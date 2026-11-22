@@ -79,3 +79,34 @@ def test_label_motion_exports_one_calibrated_box_size(tmp_path):
     assert len(sizes) == 1
     (bw, bh), = sizes
     assert 0.02 * w_px <= bw <= 0.05 * w_px and 0.02 * h_px <= bh <= 0.05 * h_px
+
+
+def test_label_negatives_count_every_raw_junk_box(tmp_path):
+    # A static scene feature that the detector double-fires on (a box and a
+    # weaker echo 0.007 apart) on every frame, and a 3 s idle tail after the
+    # juggling.
+    # Hard-negative mining gates on raw junk boxes (min_junk=2), so the tail
+    # frames are negatives; label-side box clustering must not reach them.
+    from juggletrack.cli import app
+    from juggletrack.types import Detection
+
+    fps = 30.0
+    sim = simulate_cascade(n_throws=12, fps=fps, seed=1)
+    n_frames = max(d.frame_idx for d in sim.detections) + 1 + int(3 * fps)
+    junk = [Detection(frame_idx=f, t=f / fps, x=x, y=0.1, w=0.03, h=0.03, confidence=c)
+            for f in range(n_frames) for x, c in ((0.9, 0.3), (0.907, 0.2))]
+    video = tmp_path / "cascade.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+    det_path = tmp_path / "dets.jsonl"
+    save_detections_jsonl(sorted(sim.detections + junk, key=lambda d: d.frame_idx), det_path)
+    neg = tmp_path / "neg"
+
+    result = runner.invoke(app, [
+        "label", str(video), "--out", str(tmp_path / "labels_out"),
+        "--detections", str(det_path), "--negatives", str(neg), "--neg-person-model", "none",
+    ])
+
+    assert result.exit_code == 0, result.output
+    coco = json.loads((neg / "annotations.json").read_text())
+    assert len(coco["images"]) == 40
+    assert coco["annotations"] == []
