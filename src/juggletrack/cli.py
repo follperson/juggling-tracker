@@ -485,6 +485,8 @@ def live(
     # index has no frames to replay against.
     if detections is not None and isinstance(src, int):
         raise typer.BadParameter("--detections requires a file source")
+    if isinstance(src, str) and not Path(src).exists():
+        raise typer.BadParameter(f"file {src} does not exist", param_hint="source")
     if out is not None:
         _make_out_dir(out)
     if detections is not None:
@@ -498,10 +500,18 @@ def live(
             model_path=_resolve_model(model), conf=conf, imgsz=imgsz, device=device,
         )
 
-    final, fps = run_live(
-        src, detector, config=RealtimeConfig(),
-        display=display, max_frames=max_frames,
-    )
+    try:
+        final, fps = run_live(
+            src, detector, config=RealtimeConfig(),
+            display=display, max_frames=max_frames,
+        )
+    except ValueError as exc:
+        if isinstance(src, str):
+            raise
+        raise typer.BadParameter(
+            f"{exc}; check the camera index and that this terminal may use the camera",
+            param_hint="source",
+        ) from exc
     if out is not None:
         (out / "live_session.json").write_text(final.model_dump_json(indent=2))
     typer.echo(
