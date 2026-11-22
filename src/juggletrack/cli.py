@@ -15,6 +15,24 @@ if TYPE_CHECKING:
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 
+def _print_version(value: bool) -> None:
+    if value:
+        from importlib.metadata import version
+
+        typer.echo(f"juggletrack {version('juggletrack')}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    _version: bool = typer.Option(
+        False, "--version", callback=_print_version, is_eager=True,
+        help="Print the installed version and exit",
+    ),
+) -> None:
+    pass
+
+
 class DetectorBackend(str, enum.Enum):
     yolo = "yolo"
     motion = "motion"
