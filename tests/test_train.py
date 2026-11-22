@@ -38,7 +38,22 @@ def test_train_detector_plumbing(tmp_path, monkeypatch):
     assert calls["base_model"] == "yolo11n.pt"
     assert kw["epochs"] == 3 and kw["imgsz"] == 320
     assert kw["data"].endswith("data.yaml")
-    assert kw["exist_ok"] is True and kw["plots"] is False
+    # exist_ok=False makes Ultralytics increment the run name (-2, -3) rather
+    # than reuse the directory, deleting the earlier results.csv and
+    # overwriting its best.pt.
+    assert kw["exist_ok"] is False and kw["plots"] is False
+
+
+def test_train_detector_resolves_relative_project_under_cwd(tmp_path, monkeypatch):
+    # Ultralytics nests a relative project under runs/<task>, so the default
+    # runs/finetune used to land in runs/detect/runs/finetune.
+    calls = install_fake_ultralytics(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    from juggletrack.train.finetune import train_detector
+
+    best = train_detector(tmp_path / "data.yaml", name="rel")
+    assert calls["train_kwargs"]["project"] == str(tmp_path.resolve() / "runs" / "finetune")
+    assert best == tmp_path.resolve() / "runs" / "finetune" / "rel" / "weights" / "best.pt"
 
 
 def test_train_detector_missing_best_raises(tmp_path, monkeypatch):
