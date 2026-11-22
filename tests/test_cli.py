@@ -584,3 +584,40 @@ def test_analyze_warns_when_the_video_ends_early(workspace, monkeypatch):
     assert cut.exit_code == 0, cut.output
     assert "warning: only decoded 100/197 frames" in cut.stderr
     assert cut.stdout.splitlines()[-1].startswith("1 run(s)")
+
+
+def test_live_missing_file_source_fails_before_the_detector_is_built(workspace, monkeypatch):
+    from juggletrack.cli import app
+
+    def unexpected_model_load(*args, **kwargs):
+        raise AssertionError("a missing source must fail before the detector is built")
+
+    monkeypatch.setattr("juggletrack.detect.yolo.YOLODetector", unexpected_model_load)
+    _, _, _, tmp = workspace
+    missing = tmp / "nope.mp4"
+    result = runner.invoke(app, ["live", str(missing), "--model", "x.pt", "--no-display"])
+    output = flat(result.output)
+    assert result.exit_code == 2, output
+    assert re.search(r"Invalid value for '?source'?", output, re.IGNORECASE), output
+    assert "nope.mp4" in output and "does not exist" in output
+
+
+def test_live_camera_that_will_not_open_is_a_usage_error(workspace, monkeypatch):
+    import juggletrack.pipeline.live as live_module
+    from juggletrack.cli import app
+
+    class ClosedCapture:
+        def __init__(self, source):
+            pass
+
+        def isOpened(self):
+            return False
+
+    sim, _, _, _ = workspace
+    _replay_as_yolo(monkeypatch, sim.detections)
+    monkeypatch.setattr(live_module.cv2, "VideoCapture", ClosedCapture)
+    result = runner.invoke(app, ["live", "7", "--model", "x.pt", "--no-display"])
+    output = flat(result.output)
+    assert result.exit_code == 2, output
+    assert re.search(r"Invalid value for '?source'?", output, re.IGNORECASE), output
+    assert "could not open source: 7" in output and "camera" in output
