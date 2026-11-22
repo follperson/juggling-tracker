@@ -121,6 +121,7 @@ def eval(
     labels_json: Path = typer.Argument(..., exists=True, dir_okay=False),
     out: Path | None = typer.Option(None, help="Write EvalReport JSON here"),
 ) -> None:
+    """Score a saved analysis.json against hand-labeled runs and drops."""
     from juggletrack.eval.labels import VideoLabels
     from juggletrack.eval.metrics import (
         CATCH_ERROR_PASS,
