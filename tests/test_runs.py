@@ -2,8 +2,8 @@ import pytest
 
 from juggletrack.analyze import AnalyzeConfig, analyze_detections
 from juggletrack.arcs.extract import extract_arcs
-from juggletrack.events.catches import derive_events
-from juggletrack.events.drops import is_floor_bound
+from juggletrack.events.catches import derive_events, hand_line_crossings
+from juggletrack.events.drops import detect_drops, is_floor_bound
 from juggletrack.events.handline import estimate_hand_line
 from juggletrack.events.periodicity import periodicity_score
 from juggletrack.events.runs import estimate_period, segment_runs
@@ -57,9 +57,11 @@ def test_two_separated_runs():
 
 def test_drop_run_ends_at_missed_catch():
     r = simulate_cascade(n_throws=20, fps=30.0, drop_at_throw=8, seed=1)
-    _, _, _, _, runs = pipeline(r.detections)
+    arcs, hl, _, _, runs = pipeline(r.detections)
+    _, runs = detect_drops(arcs, runs, hl)
     assert len(runs) == 1
     assert runs[0].end_t == pytest.approx(r.missed_catch_t, abs=0.1)
+    assert runs[0].end_reason == "drop"
     assert runs[0].catches == len(r.catch_times)
 
 
@@ -190,28 +192,19 @@ def test_min_arcs_filters_stray_tosses():
 
 
 def test_quality_scored_over_arc_span_not_truncated_end_t():
-    """A genuine floor-bound miss truncates the reported end_t to that
-    miss's crossing time, but the group's arcs can keep going well past it
-    if the pattern actually continued -- lane 1 measured a real case (af1
-    run 2) scoring 0.004 on [start_t, end_t] vs 0.351 on the arcs' own span.
-    Reproduce the mechanism directly: take a full, cleanly periodic 16-throw
-    run and turn one mid-run arc into a floor-bound miss by extending its
-    fitted t_end 0.09s further along its own parabola (past hand_line +
-    FLOOR_MARGIN, still descending) and stripping its catch -- WITHOUT
-    touching any other arc. end_t truncates hard; quality must still
-    reflect the real periodic structure across the whole arc span.
-
-    Plan-5 task 3 update: originally this fixture merely stripped a catch
-    EVENT from an otherwise normally-landing arc (an extraction miss, not a
-    floor-bound one) to trigger truncation. Task 3 changed segment_runs so
-    only a floor-bound uncaught arc (`is_floor_bound`) may truncate end_t --
-    an unwitnessed/extraction miss no longer does (see
-    test_unwitnessed_miss_does_not_truncate_run_span). The old fixture's
-    truncation premise is exactly the bug that fix removes, so this test now
-    builds a genuinely floor-bound miss (measured: extending t_end by 0.09s
-    lands y_at(t_end) ~= 0.736, comfortably past hand_line + FLOOR_MARGIN
-    ~= 0.732, with positive terminal velocity) to keep exercising the
-    quality-over-own-span mechanism this test is actually about.
+    """A run that ends at a drop can still hold arcs past it: when the
+    juggler picks the pattern back up inside the run gap, those throws stay
+    in the run's group but fall after end_t. Lane 1 measured a real case
+    (af1 run 2) scoring 0.004 on [start_t, end_t] vs 0.351 on the arcs' own
+    span. Reproduce the mechanism through segment_runs and detect_drops, the
+    path analyze uses: take a full, cleanly periodic 16-throw run, turn one
+    mid-run arc into a floor drop by extending its fitted t_end 0.09s along
+    its own parabola (measured: y_at(t_end) ~= 0.736, past hand_line +
+    FLOOR_MARGIN ~= 0.732, still descending) and stripping its catch, then
+    remove the throws of the next two beats so detect_drops sees the pattern
+    collapse. The run ends at that drop, yet its quality must match the twin
+    run in which that arc was caught, because quality is scored over the
+    arcs' own span.
     """
     r = simulate_cascade(n_throws=16, fps=30.0, seed=1)
     arcs = extract_arcs(r.detections)
@@ -222,17 +215,28 @@ def test_quality_scored_over_arc_span_not_truncated_end_t():
     target = arcs_sorted[3]
     mutated = target.model_copy(update={"t_end": target.t_end + 0.09})
     assert is_floor_bound(mutated, hl), "fixture must genuinely be floor-bound"
-    arcs = [mutated if a.id == target.id else a for a in arcs]
-    catches = [c for c in catches if c.arc_id != target.id]
+    _, miss_t = hand_line_crossings(mutated, hl)
+    paused = {a.id for a in arcs if miss_t < a.t_start <= miss_t + 2 * r.params.period_s}
+    assert paused, "fixture must pause the pattern after the miss"
+    arcs = [a for a in arcs if a.id not in paused]
+    throws = [e for e in throws if e.arc_id not in paused]
+    catches = [c for c in catches if c.arc_id not in paused]
 
-    runs = segment_runs(arcs, throws, catches, hl)
-    assert len(runs) == 1
+    twin = segment_runs(arcs, throws, catches, hl)
+    dropped = [mutated if a.id == target.id else a for a in arcs]
+    runs = segment_runs(dropped, throws, [c for c in catches if c.arc_id != target.id], hl)
+    drops, runs = detect_drops(dropped, runs, hl)
+    assert [d.arc_id for d in drops] == [target.id]
+    assert len(runs) == 1 and len(twin) == 1
     run = runs[0]
-    # end_t truncated to (approximately) the floor-bound arc's own
-    # hand-line crossing -- far short of the group's real arc span (16
-    # throws over ~7s).
+    assert run.arc_ids == twin[0].arc_ids
+    assert run.end_reason == "drop"
+    # end_t is the drop's own hand-line crossing -- far short of the group's
+    # real arc span (16 throws over ~7s).
+    assert run.end_t == pytest.approx(miss_t)
     assert run.end_t < arcs_sorted[-1].t_end - 2.0
     assert run.quality > 0.3
+    assert run.quality == pytest.approx(twin[0].quality, abs=0.03)
 
 
 def test_adaptive_lag_band_scores_meschke_style_slow_period():
