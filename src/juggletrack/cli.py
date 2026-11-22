@@ -125,8 +125,19 @@ def eval(
     from juggletrack.eval.metrics import CATCH_ERROR_PASS, RUN_IOU_PASS, evaluate_session
     from juggletrack.types import SessionResult
 
-    session = SessionResult.model_validate(json.loads(analysis_json.read_text()))
-    labels = VideoLabels.model_validate_json(labels_json.read_text())
+    try:
+        if out is not None:
+            _check_report_output(out, [analysis_json, labels_json])
+        document = json.loads(analysis_json.read_text())
+        if "schema_version" not in document:
+            raise ValueError(
+                f"{analysis_json} has no schema_version key; expected an analysis.json "
+                "written by juggletrack analyze"
+            )
+        session = SessionResult.model_validate(document)
+        labels = VideoLabels.model_validate_json(labels_json.read_text())
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     report = evaluate_session(session, labels)
 
     typer.echo(f"video: {report.video}")
@@ -139,6 +150,7 @@ def eval(
         f"(tp={report.drop_tp} fp={report.drop_fp} fn={report.drop_fn})"
     )
     if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(report.model_dump_json(indent=2))
 
 
