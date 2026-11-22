@@ -659,3 +659,66 @@ def test_package_runs_as_a_module():
     )
     assert result.returncode == 0, result.stderr
     assert "analyze" in result.stdout
+
+
+def test_analyze_has_a_help_summary():
+    from juggletrack.cli import app
+
+    root = runner.invoke(app, ["--help"], env={"COLUMNS": "200"})
+    listed = next(line for line in plain(root.output).splitlines() if " analyze " in line)
+    assert listed.replace("│", "").split()[1:], listed
+    own = runner.invoke(app, ["analyze", "--help"])
+    assert listed.replace("│", "").split()[1] in plain(own.output)
+
+
+def _analyze_replay(video, dets, out, *extra):
+    from juggletrack.cli import app
+
+    result = runner.invoke(app, [
+        "analyze", str(video), "--detections", str(dets), "--out", str(out), "--no-overlay",
+        *extra,
+    ])
+    assert result.exit_code == 0, result.output
+    session = SessionResult.model_validate_json((out / "analysis.json").read_text())
+    return result.output.splitlines(), session
+
+
+def test_analyze_summary_reports_each_run_and_the_totals(tmp_path):
+    sim = simulate_cascade(n_throws=20, fps=30.0, drop_at_throw=8, seed=1)
+    video = tmp_path / "drop.mp4"
+    write_test_video(video, n_frames=max(d.frame_idx for d in sim.detections) + 1, fps=30.0)
+    dets = tmp_path / "drop.jsonl"
+    save_detections_jsonl(sim.detections, dets)
+    out = tmp_path / "out"
+    lines, session = _analyze_replay(video, dets, out)
+
+    assert any(r.end_reason == "drop" and r.catches != r.throws for r in session.runs)
+    run_lines = [line for line in lines if line.startswith("run ")]
+    assert [int(re.search(r"catches (\d+)", line).group(1)) for line in run_lines] == [
+        r.catches for r in session.runs
+    ]
+    assert [re.search(r"end=(\w+)", line).group(1) for line in run_lines] == [
+        r.end_reason for r in session.runs
+    ]
+    catches, throws = (sum(r.catches for r in session.runs), sum(r.throws for r in session.runs))
+    assert f"total: {catches} catches, {throws} throws" in lines
+    assert lines[-1] == f"{len(session.runs)} run(s), {len(session.drops)} drop(s); results in {out}"
+
+
+def test_analyze_summary_marks_a_run_that_began_before_the_clip(tmp_path):
+    sim = simulate_cascade(n_throws=12, fps=30.0, seed=1)
+    cut = [
+        d.model_copy(update={"frame_idx": d.frame_idx - 30, "t": d.t - 1.0})
+        for d in sim.detections if d.frame_idx >= 30
+    ]
+    video = tmp_path / "cut.mp4"
+    write_test_video(video, n_frames=max(d.frame_idx for d in cut) + 1, fps=30.0)
+    dets = tmp_path / "cut.jsonl"
+    save_detections_jsonl(cut, dets)
+    lines, session = _analyze_replay(video, dets, tmp_path / "out")
+
+    assert session.runs[0].start_t < 0
+    assert lines[0] == (
+        f"run 1: 0.00s to {session.runs[0].end_t:.2f}s (began before the clip)  "
+        f"catches {session.runs[0].catches}  end={session.runs[0].end_reason}"
+    )
