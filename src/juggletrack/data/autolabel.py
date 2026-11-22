@@ -144,10 +144,10 @@ def export_video_labels(
                            "width": w_px, "height": h_px})
             for lb in frame_labels:
                 bw, bh = lb.w * w_px, lb.h * h_px
-                x_min = min(max(lb.x * w_px - bw / 2, 0.0), w_px - 1.0)
-                y_min = min(max(lb.y * h_px - bh / 2, 0.0), h_px - 1.0)
-                bw = min(bw, w_px - x_min)
-                bh = min(bh, h_px - y_min)
+                x_min = max(lb.x * w_px - bw / 2, 0.0)
+                y_min = max(lb.y * h_px - bh / 2, 0.0)
+                bw = min(lb.x * w_px + bw / 2, w_px) - x_min
+                bh = min(lb.y * h_px + bh / 2, h_px) - y_min
                 annotations.append({
                     "id": len(annotations) + 1, "image_id": image_id,
                     "category_id": BALL_CATEGORY["id"],
