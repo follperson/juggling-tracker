@@ -80,8 +80,13 @@ class VideoReader:
         ``idx / fps`` for the remainder of the clip -- still far better than
         a non-monotonic jump, which downstream parabola fits can't tolerate
         at all.
+
+        A seek to frame 0 can land past the first GOP on MPEG-TS/M2TS input,
+        so a second pass reopens the file instead of seeking.
         """
-        self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        if self._cap.get(cv2.CAP_PROP_POS_FRAMES) != 0:
+            self._cap.release()
+            self._cap = cv2.VideoCapture(self.info.path)
         idx = 0
         pts_ok = True
         first_msec = 0.0
