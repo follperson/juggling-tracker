@@ -97,6 +97,27 @@ def test_snapshot_fails_when_a_realtime_selection_matches_nothing(root_suffix, r
     assert not out.exists()
 
 
+@pytest.mark.parametrize("args, message", [
+    # Every session the value selects is over --max-detections.
+    (["--max-detections", "1", "--realtime", "a/"], "--realtime a/ replayed no session"),
+    # The value selects only an empty detections file.
+    (["--realtime", "empty/"], "--realtime empty/ replayed no session"),
+    (["--only", "outputs/a/", "--max-detections", "1"], "no session analysed"),
+], ids=["skipped", "empty", "no-offline"])
+def test_snapshot_fails_when_filters_leave_nothing_to_compare(args, message, tmp_path):
+    root = tmp_path / "outputs"
+    _save_session(root / "a" / "detections.jsonl", 1)
+    (root / "empty").mkdir()
+    (root / "empty" / "detections.jsonl").write_text("")
+    out = tmp_path / "snap.json"
+
+    proc = _parity("snapshot", out, "--root", root, *args)
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert message in proc.stderr
+    assert not out.exists()
+
+
 _OFFLINE_ROW = {"input_sha256": "i", "digest": "d", "seconds": 1.0, "arcs": 1, "runs": 1,
                 "catches": 1, "drops": 0}
 _REALTIME_ROW = {"digest": "r", "feed_seconds": 1.0, "analysis_ms_p50": 1.0,
