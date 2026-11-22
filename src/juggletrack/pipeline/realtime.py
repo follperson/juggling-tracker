@@ -28,6 +28,8 @@ from juggletrack.types import Arc, Detection
 
 
 class RealtimeConfig(BaseModel):
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
     window_s: float = 8.0
     cadence_frames: int = 3
     freeze_s: float = 1.5
