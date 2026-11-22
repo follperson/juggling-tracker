@@ -6,11 +6,12 @@ Intermediates are persisted (spec: stages re-runnable independently) —
 from __future__ import annotations
 
 from pathlib import Path
+from typing import NamedTuple
 
 from juggletrack.analyze import AnalyzeConfig, analyze_detections
 from juggletrack.detect import BallDetector
 from juggletrack.types import Detection, SessionResult
-from juggletrack.video.reader import VideoReader
+from juggletrack.video.reader import VideoInfo, VideoReader
 
 
 def detect_video(
@@ -37,18 +38,34 @@ def load_detections_jsonl(path: str | Path) -> list[Detection]:
         return [Detection.model_validate_json(line) for line in f if line.strip()]
 
 
-def analyze_video(
+class OfflineRun(NamedTuple):
+    session: SessionResult
+    detections: list[Detection]
+    info: VideoInfo
+
+
+def run_offline(
     video_path: str | Path,
-    detector: BallDetector,
+    source: BallDetector | list[Detection],
     *,
     config: AnalyzeConfig | None = None,
     out_dir: str | Path | None = None,
     save_intermediates: bool = False,
     stride: int = 1,
-) -> SessionResult:
+) -> OfflineRun:
+    """Detect (or take saved detections), analyse, and write artifacts.
+
+    Saved detections are taken as they are: only the video's header is read
+    and no frame is decoded.
+    """
     with VideoReader(video_path) as reader:
         info = reader.info
-        dets = detect_video(reader, detector, stride=stride)
+        if isinstance(source, list):
+            dets = sorted(
+                (d for d in source if d.frame_idx % stride == 0), key=lambda d: d.frame_idx
+            )
+        else:
+            dets = detect_video(reader, source, stride=stride)
 
     session = analyze_detections(dets, config)
     session.meta.update(
@@ -62,4 +79,19 @@ def analyze_video(
         (out / "analysis.json").write_text(session.model_dump_json(indent=2))
         if save_intermediates:
             save_detections_jsonl(dets, out / "detections.jsonl")
-    return session
+    return OfflineRun(session, dets, info)
+
+
+def analyze_video(
+    video_path: str | Path,
+    detector: BallDetector,
+    *,
+    config: AnalyzeConfig | None = None,
+    out_dir: str | Path | None = None,
+    save_intermediates: bool = False,
+    stride: int = 1,
+) -> SessionResult:
+    return run_offline(
+        video_path, detector, config=config, out_dir=out_dir,
+        save_intermediates=save_intermediates, stride=stride,
+    ).session

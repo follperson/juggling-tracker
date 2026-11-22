@@ -68,7 +68,7 @@ def analyze(
     from pydantic import ValidationError
 
     from juggletrack.analyze import AnalyzeConfig
-    from juggletrack.pipeline.offline import analyze_video, load_detections_jsonl
+    from juggletrack.pipeline.offline import load_detections_jsonl, run_offline
 
     try:
         config = AnalyzeConfig(link_max_dist=link_max_dist)
@@ -76,18 +76,16 @@ def analyze(
         raise typer.BadParameter(exc.errors()[0]["msg"], param_hint="--link-max-dist") from exc
     out_dir = out or Path("outputs") / video.stem
     if detections is not None:
-        from juggletrack.detect.fake import FakeDetector
-
-        detector = FakeDetector(load_detections_jsonl(detections))
+        source = load_detections_jsonl(detections)
     else:
         from juggletrack.detect.yolo import YOLODetector
 
-        detector = YOLODetector(
+        source = YOLODetector(
             model_path=_resolve_model(model), conf=conf, imgsz=imgsz, device=device
         )
 
-    session = analyze_video(
-        video, detector,
+    session, analysed, _ = run_offline(
+        video, source,
         out_dir=out_dir, save_intermediates=save_intermediates, stride=stride,
         config=config,
     )
@@ -95,14 +93,8 @@ def analyze(
     if overlay:
         from juggletrack.pipeline.overlay import render_overlay
 
-        dets_for_overlay = None
-        jsonl = out_dir / "detections.jsonl"
-        if detections is not None:
-            dets_for_overlay = load_detections_jsonl(detections)
-        elif jsonl.exists():
-            dets_for_overlay = load_detections_jsonl(jsonl)
         render_overlay(video, session, out_dir / "overlay.mp4",
-                       detections=dets_for_overlay, dots=dots.value)
+                       detections=analysed, dots=dots.value)
 
     for i, run in enumerate(session.runs):
         typer.echo(
