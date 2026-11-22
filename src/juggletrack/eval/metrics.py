@@ -11,6 +11,9 @@ from juggletrack.types import SessionResult
 # Spec §6 pass criteria for a matched run, shared by per-video and aggregate scores.
 RUN_IOU_PASS = 0.9
 CATCH_ERROR_PASS = 1
+# Matching gates: a run pair needs IoU above this, a drop pair a time error within this.
+RUN_MATCH_MIN_IOU = 0.1
+DROP_TOL_S = 1.0
 
 
 def temporal_iou(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
@@ -46,8 +49,8 @@ def evaluate_session(
     session: SessionResult,
     labels: VideoLabels,
     *,
-    drop_tol_s: float = 1.0,
-    min_match_iou: float = 0.1,
+    drop_tol_s: float = DROP_TOL_S,
+    min_match_iou: float = RUN_MATCH_MIN_IOU,
 ) -> EvalReport:
     pairs = sorted(
         (
