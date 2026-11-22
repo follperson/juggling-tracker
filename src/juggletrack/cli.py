@@ -4,8 +4,12 @@ from __future__ import annotations
 import enum
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
+
+if TYPE_CHECKING:
+    from juggletrack.types import Detection
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -29,6 +33,20 @@ def _resolve_model(model: str | None) -> str:
     except FileNotFoundError as exc:
         # Only the default can be missing: explicit names go to Ultralytics.
         raise typer.BadParameter(str(exc)) from exc
+
+
+def _load_replay(detections: Path, video: Path | str) -> list[Detection]:
+    from juggletrack.pipeline.offline import check_frames_in_video, load_detections_jsonl
+    from juggletrack.video.reader import VideoReader
+
+    dets = load_detections_jsonl(detections)
+    with VideoReader(video) as reader:
+        frame_count = reader.info.frame_count
+    try:
+        check_frames_in_video(dets, frame_count)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--detections") from exc
+    return dets
 
 
 def _check_report_output(out: Path, inputs: list[Path]) -> None:
@@ -68,7 +86,7 @@ def analyze(
     from pydantic import ValidationError
 
     from juggletrack.analyze import AnalyzeConfig
-    from juggletrack.pipeline.offline import load_detections_jsonl, run_offline
+    from juggletrack.pipeline.offline import run_offline
 
     try:
         config = AnalyzeConfig(link_max_dist=link_max_dist)
@@ -76,7 +94,7 @@ def analyze(
         raise typer.BadParameter(exc.errors()[0]["msg"], param_hint="--link-max-dist") from exc
     out_dir = out or Path("outputs") / video.stem
     if detections is not None:
-        source = load_detections_jsonl(detections)
+        source = _load_replay(detections, video)
     else:
         from juggletrack.detect.yolo import YOLODetector
 
@@ -171,11 +189,11 @@ def benchmark(
 
 
 def _get_detections(video, detections, model, conf, imgsz, stride, device):
-    from juggletrack.pipeline.offline import detect_video, load_detections_jsonl
+    from juggletrack.pipeline.offline import detect_video
     from juggletrack.video.reader import VideoReader
 
     if detections is not None:
-        return load_detections_jsonl(detections)
+        return _load_replay(detections, video)
     from juggletrack.detect.yolo import YOLODetector
 
     det = YOLODetector(model_path=_resolve_model(model), conf=conf, imgsz=imgsz, device=device)
@@ -240,9 +258,7 @@ def label(
                 "--stride 1"
             )
         if detections is not None:
-            from juggletrack.pipeline.offline import load_detections_jsonl
-
-            dets = load_detections_jsonl(detections)
+            dets = _load_replay(detections, video)
         else:
             from juggletrack.detect.motion import MotionDetector
             from juggletrack.pipeline.offline import detect_video
@@ -443,9 +459,8 @@ def live(
         raise typer.BadParameter("--detections requires a file source")
     if detections is not None:
         from juggletrack.detect.fake import FakeDetector
-        from juggletrack.pipeline.offline import load_detections_jsonl
 
-        detector = FakeDetector(load_detections_jsonl(detections))
+        detector = FakeDetector(_load_replay(detections, src))
     else:
         from juggletrack.detect.yolo import YOLODetector
 

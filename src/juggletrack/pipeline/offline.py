@@ -38,6 +38,19 @@ def load_detections_jsonl(path: str | Path) -> list[Detection]:
         return [Detection.model_validate_json(line) for line in f if line.strip()]
 
 
+def check_frames_in_video(dets: list[Detection], frame_count: int) -> None:
+    """Raise ValueError when a detection's frame lies outside [0, frame_count).
+
+    This catches detections from a longer video, not every mismatched pair.
+    """
+    bad = next((d.frame_idx for d in dets if not 0 <= d.frame_idx < frame_count), None)
+    if bad is not None:
+        raise ValueError(
+            f"detection at frame {bad} is outside the video's {frame_count} frames; "
+            "were these detections made from this video?"
+        )
+
+
 class OfflineRun(NamedTuple):
     session: SessionResult
     detections: list[Detection]

@@ -364,11 +364,15 @@ def test_live_command_non_ascii_digit_source_stays_a_string(workspace, monkeypat
     index. run_live is monkeypatched here purely to avoid actually trying
     to open a bogus source -- this test is about argument parsing, not
     video I/O."""
+    import shutil
+
     import juggletrack.pipeline.live as live_module
     from juggletrack.cli import app
     from juggletrack.pipeline.realtime import RealtimeState
 
-    _, _, dets, _ = workspace
+    _, video, dets, tmp = workspace
+    shutil.copy(video, tmp / "²")
+    monkeypatch.chdir(tmp)
     captured = {}
 
     def fake_run_live(src, detector, **kwargs):
