@@ -78,6 +78,25 @@ def test_snapshot_writes_a_fresh_path_and_leaves_inputs_alone(tmp_path):
     assert snap["meta"]["git_head"] == (package_head or "unknown")
 
 
+@pytest.mark.parametrize("root_suffix, realtime", [
+    ("", "nomatch/"),
+    # Narrowing --root drops the directory the substring names.
+    ("val", "val/"),
+])
+def test_snapshot_fails_when_a_realtime_selection_matches_nothing(root_suffix, realtime, tmp_path):
+    root = tmp_path / "outputs"
+    _save_session(root / "val" / "a" / "detections.jsonl", 1)
+    out = tmp_path / "snap.json"
+
+    proc = _parity("snapshot", out, "--root", root / root_suffix, "--realtime", "a/",
+                   "--realtime", realtime)
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"--realtime {realtime} matched no session" in proc.stderr
+    assert "--realtime a/" not in proc.stderr
+    assert not out.exists()
+
+
 def _snapshot_file(path, implementation):
     meta = {"implementation_sha256": implementation, "python": "3", "numpy": "2",
             "platform": "p"}
