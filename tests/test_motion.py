@@ -160,3 +160,23 @@ def test_busy_frame_guard_lets_sparse_scene_through():
     idx = det.warmup_frames + 1
     dets = det.detect(sparse, idx, idx / 30.0)
     assert len(dets) == n_blobs
+
+
+def test_area_gate_drops_arm_sized_blob_and_keeps_ball():
+    """A moving arm is one blob far above max_area; the ball beside it is
+    inside the band. Only the ball may come out."""
+    from juggletrack.detect.motion import MotionDetector
+
+    size = (640, 480)
+    w, h = size
+    det = MotionDetector(warmup_frames=5)
+    _feed_black_warmup(det, det.warmup_frames + 1, size)
+
+    frame = np.zeros((h, w, 3), dtype=np.uint8)
+    cv2.circle(frame, (480, 120), 10, (255, 255, 255), -1)
+    cv2.rectangle(frame, (100, 300), (220, 340), (255, 255, 255), -1)
+
+    idx = det.warmup_frames + 1
+    dets = det.detect(frame, idx, idx / 30.0)
+    assert len(dets) == 1
+    assert abs(dets[0].x - 480 / w) < 0.01 and abs(dets[0].y - 120 / h) < 0.01
