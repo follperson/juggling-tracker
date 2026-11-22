@@ -192,6 +192,16 @@ def snapshot(args: argparse.Namespace) -> int:
                     flush=True,
                 )
 
+    if not offline:
+        print(f"no session analysed under {root}", file=sys.stderr)
+        return 2
+    unreplayed = [s for s in args.realtime if not any(s in rel for rel in realtime)]
+    for s in unreplayed:
+        print(f"--realtime {s} replayed no session: every match was skipped or empty",
+              file=sys.stderr)
+    if unreplayed:
+        return 2
+
     Path(args.out).write_text(json.dumps(
         {"meta": meta, "offline": offline, "realtime": realtime}, indent=1,
     ))

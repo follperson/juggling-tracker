@@ -118,8 +118,10 @@ command selects, that replays about a quarter of the recorded frames, and the
 change that only shows up later in a session passes the capped check. Before
 merging a change to `RealtimeAnalyzer`, take one pair of snapshots with
 `--realtime-frames 0`, which replays every frame. `snapshot` exits with an
-error when a `--realtime` value matches no session under `--root`, so a typo
-cannot skip the realtime check.
+error and writes no file when it analyses no session, or when a `--realtime`
+value ends up replaying no session, whether because it matches nothing under
+`--root` or because `--max-detections` skipped every match or every match was
+empty. It checks the match before the run starts, so a typo fails at once.
 
 `compare` prints `PARITY OK` and the speed ratio, or names each session whose
 digest or input changed and exits nonzero. Each snapshot records the source
