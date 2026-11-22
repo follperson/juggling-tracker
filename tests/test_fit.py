@@ -1,5 +1,8 @@
+import warnings
+
 import numpy as np
 import pytest
+from numpy.exceptions import RankWarning
 
 from juggletrack.arcs.fit import fit_arc, points_array, y_residuals
 from juggletrack.sim import CascadeParams, simulate_cascade
@@ -126,8 +129,6 @@ def _two_timestamp_points() -> np.ndarray:
 def test_rank_deficient_fit_does_not_warn():
     """label --detector motion printed one RankWarning per rank-deficient fit
     (142 on one session), none of which reaches a final arc."""
-    import warnings
-
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         fit_arc(_two_timestamp_points())
@@ -137,10 +138,6 @@ def test_rank_deficient_fit_does_not_warn():
 @pytest.mark.parametrize("arr", [flight_points(noise=0.005, seed=2), _two_timestamp_points()],
                          ids=["well-conditioned", "rank-deficient"])
 def test_fit_coefficients_match_plain_polyfit(arr):
-    import warnings
-
-    from numpy.exceptions import RankWarning
-
     dt = arr[:, 0] - arr[0, 0]
     w = arr[:, 3]
     with warnings.catch_warnings():
