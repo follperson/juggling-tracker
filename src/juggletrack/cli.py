@@ -113,6 +113,7 @@ def analyze(
         "detections only), 'all' (every raw detection), or 'none'",
     ),
 ) -> None:
+    """Find juggling runs, catches and drops in a video; write analysis.json and an overlay."""
     from pydantic import ValidationError
 
     from juggletrack.analyze import AnalyzeConfig
@@ -152,10 +153,15 @@ def analyze(
                        detections=analysed, dots=dots.value)
 
     for i, run in enumerate(session.runs):
-        typer.echo(
-            f"run {i + 1}: {run.start_t:.2f}-{run.end_t:.2f}s  "
-            f"catches {run.catches}  end={run.end_reason}"
-        )
+        # A negative start_t is a throw extrapolated to before the first frame.
+        span = f"{max(run.start_t, 0.0):.2f}s to {run.end_t:.2f}s"
+        if run.start_t < 0:
+            span += " (began before the clip)"
+        typer.echo(f"run {i + 1}: {span}  catches {run.catches}  end={run.end_reason}")
+    typer.echo(
+        f"total: {sum(r.catches for r in session.runs)} catches, "
+        f"{sum(r.throws for r in session.runs)} throws"
+    )
     typer.echo(
         f"{len(session.runs)} run(s), {len(session.drops)} drop(s); "
         f"results in {out_dir}"
