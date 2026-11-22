@@ -135,9 +135,10 @@ def eval(
         if out is not None:
             _check_report_output(out, [analysis_json, labels_json])
         document = json.loads(analysis_json.read_text())
-        if "schema_version" not in document:
+        missing = [key for key in ("schema_version", "runs", "arcs") if key not in document]
+        if missing:
             raise ValueError(
-                f"{analysis_json} has no schema_version key; expected an analysis.json "
+                f"{analysis_json} has no {', '.join(missing)} key; expected an analysis.json "
                 "written by juggletrack analyze"
             )
         session = SessionResult.model_validate(document)
