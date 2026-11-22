@@ -149,7 +149,10 @@ def crop_coco_source(
 
     for im in coco["images"]:
         img_w, img_h = im["width"], im["height"]
-        img = cv2.imread(str(src / "images" / im["file_name"]))
+        img_path = src / "images" / im["file_name"]
+        img = cv2.imread(str(img_path))
+        if img is None:
+            raise ValueError(f"cannot read image {img_path}")
         anns = anns_by_image.get(im["id"], [])
 
         if anns:
