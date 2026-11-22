@@ -263,14 +263,14 @@ def label(
     else:
         dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
     cfg = AnalyzeConfig()
-    dets = cluster_detections(dets, merge_dist=cfg.cluster_merge_dist)
-    arcs = dedup_parallel_arcs(
-        extract_arcs(dets, link_max_dist=link_max_dist),
+    label_dets = cluster_detections(dets, merge_dist=cfg.cluster_merge_dist)
+    label_arcs = dedup_parallel_arcs(
+        extract_arcs(label_dets, link_max_dist=link_max_dist),
         overlap_frac=cfg.arc_dedup_overlap_frac, traj_tol=cfg.arc_dedup_traj_tol,
     )
-    labels, review = select_autolabels(dets, arcs)
+    labels, review = select_autolabels(label_dets, label_arcs)
     if detector == DetectorBackend.motion:
-        labels = calibrate_label_boxes(labels, arcs)
+        labels = calibrate_label_boxes(labels, label_arcs)
     stats = export_video_labels(video, labels, out_dir, review_frames=review)
     typer.echo(
         f"{stats['n_images']} images, {stats['n_boxes']} boxes, "
@@ -278,7 +278,7 @@ def label(
     )
     if negatives is not None:
         neg_stats = export_hard_negatives(
-            video, dets, arcs, negatives,
+            video, dets, extract_arcs(dets, link_max_dist=link_max_dist), negatives,
             person_model=None if neg_person_model.lower() == "none" else neg_person_model,
         )
         typer.echo(
