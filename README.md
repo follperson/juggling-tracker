@@ -21,8 +21,9 @@ Inference commands use `--model`, then `JUGGLETRACK_MODEL`, then
 `models/juggletrack-v3/best.pt` relative to the working directory. This is the
 fine-tuned yolo11n v3 detector used in the recorded benchmarks.
 
-Weights are not included in Git. Copy a v3 checkpoint to that location, point `--model` at it,
-or set `JUGGLETRACK_MODEL=/absolute/path/to/best.pt`. To experiment with the
+Weights are not included in Git and are not distributed. Copy a v3 checkpoint
+to that location, point `--model` at it, or set
+`JUGGLETRACK_MODEL=/absolute/path/to/best.pt`. To experiment with the
 stock detector, explicitly pass `--model yolo11n.pt` (Ultralytics may download
 it). Missing default weights produce an actionable error. Saved-detection
 replay and motion labeling do not need ball-detector weights.
@@ -54,6 +55,26 @@ All commands (`--help` on each for options):
 | `detection-eval` | Compare saved detections with Meschke ball centers: precision, recall, duplicate candidates, and localization error |
 | `train` | Fine-tune YOLO on an assembled dataset |
 | `export` | Export weights to CoreML (blocked by torch/coremltools version skew as of 2026-08; see bench findings) |
+
+## Outputs
+
+All coordinates are normalized to the frame, with `y` growing downward. Times
+are seconds from the start of the video. `src/juggletrack/types.py` is the
+schema of record.
+
+| File | Written by | Contents |
+|---|---|---|
+| `analysis.json` | `analyze` | `schema_version`, `runs`, `drops`, `arcs`, `hand_line_y`, and `meta` |
+| `overlay.mp4` | `analyze` | The input video with the hand line, arc tails, drop markers, and a counter |
+| `detections.jsonl` | `analyze --save-intermediates` | One detection per line: `frame_idx`, `t`, `x`, `y`, `w`, `h`, `confidence` |
+| `live_session.json` | `live --out DIR` | The final live state, including the run, catch, and drop counters |
+
+Each run in `analysis.json` has `start_t`, `end_t`, `catches`, `throws`,
+`end_reason` (`drop`, `stop`, or `video_end`), `period_s`, and the ids of its
+arcs. A run that was already under way when the video started has a negative
+`start_t`: the time of its first throw, extrapolated from the fitted arc. Pass
+a saved `detections.jsonl` back with `--detections` to re-run the event core
+without the detector.
 
 ## Accuracy envelope (measured)
 
@@ -90,14 +111,19 @@ assembly exists only for smoke tests: its validation path reuses training
 images and must not be used to report accuracy.
 
 [Benchmarking and detector experiments](docs/benchmarking.md) describe the
-measurement workflow. [The implementation plan](docs/superpowers/plans/2026-09-07-accuracy-foundations.md)
-tracks the next work. Historical designs and findings remain in `docs/superpowers/`.
+measurement workflow, and [the tuning record](docs/parameter-tuning.md) explains
+the duplicate-suppression defaults. Open work is tracked in
+[GitHub issues](https://github.com/follperson/juggling-tracker/issues).
+`AGENTS.md` holds the working rules for agents. Historical designs and findings
+remain in `docs/superpowers/`.
 The supported package is `src/juggletrack`; the separate `legacy/` prototype
 has its own dependencies and is outside the standard test suite.
 
 ## Data credits
 
 Ground-truth validation uses the Stephen Meschke Juggling Data Set
-(https://sites.google.com/view/jugglingdataset). Training corpora include
+(https://sites.google.com/view/jugglingdataset). The benchmark commands expect
+its videos under `data/raw/meschke/videos` and its label files under
+`data/raw/meschke/csv`. Training corpora include
 Creative Commons–licensed videos (per-directory `MANIFEST.json` files record
 sources and licenses).
