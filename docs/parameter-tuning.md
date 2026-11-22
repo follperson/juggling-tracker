@@ -168,8 +168,8 @@ Evidence, measured at `c772c28`:
   from 4 runs / 13 catches / 4 drops to 5 / 14 / 4. No other session changes.
 - v3 detections of the same scene (t 5 to 35 s of `PXL_20260716_182734164`)
   form 4 runs and the gate rejects none.
-- Live, 646 verdicts across the replayed sessions: the gate's verdict never
-  changed a final result, and the live digests are identical without it.
+- Live, 646 verdicts across the replayed sessions: the gate rejected none of
+  them, and the live digests are identical without it.
 
 What this gives up: the run-level defense against one self-consistent junk
 cohort (`tests/test_extract.py::test_slow_drift_junk_cohort_known_gap` now
