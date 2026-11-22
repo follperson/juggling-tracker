@@ -638,3 +638,24 @@ def test_detections_with_a_non_finite_value_are_a_usage_error(workspace):
     assert result.exit_code == 2, output
     assert re.search(r"Invalid value for '?--detections'?", output), output
     assert f"{bad}:4: x is not finite (nan)" in output
+
+
+def test_version_flag_prints_the_installed_version():
+    from importlib.metadata import version
+
+    from juggletrack.cli import app
+
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == f"juggletrack {version('juggletrack')}"
+
+
+def test_package_runs_as_a_module():
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "juggletrack", "--help"], capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "analyze" in result.stdout
