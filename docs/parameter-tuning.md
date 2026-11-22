@@ -151,3 +151,28 @@ not resolvable from a fresh clone.
 `arc_dedup_overlap_frac: float = ARC_DEDUP_OVERLAP_FRAC`
 `arc_dedup_traj_tol: float = ARC_DEDUP_TRAJ_TOL`
 
+
+## Drift-cohort run gate removed (2026-11-22)
+
+`is_drift_cohort` (formerly `events/validate.py`) rejected a whole run when its
+arcs all drifted one way, marched monotonically across the frame and swept
+past each other. It was deleted on issue #22. Issue #19 (its sweep test
+ignored direction) closes with it.
+
+Evidence, measured at `c772c28`:
+
+- Offline, 113 saved sessions: the gate judged 202 runs and rejected 1, in
+  `flywheel-t2/labels-motion/182734164`. Those detections came from the
+  motion detector. No shipped command sends them through the gate, because
+  `label` calls `extract_arcs` directly. Without the gate that session goes
+  from 4 runs / 13 catches / 4 drops to 5 / 14 / 4. No other session changes.
+- v3 detections of the same scene (t 5 to 35 s of `PXL_20260716_182734164`)
+  form 4 runs and the gate rejects none.
+- Live, 646 verdicts across the replayed sessions: the gate's verdict never
+  changed a final result, and the live digests are identical without it.
+
+What this gives up: the run-level defense against one self-consistent junk
+cohort (`tests/test_extract.py::test_slow_drift_junk_cohort_known_gap` now
+pins that such a cohort counts as a run). Junk handling falls to the
+arc-level checks. If junk-heavy footage starts minting runs, the gate is a
+single revert away.
