@@ -61,3 +61,9 @@ def test_eval_rejects_analysis_without_schema_version(inputs, document):
     assert result.exit_code == 2
     assert "schema_version" in result.output
     assert "runs:" not in result.output
+
+
+def test_eval_has_a_help_summary():
+    result = runner.invoke(app, ["--help"])
+    line = next(row for row in result.output.splitlines() if " eval " in row)
+    assert "Score" in line
