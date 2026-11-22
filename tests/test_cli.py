@@ -490,6 +490,28 @@ def test_inference_commands_explain_missing_default_model(workspace, monkeypatch
     assert "JUGGLETRACK_MODEL" in output
 
 
+@pytest.mark.parametrize(("args", "environment", "named"), [
+    (["--model", "models/juggletrack-v9/best.pt"], None, "--model"),
+    ([], "/nonexistent/best.pt", "JUGGLETRACK_MODEL"),
+])
+def test_missing_weights_path_is_a_usage_error(workspace, monkeypatch, args, environment, named):
+    from juggletrack.cli import app
+
+    def unexpected_model_load(*args, **kwargs):
+        raise AssertionError("a missing weights path must fail before the detector is built")
+
+    monkeypatch.setattr("juggletrack.detect.yolo.YOLODetector", unexpected_model_load)
+    _, video, _, tmp = workspace
+    monkeypatch.chdir(tmp)
+    monkeypatch.delenv("JUGGLETRACK_MODEL", raising=False)
+    if environment is not None:
+        monkeypatch.setenv("JUGGLETRACK_MODEL", environment)
+    result = runner.invoke(app, ["analyze", str(video), "--no-overlay", *args])
+    output = flat(result.output)
+    assert result.exit_code == 2, output
+    assert f"{named} weights not found" in output
+
+
 @pytest.mark.parametrize(("args", "environment", "expected"), [
     (["--model", "x.pt"], None, "x.pt"),
     ([], "y.pt", "y.pt"),
