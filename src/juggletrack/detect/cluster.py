@@ -17,23 +17,23 @@ extract.py's dedup_parallel_arcs doing the duplicate-vs-crossing
 discrimination at the ARC/trajectory level instead) -> **0.012**, the
 CURRENT shipped value, restored by a controller-directed spec-§6.1
 adjudication after the full 22-video re-aggregation showed 0.0 cost the
-primary metric versus 0.023 (see AnalyzeConfig.cluster_merge_dist's own
-comment for the combo-sweep table and adjudication quote verbatim -- that
-comment is the authority on the current value, not this paragraph). So:
+primary metric versus 0.023 (see docs/parameter-tuning.md for the
+combo-sweep table and the adjudication quote -- that record is the
+authority on the current value, not this paragraph). So:
 this per-frame box-level mechanism IS relied on by default again, at a
 small radius, ALONGSIDE arc-level dedup (not instead of it) -- real ball
 crossings almost always differ in confidence, so this small a merge_dist
 collapses duplicate-box storms without reopening the real-crossing
 regressions a wider one caused (ss531_id_005/989, ss50505_id_012 -- see
-AnalyzeConfig's own comment and
+docs/parameter-tuning.md and
 docs/superpowers/plans/2026-08-03-meschke-validation-findings.md). One
 cost carries through unresolved at 0.012 same as at 0.0: at least one
 out-of-scope high-pattern video (ss50505_id_093) depended on the OLD
 0.023's pre-extraction cleanup specifically and neither 0.0 nor 0.012
 recovers it (arc-level dedup cannot repair points that never got merged
 before extraction ran) -- callers with similarly messy footage can still
-pass a larger cluster_merge_dist explicitly; see AnalyzeConfig's own
-comment for the measured trade-off. The rest of this docstring documents
+pass a larger cluster_merge_dist explicitly; see docs/parameter-tuning.md
+for the measured trade-off. The rest of this docstring documents
 the mechanism and its ORIGINAL 0.023 tuning history, preserved for
 context.
 
@@ -45,9 +45,9 @@ cascade balls approach closer than that only in brief crossing instants;
 losing one detection point per ball during those instants used to be
 "absorbed by extract_arcs' EM assigner" -- see the strict-lower-confidence
 paragraph below for why that framing was wrong and crossings must not
-merge at all, and AnalyzeConfig.cluster_merge_dist's own comment for why
-0.023 (not the originally-measured 0.03) was the shipped value THEN, and
-for why the shipped value is 0.012 NOW.
+merge at all, and docs/parameter-tuning.md for why 0.023 (not the
+originally-measured 0.03) was the shipped value THEN, and for why the
+shipped value is 0.012 NOW.
 
 Strict-lower-confidence absorption: a detection may only be absorbed into a
 cluster whose anchor confidence is STRICTLY GREATER than its own -- two

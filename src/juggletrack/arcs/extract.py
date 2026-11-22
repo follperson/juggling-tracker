@@ -612,8 +612,8 @@ def _stitch_splits(dets: list[Detection], arcs: list[Arc], resid_tol: float) -> 
 
 
 # Arc-level parallel-arc dedup defaults (Plan 5 task 2b; full adjudication
-# and combo-sweep history recorded verbatim in AnalyzeConfig's own comment
-# above the arc_dedup_* fields, and in the committed findings doc
+# and combo-sweep history recorded in docs/parameter-tuning.md and in the
+# committed findings doc
 # docs/superpowers/plans/2026-08-03-meschke-validation-findings.md.
 # .superpowers/sdd/task-2b-report.md §§9-10 has additional per-round detail
 # but is an untracked local file, not resolvable from a fresh clone).
