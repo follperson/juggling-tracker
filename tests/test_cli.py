@@ -540,3 +540,29 @@ def test_analyze_forwards_selected_model_to_detector(
     ])
     assert result.exit_code == 0, result.output
     assert captured["model_path"] == expected
+
+
+@pytest.mark.parametrize(("command", "option", "value"), [
+    (command, option, value)
+    for command in ("analyze", "label", "coverage", "live")
+    for option, value in (("--conf", "5"), ("--conf", "-0.1"), ("--imgsz", "0"))
+] + [("live", "--max-frames", "-5"), ("live", "--max-frames", "0")])
+def test_out_of_range_detector_options_are_usage_errors(
+    workspace, monkeypatch, command, option, value,
+):
+    from juggletrack.cli import app
+
+    def unexpected_model_load(*args, **kwargs):
+        raise AssertionError("an out-of-range option must fail before the detector is built")
+
+    monkeypatch.setattr("juggletrack.detect.yolo.YOLODetector", unexpected_model_load)
+    _, video, _, tmp = workspace
+    args = [command, str(video), "--model", "x.pt", option, value]
+    if command != "coverage":
+        args += ["--out", str(tmp / "out")]
+    if command == "live":
+        args.append("--no-display")
+    result = runner.invoke(app, args)
+    output = flat(result.output)
+    assert result.exit_code == 2, output
+    assert re.search(rf"Invalid value for '?{option}'?", output), output
