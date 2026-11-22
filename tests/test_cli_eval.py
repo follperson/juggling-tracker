@@ -39,6 +39,17 @@ def test_eval_refuses_to_overwrite_an_input(inputs, which):
     assert [p.read_bytes() for p in inputs] == before
 
 
+def test_eval_prints_na_for_scores_with_an_empty_denominator(inputs):
+    analysis, labels = inputs
+    labels.write_text(json.dumps({"video": "idle.mp4", "runs": [], "drops": []}))
+    result = runner.invoke(app, ["eval", str(analysis), str(labels)])
+    assert result.exit_code == 0, result.output
+    assert "runs: 1 predicted / 0 labeled" in result.output
+    assert "run boundary IoU>=0.9: n/a" in result.output
+    assert "catch count within +/-1: n/a" in result.output
+    assert "drops: precision n/a recall n/a (tp=0 fp=0 fn=0)" in result.output
+
+
 @pytest.mark.parametrize("document", [
     {},
     {"t": 30.0, "catches_total": 12, "drops_total": 1, "runs_completed": 1, "run_active": False},
