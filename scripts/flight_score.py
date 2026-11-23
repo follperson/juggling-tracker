@@ -111,8 +111,14 @@ def _line(name: str, trusted: str, row: dict) -> str:
     def cells(keys: tuple[str, ...]) -> str:
         return " ".join(f"{row[k]:>{max(7, len(k))}}" for k in keys)
 
+    # A median offset does not add up across clips, so totals leave it blank.
+    offset = row.get("offset_s", "")
+    if isinstance(offset, float):
+        offset = f"{offset:+.3f}"
+    elif offset is None:
+        offset = "-"
     arcs = f" | {cells(ARC_COUNTS)}" if "arcs" in row else ""
-    return f"{name:30s} {trusted:7s} {cells(COUNTS)}{arcs}"
+    return f"{name:30s} {trusted:7s} {cells(COUNTS)} {offset:>8}{arcs}".rstrip()
 
 
 def _total(rows: list[dict]) -> dict:
@@ -171,7 +177,7 @@ def main() -> int:
         },
         "clips": {},
     }
-    print(_line("clip", "trusted", {k: k for k in (*COUNTS, *ARC_COUNTS)}))
+    print(_line("clip", "trusted", {k: k for k in (*COUNTS, "offset_s", *ARC_COUNTS)}))
 
     for clip in clips:
         with VideoReader(videos[clip]) as reader:

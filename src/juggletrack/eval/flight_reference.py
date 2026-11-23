@@ -283,7 +283,11 @@ class CatchScore(BaseModel):
     has one, and ``unmatched`` are catches near no flight. ``ignored``
     catches fall outside the labelled span or on a flight that was not seen
     whole, and count neither for nor against. ``count_error`` is the catches
-    that were not ignored, minus ``flights``.
+    that were not ignored, minus ``flights``. ``offset_s`` is the median of
+    catch time minus landing time over the matched pairs, positive when the
+    catches come late, and None when nothing matched. The time tolerance is
+    loose, so a shift of the catch clock shows here long before it turns
+    matched catches into unmatched ones.
 
     ``verdicts`` has one entry per catch, in the order given. ``missed``
     holds the indices into ``FlightReference.flights`` of the counted
@@ -297,6 +301,7 @@ class CatchScore(BaseModel):
     unmatched: int
     ignored: int
     count_error: int
+    offset_s: float | None
     verdicts: list[Verdict]
     missed: list[int]
 
@@ -321,6 +326,7 @@ def score_catches(reference: FlightReference, catches: Sequence[CatchEvent]) -> 
     for i in scored:
         verdicts[i] = "unmatched"
     caught: set[int] = set()
+    offsets: list[float] = []
     if scored and landed:
         catch_t, catch_x = (np.array([getattr(catches[i], k) for i in scored]) for k in "tx")
         landing_t, landing_x, apex_t = (
@@ -346,6 +352,7 @@ def score_catches(reference: FlightReference, catches: Sequence[CatchEvent]) -> 
             elif flights[k].counts:
                 verdicts[i] = "matched"
                 caught.add(k)
+                offsets.append(catches[i].t - flights[k].landing_t)
             else:
                 verdicts[i] = "ignored"
 
@@ -358,6 +365,7 @@ def score_catches(reference: FlightReference, catches: Sequence[CatchEvent]) -> 
         matched=matched, duplicates=duplicates, unmatched=unmatched,
         ignored=verdicts.count("ignored"),
         count_error=matched + duplicates + unmatched - len(counted),
+        offset_s=float(np.median(offsets)) if offsets else None,
         verdicts=verdicts, missed=[k for k in counted if k not in caught],
     )
 
