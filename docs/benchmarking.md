@@ -73,12 +73,16 @@ linearly, and empty frames before the first or after the last detected frame
 step by `1 / fps`. On detected frames this is exactly the clock that
 `live VIDEO --detections FILE` feeds for the same recording; on empty frames it
 agrees with the decoder's timestamps to within rounding. The realtime analyzer
-compares times against its clock with a 1 µs tolerance, so rounding-level clock
-differences do not change its output: on the 22 saved `meschke-val` sessions,
-`frame_idx / fps` at each video's own rate gives the same state on every frame
-as the recorded clock. A clock that differs by more, such as `frame_idx / 30`
-for 29.75 fps footage, can still change the emitted states.
-This decoder-free mode requires constant-rate
+compares times against its clock with a 1 µs tolerance, so a clock that differs
+by less than that does not change its output, as long as the detections keep
+their own timestamps. On the 22 saved `meschke-val` sessions, `frame_idx / fps`
+at each video's own rate gives the same state on every frame as the recorded
+clock. A clock that differs by more can still change the emitted states. Two
+examples are `frame_idx / 30` for 29.75 fps footage, and a Matroska remux, whose
+timestamps are rounded to the millisecond. When a detector stamps its
+detections with the clock, as `live` does without `--detections`, noise in that
+clock reaches arc extraction, which this tolerance does not cover. This
+decoder-free mode requires constant-rate
 timestamps starting at zero; inconsistent timestamps, and detections in one
 frame with different `t`, are rejected. For variable-rate footage, use the
 existing `live VIDEO --detections FILE --no-display` path, which reads the
