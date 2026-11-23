@@ -114,11 +114,13 @@ def test_linker_survives_three_frame_gaps():
     assert len(recovered) >= 11, f"only recovered {len(recovered)}/12 arcs"
 
 
-def _carried_ball(n_flights=8, fps=30.0, flight_s=0.6, carry_s=0.3, ay=2.0):
+def _carried_ball(n_flights=8, fps=30.0, flight_s=0.6, carry_s=0.3, ay=2.0, sink=False):
     """One ball as a detector that never loses it reports it: a flight from
     one hand to the other, then a carry in which the hand dips with the ball
-    before it throws it back. Returns the detections and each flight's
-    (throw, catch) times."""
+    before it throws it back. With ``sink`` the last carry is replaced by
+    the ball sinking with the hand at half the speed it landed at, until the
+    track ends. Returns the detections and each flight's (throw, catch)
+    times."""
     hand_y, sides, dip = 0.7, (0.35, 0.65), 0.05
     cycle = flight_s + carry_s
     dets = []
@@ -129,6 +131,9 @@ def _carried_ball(n_flights=8, fps=30.0, flight_s=0.6, carry_s=0.3, ay=2.0):
         if phase <= flight_s:
             x = x0 + (x1 - x0) * phase / flight_s
             y = hand_y - ay * flight_s * phase + ay * phase * phase
+        elif sink and k == n_flights - 1:
+            x = x1
+            y = hand_y + 0.5 * ay * flight_s * (phase - flight_s)
         else:
             x = x1
             y = hand_y + dip * np.sin(np.pi * (phase - flight_s) / carry_s)
@@ -151,6 +156,20 @@ def test_a_ball_tracked_through_its_carries_yields_one_arc_per_flight():
         assert arc.t_start == pytest.approx(t_throw, abs=0.05)
         assert arc.t_end == pytest.approx(t_catch, abs=0.1)
         assert arc.ay == pytest.approx(2.0, rel=0.05)
+
+
+def test_no_arc_takes_in_the_ball_sinking_with_the_hand_after_the_last_flight():
+    """After its last catch the ball sinks with the hand, slower than it
+    fell, and the track ends there. An arc fitted to that stretch alone has
+    its apex out of view and counts the catch a second time (measured on
+    ss423_id_017), and a flight arc that takes it in bends toward the hand
+    and ends after the catch. The last flight's arc must end at its catch,
+    with the flight's own gravity."""
+    dets, flights = _carried_ball(sink=True)
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights)
+    assert arcs[-1].t_end == pytest.approx(flights[-1][1], abs=1 / 30)
+    assert arcs[-1].ay == pytest.approx(2.0, rel=0.02)
 
 
 def test_false_positives_do_not_create_arcs():
