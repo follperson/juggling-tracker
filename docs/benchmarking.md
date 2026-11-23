@@ -218,6 +218,42 @@ Each row also has live mode's final `runs` and `drops`, and its `throws` next
 to `flights_found`, the number of flights the reference found, caught or not.
 A replay cuts new arcs every cycle, so live rows have no `explained` column.
 
+Scored with `--live` on 2026-11-23, live mode confirmed 1,445 catches over
+the 22 clips, with 1,317 flights matched, 64 duplicates and 44 unmatched
+catches. It told a new catch from a confirmed one by time alone, so when a
+later cycle re-cut an arc and moved its catch more than 0.15 s, the flight
+counted again (GitHub issue #20). Live mode now also takes a catch or throw
+as a confirmed one when its apex time, apex height and x agree with that
+flight's. The same root then gives 1,372 catches with 1,314 flights matched,
+2 duplicates and 37 unmatched catches. The trusted clips go from 3
+duplicates to 0 and still match 500 flights. Throws fall from 1,863 to
+1,519, against 1,576 flights found. Runs and drops do not change on any
+clip.
+
+Three matched flights are lost. The labelled tracks show that each was a
+second confirmation of a flight that live mode still counts once:
+
+- `ss90501_id_145` at 10.80 s and 26.33 s: each came from the arc of a ball 0
+  flight whose catch live mode had already confirmed, at 10.95 s and
+  26.17 s. Before the change the scorer paired one catch of each pair with
+  ball 1's high throw, which lands 1.1 s to 1.2 s after ball 0, within 0.08
+  of the frame width. Live mode never derived a catch from ball 1's own arc.
+- `ss423_id_017` at 29.72 s: it came from the same arc as a catch at
+  29.57 s. That first catch is 0.29 s before ball 2 lands, because the hand
+  line sat only 0.02 of the frame height below this low flight's apex, so it
+  scores as unmatched.
+
+Two duplicates remain. Neither is a re-cut of a confirmed flight:
+
+- `ss423_id_088` at 8.32 s and 8.51 s: both catches are ball 2's landing at
+  8.46 s. The second comes from an arc in which the extractor joined ball 0's
+  launch to ball 2's fall, with a false apex at 8.12 s. The duplicate was
+  there before the change.
+- `ss531_id_989` at 31.82 s and 32.07 s: the second arc follows ball 2 moving
+  in the hand while ball 1's low throw lands beside it. Its apex time agrees
+  with ball 1's flight, but its apex is lower by 0.55 of the rise, past the
+  0.3 bound.
+
 On 2026-11-22 the default root gave 1,485 flights and 1,041 catches over 22
 clips, with 1,016 flights matched. Six clips were trusted, with 501 flights
 and 344 matched. On `ss3_id_016` the labels show 177 flights, the extractor
