@@ -223,10 +223,14 @@ def test_rejected_command_leaves_no_out_directory(workspace, command, case):
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
-@pytest.mark.parametrize("target", ["locked", "locked/run"])
+@pytest.mark.parametrize(("mode", "target"), [
+    (0o555, "locked"), (0o555, "locked/run"),   # read-only
+    (0o600, "locked"), (0o600, "locked/run"),   # may not be searched
+    (0o000, "locked/run"),                      # no access at all
+])
 @pytest.mark.parametrize("command", ["analyze", "label", "live"])
-def test_out_in_a_read_only_directory_fails_before_detection(
-    workspace, monkeypatch, command, target,
+def test_out_in_a_directory_it_cannot_write_fails_before_detection(
+    workspace, monkeypatch, command, target, mode,
 ):
     from juggletrack.cli import app
 
@@ -236,19 +240,39 @@ def test_out_in_a_read_only_directory_fails_before_detection(
     )
     locked = tmp / "locked"
     locked.mkdir()
-    locked.chmod(0o555)
+    locked.chmod(mode)
     try:
         args = [command, str(video), "--model", "x.pt", "--out", str(tmp / target)]
         if command == "live":
             args.append("--no-display")
         result = runner.invoke(app, args)
-        assert list(locked.iterdir()) == []
     finally:
         locked.chmod(0o755)
     output = flat(result.output)
+    assert list(locked.iterdir()) == []
     assert result.exit_code == 2, output
     assert re.search(r"Invalid value for '?--out'?", output), output
     assert "not writable" in output
+
+
+@pytest.mark.parametrize("command", ["analyze", "label", "live"])
+def test_out_that_is_a_dangling_symlink_fails_before_detection(workspace, monkeypatch, command):
+    from juggletrack.cli import app
+
+    _, video, _, tmp = workspace
+    monkeypatch.setattr(
+        "juggletrack.detect.yolo.YOLODetector", lambda model_path, **kwargs: _NeverDetects(),
+    )
+    link = tmp / "dangling"
+    link.symlink_to(tmp / "nowhere")
+    args = [command, str(video), "--model", "x.pt", "--out", str(link)]
+    if command == "live":
+        args.append("--no-display")
+    result = runner.invoke(app, args)
+    output = flat(result.output)
+    assert result.exit_code == 2, output
+    assert re.search(r"Invalid value for '?--out'?", output), output
+    assert not (tmp / "nowhere").exists()
 
 
 @pytest.mark.parametrize(("command", "help_text"), [
