@@ -868,7 +868,8 @@ def test_duplicate_injection_inherits_clustering_via_analyze_detections():
     assert abs(dirty_final.catches_total - clean_final.catches_total) <= 1
 
 
-def _states_on_clock(r, fps, nudge):
+def _states_on_clock(r, fps, steps):
+    """Feed `r` with `now` on the i / fps grid, moved by steps[i] float steps."""
     by = defaultdict(list)
     for d in r.detections:
         by[d.frame_idx].append(d)
@@ -876,11 +877,23 @@ def _states_on_clock(r, fps, nudge):
     states = []
     for i in range(max(by) + 1):
         now = i / fps
-        if nudge:
-            now = math.nextafter(now, math.inf)
+        if steps[i] and now:
+            now = math.nextafter(now, steps[i] * math.inf)
         states.append(analyzer.feed(by.get(i, []), now))
     states.append(analyzer.finalize())
     return [s.model_dump(exclude={"t", "last_analysis_ms"}) for s in states]
+
+
+def _assert_same_states(r, fps, steps, what):
+    exact = _states_on_clock(r, fps, [0] * len(steps))
+    moved = _states_on_clock(r, fps, steps)
+    differing = [i for i, (a, b) in enumerate(zip(exact, moved)) if a != b]
+    final = ("runs_completed", "catches_total", "throws_total", "drops_total")
+    assert not differing, (
+        f"{len(differing)}/{len(exact)} frame states change with {what}; first at frame "
+        f"{differing[0]}; final exact {[exact[-1][k] for k in final]} "
+        f"vs moved {[moved[-1][k] for k in final]}"
+    )
 
 
 @pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
@@ -891,11 +904,21 @@ def test_state_does_not_depend_on_float_noise_in_clock(fps, seed):
     Moving `now` up by one float step must not change what the analyzer
     reports, or live counts depend on the container and decoder."""
     r = simulate_cascade(n_throws=60, fps=fps, noise=0.015, dropout=0.15, seed=seed)
-    exact = _states_on_clock(r, fps, nudge=False)
-    nudged = _states_on_clock(r, fps, nudge=True)
-    differing = [i for i, (a, b) in enumerate(zip(exact, nudged)) if a != b]
-    assert not differing, (
-        f"{len(differing)}/{len(exact)} frame states change with a 1-ulp clock nudge; "
-        f"first at frame {differing[0]}: final exact {exact[-1]['catches_total']} catches "
-        f"vs nudged {nudged[-1]['catches_total']}"
-    )
+    _assert_same_states(r, fps, [1] * (max(d.frame_idx for d in r.detections) + 1),
+                        "a 1-ulp clock nudge")
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+def test_run_close_does_not_depend_on_per_frame_clock_jitter():
+    """A decoder's timestamps carry rounding that varies frame to frame. At 24
+    fps the 0.5 s run-close debounce is a whole number of 3-frame analysis
+    cycles, so `now - pending_close_t` lands exactly on it and that rounding
+    decided whether a run closed one cycle early, here splitting one run in
+    two."""
+    import random
+
+    fps, seed = 24.0, 3
+    r = simulate_cascade(n_throws=60, fps=fps, noise=0.015, dropout=0.15, seed=seed)
+    rng = random.Random(seed)
+    steps = [rng.choice((-1, 0, 1)) for _ in range(max(d.frame_idx for d in r.detections) + 1)]
+    _assert_same_states(r, fps, steps, "per-frame 1-ulp clock jitter")
