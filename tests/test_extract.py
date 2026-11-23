@@ -219,7 +219,9 @@ def test_a_flight_whose_top_noise_hides_still_yields_an_arc():
     between the third and fifth flights, so the ball there is in the air,
     not in a hand, and that flight must come out as an arc like the others.
     Deleting such a stretch as a ball in a hand cut the catches matched on
-    simulated real-time 3-ball footage at this noise from 464 to 390 of 480."""
+    simulated real-time 3-ball footage at this noise from 464 to 390 of 480.
+    The carries between the other flights are still a ball in a hand, so no
+    arc bends into them and each keeps the flights' gravity."""
     dets, flights = _carried_ball()
     rng = np.random.default_rng(14)
     dets = [
@@ -231,6 +233,7 @@ def test_a_flight_whose_top_noise_hides_still_yields_an_arc():
     for (t_throw, t_catch), arc in zip(flights, arcs):
         assert arc.t_start == pytest.approx(t_throw, abs=0.1)
         assert arc.t_end == pytest.approx(t_catch, abs=0.1)
+        assert arc.ay == pytest.approx(2.0, rel=0.15)
 
 
 def test_no_arc_takes_in_the_ball_sinking_with_the_hand_after_the_last_flight():
