@@ -159,7 +159,7 @@ The first command scores every `<clip>/detections.jsonl` under
 `outputs/meschke-val/post-hardening-2b` that has labels in
 `data/raw/meschke/csv` and a video in `data/raw/meschke/videos`. Use `--root`,
 `--csv-dir` and `--video-dir` for other locations. The video supplies fps and
-frame size only. The script prints one row per clip and writes a JSON report
+frame size, and the report records its hash and frame count. The script prints one row per clip and writes a JSON report
 with the hashes of the detections, labels and video, the source hash, and the
 times of every missed flight and unmatched catch. It refuses a report path
 that would replace an input, and two runs on the same inputs write identical

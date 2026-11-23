@@ -6,7 +6,7 @@ reads flights off the labelled per-ball tracks with no parabola fit. For each
 ``<clip>/detections.jsonl`` under the root it runs ``analyze_detections``,
 matches the catches the pipeline counted to the reference flights one to one,
 and counts the flights that an extracted arc explains. The video supplies fps
-and frame size only.
+and frame size, and the report records its hash and frame count.
 
     uv run --no-sync python scripts/flight_score.py flight-score.json
     uv run --no-sync python scripts/flight_score.py controls.json \\
