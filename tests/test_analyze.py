@@ -8,7 +8,7 @@ from juggletrack.analyze import AnalyzeConfig, _events_from_arcs, analyze_detect
 from juggletrack.arcs.extract import extract_arcs
 from juggletrack.events.handline import estimate_hand_line
 from juggletrack.sim import CascadeParams, simulate_cascade
-from juggletrack.types import Detection, SessionResult
+from juggletrack.types import Arc, Detection, SessionResult
 
 
 def test_end_to_end_clean_run():
@@ -89,6 +89,38 @@ def test_video_end_run():
     truncated = [d for d in r.detections if d.t <= cutoff]
     sr = analyze_detections(truncated)
     assert sr.runs and sr.runs[-1].end_reason == "video_end"
+
+
+def _slow_run(last_seen: float) -> list[Arc]:
+    """Four slow-motion flights of 2.5 s on a hand line at y 0.7, thrown
+    1.2 s apart from alternating hands. Each is seen from its throw to its
+    catch, except the last, which is seen for ``last_seen`` seconds."""
+    arcs = []
+    for k in range(4):
+        t0 = 10.0 + 1.2 * k
+        x0, vx = (0.35, 0.12) if k % 2 == 0 else (0.65, -0.12)
+        seen = last_seen if k == 3 else 2.5
+        arcs.append(Arc(
+            id=k, t_start=t0, t_end=t0 + seen, ay=0.15, by=-0.375, cy=0.7,
+            bx=vx, cx=x0, n_points=int(seen * 30), rmse=0.005,
+        ))
+    return arcs
+
+
+def test_video_end_margin_follows_the_catch_witness_margin():
+    """A run's end_t is the falling hand-line crossing of its last flight,
+    the same time the catch on that flight must be witnessed at. When the
+    witness margin, which grows with the flight, counts that catch, the end
+    of the run was seen: the run stops, it does not hit the video end. When
+    the crossing lies beyond the margin, the catch is not counted and the
+    run hits the video end."""
+    caught = _slow_run(last_seen=2.2)  # crossing 0.3 s after the last detection
+    sr = _events_from_arcs(caught, caught[-1].t_end, AnalyzeConfig(), hand_line_override=0.7)
+    assert [(run.catches, run.end_reason) for run in sr.runs] == [(4, "stop")]
+
+    cut = _slow_run(last_seen=1.9)  # crossing 0.6 s after the last detection
+    sr = _events_from_arcs(cut, cut[-1].t_end, AnalyzeConfig(), hand_line_override=0.7)
+    assert [(run.catches, run.end_reason) for run in sr.runs] == [(3, "video_end")]
 
 
 def test_shuffle_invariance_end_to_end():
