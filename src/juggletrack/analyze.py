@@ -10,8 +10,8 @@ from juggletrack.arcs.extract import (
     extract_arcs,
 )
 from juggletrack.detect.cluster import cluster_detections
-from juggletrack.events import CATCH_EXTRAPOLATION_MARGIN
-from juggletrack.events.catches import derive_events
+from juggletrack.events import CATCH_EXTRAPOLATION_MARGIN, catch_witness_margin
+from juggletrack.events.catches import derive_events, hand_line_crossings
 from juggletrack.events.drops import detect_drops
 from juggletrack.events.handline import estimate_hand_line
 from juggletrack.events.runs import segment_runs
@@ -50,8 +50,9 @@ class AnalyzeConfig(BaseModel):
     static_cell: float = 0.03
     static_max_span_s: float = 1.5
     # Seconds of overshoot tolerance before an unconfirmed "stop" is
-    # reclassified "video_end". Matches events.catches's
-    # CATCH_EXTRAPOLATION_MARGIN so the two checks agree on what counts as
+    # reclassified "video_end". It is the floor of the catch witness margin
+    # (events.catch_witness_margin) and grows with the flight that ends the
+    # run in the same way, so the two checks agree on what counts as
     # "confirmed by real data": a run's end_t comes from the same falling
     # hand-line crossing a catch would need to be witnessed at.
     video_end_margin: float = CATCH_EXTRAPOLATION_MARGIN
@@ -81,6 +82,17 @@ class AnalyzeConfig(BaseModel):
                 f"arc_dedup_traj_tol must be >= 0 (got {self.arc_dedup_traj_tol})"
             )
         return self
+
+
+def _ending_flight_s(run: Run, by_id: dict[int, Arc], hand_line: float) -> float:
+    """Hand line to hand line time of the arc whose falling crossing is the
+    run's end_t, or 0.0 when no arc's is (segment_runs then took an arc's
+    t_end)."""
+    for arc_id in run.arc_ids:
+        crossings = hand_line_crossings(by_id[arc_id], hand_line) if arc_id in by_id else None
+        if crossings is not None and crossings[1] == run.end_t:
+            return crossings[1] - crossings[0]
+    return 0.0
 
 
 def _events_from_arcs(
@@ -146,7 +158,8 @@ def _events_from_arcs(
         # reaches the hand line, end_t is extrapolated from the fitted
         # parabola well past t_last — that overshoot (not a small gap toward
         # t_last) is the signal that the ending is unconfirmed.
-        if run.end_reason == "stop" and run.end_t - dets_t_last > cfg.video_end_margin:
+        margin = catch_witness_margin(_ending_flight_s(run, by_id, hand_line), cfg.video_end_margin)
+        if run.end_reason == "stop" and run.end_t - dets_t_last > margin:
             run = run.model_copy(update={"end_reason": "video_end"})
         final.append(run)
 

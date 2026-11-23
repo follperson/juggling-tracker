@@ -308,8 +308,10 @@ def test_events_from_arcs_hand_line_override():
     assert same.hand_line_y == natural
     assert [run.catches for run in same.runs] == [run.catches for run in default.runs]
 
-    shifted = _events_from_arcs(arcs, t_last, AnalyzeConfig(), hand_line_override=natural + 0.2)
-    assert shifted.hand_line_y == pytest.approx(natural + 0.2)
+    # Above the hands: every arc then ends below the line, which no witness
+    # margin can excuse.
+    shifted = _events_from_arcs(arcs, t_last, AnalyzeConfig(), hand_line_override=natural - 0.2)
+    assert shifted.hand_line_y == pytest.approx(natural - 0.2)
     assert [run.catches for run in shifted.runs] != [run.catches for run in default.runs], (
         "a meaningfully different override must change the derivation"
     )
