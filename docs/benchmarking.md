@@ -160,9 +160,10 @@ The first command scores every `<clip>/detections.jsonl` under
 `data/raw/meschke/csv` and a video in `data/raw/meschke/videos`. Use `--root`,
 `--csv-dir` and `--video-dir` for other locations. The video supplies fps and
 frame size only. The script prints one row per clip and writes a JSON report
-with the input hashes, the source hash, and the times of every missed flight
-and unmatched catch. It refuses a report path that would replace an input, and
-two runs on the same inputs write identical bytes.
+with the hashes of the detections, labels and video, the source hash, and the
+times of every missed flight and unmatched catch. It refuses a report path
+that would replace an input, and two runs on the same inputs write identical
+bytes.
 
 Each row has these columns.
 
@@ -179,6 +180,10 @@ Each row has these columns.
   labels do not show whole. These catches count neither for nor against.
 - `missed`: the flights with no catch.
 - `count_error`: `matched + duplicates + unmatched - flights`.
+- `offset_s`: the median of catch time minus landing time over the matched
+  pairs, in seconds. It is positive when the pipeline counts catches after the
+  reference landings. A shift of the catch clock moves it long before it turns
+  matched catches into unmatched ones. The totals leave it blank.
 - `explained`: the flights with at least one extracted arc that is in flight
   at the apex time and passes within 0.1 of the pattern height of the apex.
   This column judges the extractor alone. `repeated` counts the flights with
@@ -211,10 +216,17 @@ Limits:
 - The scorer sees only the time and x position of a catch. A catch that is
   late by about one landing interval of the same hand looks like a catch of
   the next flight. A 2 s shift is that close on `ss3_id_016` and on the `ss42`
-  clips, so the shift control proves nothing there.
+  clips, so the shift control leaves most catches matched there. `offset_s`
+  still shows it: on `ss3_id_016` it moves from +0.234 s to -0.045 s.
 - The pipeline's hand line and the reference hand level are different heights,
   and the 0.2 time bound absorbs the difference. A change that moves catch
-  times by less than that bound is invisible to this check.
+  times by less than that bound leaves the counts alone and shows only in
+  `offset_s`.
+- A one-frame label glitch can split a flight in two. On the flagged
+  `ss423_id_088`, ball 2 is labelled at another ball's position for one frame
+  at 1.40 s, and the reference counts one extra flight. A three-sample median
+  over the heights removes such glitches, but it also removes real 1-zips on
+  the `ss441` clips, so the reference does not use one.
 - The saved detections must be on the `frame_idx / fps` clock that the labels
   use. The script stops when they are not.
 - The check scores offline analysis only. It needs per-ball labels, which only
