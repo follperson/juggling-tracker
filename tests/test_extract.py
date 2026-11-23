@@ -196,6 +196,27 @@ def test_a_ball_that_falls_on_after_the_last_flight_keeps_its_fall_as_an_arc():
     assert fall.ay == pytest.approx(2.0, rel=0.02)
 
 
+def test_a_point_the_linker_gives_to_another_ball_stays_with_its_own_flight():
+    """Ball B lands and leaves the view. Ball A is thrown 0.1 s later near
+    where B's track was heading, so the linker hands A's first detection to
+    B's fragment, where it follows B's last flight like the ball in a hand.
+    A is missed once more, and the rest of its track is a fragment of its
+    own. That first detection lies on A's flight and must stay on A's arc
+    (measured on plan2-validation/af2 at 22.997 s, where losing it shortened
+    the arc until dedup_parallel_arcs took it for a duplicate)."""
+    ball_b, _ = _carried_ball(n_flights=3)
+    ball_b = [d for d in ball_b if d.t <= 2.4 + 1e-9]
+    ball_a, flights_a = _carried_ball(n_flights=3, hand_y=0.76, sides=(0.68, 0.38), t0=2.5)
+    ball_a = [d for d in ball_a if abs(d.t - (2.5 + 1 / 30)) > 1e-9]
+    pts = _sorted_points(ball_a + ball_b)
+    owner = {i: k for k, frag in enumerate(_link_fragments(pts, 0.18, 0.08)) for i in frag}
+    at = {round(float(t), 4): i for i, t in enumerate(pts[:, 0])}
+    assert owner[at[2.5]] == owner[at[2.4]] != owner[at[2.5667]]
+    arcs = extract_arcs(ball_a + ball_b)
+    first_a = min((a for a in arcs if a.t_start > 2.45), key=lambda a: a.t_start)
+    assert first_a.t_start == pytest.approx(flights_a[0][0], abs=1e-6)
+
+
 def test_false_positives_do_not_create_arcs():
     r = simulate_cascade(n_throws=12, fps=30.0, false_positives_per_frame=0.5, seed=3)
     arcs = extract_arcs(r.detections)
