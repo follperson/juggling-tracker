@@ -586,20 +586,95 @@ def test_analyze_warns_when_the_video_ends_early(workspace, monkeypatch):
     assert cut.stdout.splitlines()[-1].startswith("1 run(s)")
 
 
-def test_live_missing_file_source_fails_before_the_detector_is_built(workspace, monkeypatch):
+@pytest.mark.parametrize("replay", [False, True])
+def test_live_missing_file_source_is_a_usage_error(workspace, monkeypatch, replay):
     from juggletrack.cli import app
 
-    def unexpected_model_load(*args, **kwargs):
-        raise AssertionError("a missing source must fail before the detector is built")
-
-    monkeypatch.setattr("juggletrack.detect.yolo.YOLODetector", unexpected_model_load)
-    _, _, _, tmp = workspace
+    sim, _, dets, tmp = workspace
+    _replay_as_yolo(monkeypatch, sim.detections)
     missing = tmp / "nope.mp4"
-    result = runner.invoke(app, ["live", str(missing), "--model", "x.pt", "--no-display"])
+    source = ["--detections", str(dets)] if replay else ["--model", "x.pt"]
+    result = runner.invoke(app, ["live", str(missing), *source, "--no-display"],
+                           env={"COLUMNS": "1000"})
     output = flat(result.output)
     assert result.exit_code == 2, output
     assert re.search(r"Invalid value for '?source'?", output, re.IGNORECASE), output
-    assert "nope.mp4" in output and "does not exist" in output
+    assert str(missing) in output and "does not exist" in output
+
+
+def _fake_capture(monkeypatch, *, opens=True, frames=3):
+    """Replace cv2.VideoCapture in the live loop; return the sources it was asked to open."""
+    import cv2
+
+    import juggletrack.pipeline.live as live_module
+
+    sources = []
+
+    class Capture:
+        def __init__(self, source):
+            sources.append(source)
+            self.left = frames
+
+        def isOpened(self):
+            return opens
+
+        def get(self, prop):
+            return 30.0 if prop == cv2.CAP_PROP_FPS else 0.0
+
+        def read(self):
+            if not self.left:
+                return False, None
+            self.left -= 1
+            return True, np.zeros((48, 64, 3), np.uint8)
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(live_module.cv2, "VideoCapture", Capture)
+    return sources
+
+
+@pytest.mark.parametrize("source", ["http://127.0.0.1:8765/clip.mp4", "seq/f_%03d.png"])
+def test_live_hands_a_stream_or_image_sequence_to_the_capture(monkeypatch, source):
+    from juggletrack.cli import app
+
+    _replay_as_yolo(monkeypatch, [])
+    opened = _fake_capture(monkeypatch)
+    result = runner.invoke(app, ["live", source, "--model", "x.pt", "--no-display"])
+    assert result.exit_code == 0, result.output
+    assert opened == [source]
+    assert "0 runs, 0 catches, 0 drops" in result.output
+
+
+@pytest.mark.parametrize("source", ["http://127.0.0.1:8765/clip.mp4", "seq/f_%03d.png"])
+def test_live_stream_that_will_not_open_is_a_usage_error(monkeypatch, source):
+    from juggletrack.cli import app
+
+    _replay_as_yolo(monkeypatch, [])
+    _fake_capture(monkeypatch, opens=False)
+    result = runner.invoke(app, ["live", source, "--model", "x.pt", "--no-display"],
+                           env={"COLUMNS": "1000"})
+    output = flat(result.output)
+    assert result.exit_code == 2, output
+    assert re.search(r"Invalid value for '?source'?", output, re.IGNORECASE), output
+    assert f"could not open source {source}" in output
+    assert "does not exist" not in output and "camera" not in output
+
+
+def test_live_detector_error_on_an_open_camera_is_not_blamed_on_the_camera(monkeypatch):
+    from juggletrack.cli import app
+
+    class Boom:
+        def detect(self, frame, frame_idx, t):
+            raise ValueError("expected 3 channels but got 1")
+
+    monkeypatch.setattr("juggletrack.detect.yolo.YOLODetector", lambda model_path, **kw: Boom())
+    _fake_capture(monkeypatch)
+    result = runner.invoke(app, ["live", "0", "--model", "x.pt", "--no-display"])
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, ValueError)
+    assert str(result.exception) == "expected 3 channels but got 1"
+    assert "camera" not in result.output
 
 
 def test_live_camera_that_will_not_open_is_a_usage_error(workspace, monkeypatch):
