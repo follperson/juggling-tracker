@@ -96,8 +96,10 @@ def _yolo_detector(model, conf, imgsz, device):
 
 def _check_out_dir(out: Path) -> Path:
     """Fail unless --out is, or could be created as, a writable directory. Create nothing."""
-    existing = next(p for p in (out, *out.parents) if p.exists())
-    if not existing.is_dir():
+    # lexists and isdir never raise: a dangling link is there as far as mkdir
+    # is concerned, and a parent that may not be searched is not writable.
+    existing = next(p for p in (out, *out.parents) if os.path.lexists(p))
+    if not os.path.isdir(existing):
         raise typer.BadParameter(f"cannot write {out}: {existing} is not a directory",
                                  param_hint="--out")
     if not os.access(existing, os.W_OK | os.X_OK):
