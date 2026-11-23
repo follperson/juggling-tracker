@@ -35,6 +35,19 @@ from juggletrack.types import Arc, CatchEvent, Detection, ThrowEvent
 # liveness horizon is not recent, and a run is not closed at exactly 0.5 s.
 _CLOCK_EPS_S = 1e-6
 
+# Two derivations of a throw or catch are one flight when their apex times
+# agree to this share of the shorter half flight (apex to hand line), their
+# apex heights to this share of the smaller rise above the hand line, and
+# their x to this share of the frame width. Measured on live replays of 22
+# Meschke clips and two real-time sessions: a catch whose time moved past
+# event_match_tol kept its apex within 0.11 of a half flight, and a
+# different catch within 0.1 of the frame width had its apex 0.43 or more
+# away. Height tells apart throws whose apexes coincide, such as a 5 and a 3
+# thrown from hands 0.05 of the frame apart in ss531_id_005.
+_APEX_MATCH = 0.25
+_HEIGHT_MATCH = 0.3
+_X_MATCH = 0.1
+
 
 class _Event(NamedTuple):
     """A confirmable event. A throw or catch also carries its arc's apex time
@@ -463,16 +476,28 @@ class RealtimeAnalyzer:
         # this ordering bug on the field replays this branch re-measures
         # (ss3_id_016 catches 209 -> 207 across this wave, not up) --
         # closely-spaced real catches/throws sit well clear of
-        # event_match_tol on every fixture measured. The residual
-        # cross-cycle over-count from overlapping arc candidates (§9) is a
-        # separate, out-of-scope mechanism this snapshot fix does not reach.
-        prior = [k.t for k in known]
+        # event_match_tol on every fixture measured. A later cycle that
+        # re-cuts a confirmed flight can move its time past event_match_tol;
+        # _same_flight matches those by the flight itself (issue #20).
+        prior = list(known)
         for event in sorted(events):
             if event.t > horizon + _CLOCK_EPS_S:
                 continue
-            if any(abs(event.t - k) <= self.cfg.event_match_tol for k in prior):
+            if any(self._same_flight(k, event) for k in prior):
                 continue
             known.append(event)
+
+    def _same_flight(self, a: _Event, b: _Event) -> bool:
+        if abs(a.t - b.t) <= self.cfg.event_match_tol:
+            return True
+        if a.apex_t is None or b.apex_t is None:
+            return False
+        half_flight = min(abs(a.t - a.apex_t), abs(b.t - b.apex_t))
+        return (
+            abs(a.apex_t - b.apex_t) <= _APEX_MATCH * half_flight
+            and abs(a.apex_y - b.apex_y) <= _HEIGHT_MATCH * min(a.rise, b.rise)
+            and abs(a.x - b.x) <= _X_MATCH
+        )
 
     def confirmed_catches(self) -> list[tuple[float, float]]:
         """Time and x of every catch confirmed so far, in the order confirmed."""
