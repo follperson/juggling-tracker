@@ -147,42 +147,70 @@ def test_floor_drop_followed_by_two_caught_throws_ends_the_run_at_the_drop(drop_
     assert sr.runs[0].end_t == pytest.approx(missed_t, abs=0.1)
 
 
+HAND_LINE, PERIOD, FLIGHT_S = 0.65, 0.45, 1.1
+
+
+def flight(i: int, overshoot: float = 0.0) -> Arc:
+    """Thrown at i * PERIOD from the hand line, back at it FLIGHT_S later;
+    tracked for `overshoot` seconds past that."""
+    t0 = i * PERIOD
+    return Arc(id=i, t_start=t0, t_end=t0 + FLIGHT_S + overshoot, ay=1.0, by=-FLIGHT_S,
+               cy=HAND_LINE, bx=0.0, cx=0.5, n_points=10, rmse=0.01)
+
+
+def floor_bounce(id: int, fallen: Arc) -> Arc:
+    """The bounce of the ball whose arc `fallen` ends on its way to the floor."""
+    t = fallen.t_end
+    return Arc(id=id, t_start=t + 0.05, t_end=t + 0.35, ay=1.0, by=-0.2, cy=0.9,
+               bx=0.0, cx=0.5, n_points=6, rmse=0.01)
+
+
 def test_bounce_drop_after_a_recovered_miss_is_reported_and_ends_the_run():
     """A low catch the juggler recovers from, then later a ball that falls to
     the floor and bounces while the pattern goes on. The bounce drop is
     reported and ends the run.
 
-    This is the one place where drop output differs from before runs ended
-    at their first confirmed drop: segment_runs used to cut the run at the
-    recovered miss, and detect_drops looks for a bounce only up to the run's
-    end_t, so this drop was never reported. No saved session shows it.
+    This test and the next show the one way drop output differs from before
+    runs ended at their first confirmed drop. segment_runs used to cut a run
+    at its first floor-bound miss, recovered or not, and detect_drops looks
+    for a bounce only up to 1.6 s past the run's end_t, so a later bounce
+    drop in the same run was never reported. No saved session and no
+    simulated stream in the fuzz family shows it.
     """
-    hand_line, period, flight_s = 0.65, 0.45, 1.1
-
-    def flight(i: int, overshoot: float = 0.0) -> Arc:
-        """Thrown at i * period from the hand line, back at it flight_s later;
-        tracked for `overshoot` seconds past that."""
-        t0 = i * period
-        return Arc(id=i, t_start=t0, t_end=t0 + flight_s + overshoot, ay=1.0, by=-flight_s,
-                   cy=hand_line, bx=0.0, cx=0.5, n_points=10, rmse=0.01)
-
     arcs = [flight(i) for i in range(16)]
     arcs[2] = flight(2, overshoot=0.2)  # low catch; the next throw is already up
-    arcs[10] = flight(10, overshoot=0.25)  # falls toward the floor...
-    floor_t = arcs[10].t_end
-    arcs.append(Arc(id=100, t_start=floor_t + 0.05, t_end=floor_t + 0.35, ay=1.0, by=-0.2,
-                    cy=0.9, bx=0.0, cx=0.5, n_points=6, rmse=0.01))  # ...and bounces
+    arcs[10] = flight(10, overshoot=0.25)
+    arcs.append(floor_bounce(100, arcs[10]))
 
-    throws, catches = derive_events(arcs, hand_line)
+    throws, catches = derive_events(arcs, HAND_LINE)
     assert {e.arc_id for e in throws} - {c.arc_id for c in catches} == {2, 10}
-    runs = segment_runs(arcs, throws, catches, hand_line)
-    drops, runs = detect_drops(arcs, runs, hand_line)
+    runs = segment_runs(arcs, throws, catches, HAND_LINE)
+    drops, runs = detect_drops(arcs, runs, HAND_LINE)
 
     assert [d.arc_id for d in drops] == [10]
     assert "bounce" in drops[0].signals
     assert len(runs) == 1
     assert runs[0].end_reason == "drop"
-    assert runs[0].end_t == pytest.approx(10 * period + flight_s)
+    assert runs[0].end_t == pytest.approx(10 * PERIOD + FLIGHT_S)
+
+
+def test_run_with_two_drops_ends_at_the_first():
+    """Two balls fall to the floor and bounce in one run while the pattern
+    goes on. Both drops are reported, and the run ends at the first one.
+    """
+    arcs = [flight(i) for i in range(16)]
+    arcs[4] = flight(4, overshoot=0.25)
+    arcs[10] = flight(10, overshoot=0.25)
+    arcs += [floor_bounce(100, arcs[4]), floor_bounce(101, arcs[10])]
+
+    throws, catches = derive_events(arcs, HAND_LINE)
+    runs = segment_runs(arcs, throws, catches, HAND_LINE)
+    drops, runs = detect_drops(arcs, runs, HAND_LINE)
+
+    assert [d.arc_id for d in drops] == [4, 10]
+    assert len(runs) == 1
+    assert runs[0].end_reason == "drop"
+    assert runs[0].end_t == pytest.approx(4 * PERIOD + FLIGHT_S)
 
 
 @pytest.mark.parametrize(
