@@ -142,6 +142,27 @@ def test_video_end_margin_follows_the_catch_witness_margin():
     assert [(run.catches, run.end_reason) for run in sr.runs] == [(3, "video_end")]
 
 
+def test_video_end_margin_follows_the_flight_that_ends_the_run():
+    """The video-end check reads the margin of the flight whose crossing is
+    the run's end_t, not of any other flight in the run. A real-time run
+    opens with a high throw of 1.5 s, whose margin is 0.225 s, and goes on
+    with throws of 0.6 s every 0.3 s. Its last flight is seen until 0.2 s
+    before its crossing: more than that flight's margin of 0.15 s, so its
+    catch is not counted and the run hits the video end."""
+    arcs = []
+    for k in range(10):
+        t0 = 10.0 + 0.3 * k
+        flight_s = 1.5 if k == 0 else 0.6
+        seen = flight_s - 0.2 if k == 9 else flight_s
+        x0, vx = (0.35, 0.3 / flight_s) if k % 2 == 0 else (0.65, -0.3 / flight_s)
+        arcs.append(Arc(
+            id=k, t_start=t0, t_end=t0 + seen, ay=1.0, by=-flight_s, cy=0.7,
+            bx=vx, cx=x0, n_points=round(seen * 30), rmse=0.005,
+        ))
+    sr = _events_from_arcs(arcs, arcs[-1].t_end, AnalyzeConfig(), hand_line_override=0.7)
+    assert [(run.catches, run.end_reason) for run in sr.runs] == [(9, "video_end")]
+
+
 def test_shuffle_invariance_end_to_end():
     """Spec property test: catch counts invariant under detection reordering."""
     r = simulate_cascade(n_throws=12, fps=30.0, noise=0.002, seed=4)

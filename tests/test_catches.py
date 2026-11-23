@@ -104,6 +104,21 @@ def test_slow_motion_catch_counts_when_the_arc_ends_above_the_hand_line():
     assert catches == []
 
 
+def test_real_time_catch_counts_when_seen_until_0_15_s_before_the_hand_line():
+    """The witness margin never falls below 0.15 s. A real-time flight of
+    0.6 s seen until 0.12 s before it reaches the hand line is witnessed,
+    although 0.12 s is more than 0.15 of the flight."""
+    hand_line = 0.7
+    arc = Arc(
+        id=1, t_start=10.0, t_end=10.48,
+        ay=2.0, by=-1.2, cy=hand_line, bx=0.4, cx=0.4,
+        n_points=15, rmse=0.005,
+    )
+    throws, catches = derive_events([arc], hand_line)
+    assert len(throws) == 1
+    assert [c.t for c in catches] == [pytest.approx(10.6)]
+
+
 def test_truncated_rising_arc_yields_throw():
     """The apex guard must only judge a WITNESSED apex, not an extrapolated one.
 
