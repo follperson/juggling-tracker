@@ -200,7 +200,9 @@ def main() -> int:
         row = {
             "detections_sha256": _sha256(saved[clip]),
             "labels_sha256": _sha256(labels[clip]),
+            "video_sha256": _sha256(videos[clip]),
             "fps": info.fps, "width": info.width, "height": info.height,
+            "frame_count": info.frame_count,
             "labelled_s": list(reference.span),
             "trusted": reference.trusted,
             "sweep": [list(pair) for pair in reference.sweep],
