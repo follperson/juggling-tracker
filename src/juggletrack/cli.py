@@ -94,15 +94,15 @@ def _yolo_detector(model, conf, imgsz, device):
     return YOLODetector(model_path=_resolve_model(model), conf=conf, imgsz=imgsz, device=device)
 
 
-def _make_out_dir(out: Path) -> Path:
-    try:
-        out.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise typer.BadParameter(
-            f"cannot use {out} as an output directory: {exc.strerror}", param_hint="--out"
-        ) from exc
-    if not os.access(out, os.W_OK):
-        raise typer.BadParameter(f"output directory {out} is not writable", param_hint="--out")
+def _check_out_dir(out: Path) -> Path:
+    """Fail unless --out is, or could be created as, a writable directory. Create nothing."""
+    existing = next(p for p in (out, *out.parents) if p.exists())
+    if not existing.is_dir():
+        raise typer.BadParameter(f"cannot write {out}: {existing} is not a directory",
+                                 param_hint="--out")
+    if not os.access(existing, os.W_OK | os.X_OK):
+        raise typer.BadParameter(f"cannot write {out}: {existing} is not writable",
+                                 param_hint="--out")
     return out
 
 
@@ -150,7 +150,7 @@ def analyze(
         config = AnalyzeConfig(link_max_dist=link_max_dist)
     except ValidationError as exc:
         raise typer.BadParameter(exc.errors()[0]["msg"], param_hint="--link-max-dist") from exc
-    out_dir = _make_out_dir(out or Path("outputs") / video.stem)
+    out_dir = _check_out_dir(out or Path("outputs") / video.stem)
     if detections is not None:
         source = _load_replay(detections, video)
     else:
@@ -309,7 +309,7 @@ def label(
         select_autolabels,
     )
 
-    out_dir = _make_out_dir(out or Path("outputs") / "labels" / video.stem)
+    out_dir = _check_out_dir(out or Path("outputs") / "labels" / video.stem)
     if detector == DetectorBackend.motion:
         if stride > 1:
             typer.echo(
@@ -528,7 +528,7 @@ def live(
     if detections is not None and not Path(src).exists():
         raise typer.BadParameter(f"file {src} does not exist", param_hint="source")
     if out is not None:
-        _make_out_dir(out)
+        _check_out_dir(out)
     if detections is not None:
         from juggletrack.detect.fake import FakeDetector
 
@@ -554,6 +554,7 @@ def live(
             message = f"could not open source {src}"
         raise typer.BadParameter(message, param_hint="source") from exc
     if out is not None:
+        out.mkdir(parents=True, exist_ok=True)
         (out / "live_session.json").write_text(final.model_dump_json(indent=2))
     typer.echo(
         f"{final.runs_completed} runs, {final.catches_total} catches, "
