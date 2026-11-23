@@ -922,3 +922,15 @@ def test_run_close_does_not_depend_on_per_frame_clock_jitter():
     rng = random.Random(seed)
     steps = [rng.choice((-1, 0, 1)) for _ in range(max(d.frame_idx for d in r.detections) + 1)]
     _assert_same_states(r, fps, steps, "per-frame 1-ulp clock jitter")
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+def test_run_liveness_does_not_depend_on_float_noise_in_clock():
+    """At 24 fps the 1.5 s liveness horizon is a whole number of frames, so an
+    arc whose last detection sits exactly on `now - freeze_s` was counted as
+    recent activity or not depending on the last bit of `now`. Moving `now`
+    down by one float step kept a run open one analysis cycle longer."""
+    fps, seed = 24.0, 2
+    r = simulate_cascade(n_throws=60, fps=fps, noise=0.015, dropout=0.15, seed=seed)
+    _assert_same_states(r, fps, [-1] * (max(d.frame_idx for d in r.detections) + 1),
+                        "a 1-ulp clock nudge down")
