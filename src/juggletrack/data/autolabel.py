@@ -132,8 +132,17 @@ def export_video_labels(
     with VideoReader(video_path) as reader:
         w_px, h_px = reader.info.width, reader.info.height
         for idx, _t, frame in reader.frames():
-            frame_labels = by_frame.get(idx)
-            if not frame_labels:
+            boxes = []
+            for lb in by_frame.get(idx, []):
+                bw, bh = lb.w * w_px, lb.h * h_px
+                x_min = max(lb.x * w_px - bw / 2, 0.0)
+                y_min = max(lb.y * h_px - bh / 2, 0.0)
+                bw = min(lb.x * w_px + bw / 2, w_px) - x_min
+                bh = min(lb.y * h_px + bh / 2, h_px) - y_min
+                if bw <= 0 or bh <= 0:
+                    continue
+                boxes.append((x_min, y_min, bw, bh))
+            if not boxes:
                 continue
             file_name = f"frame_{idx:06d}.jpg"
             cv2.imwrite(
@@ -143,12 +152,7 @@ def export_video_labels(
             image_id = len(images) + 1
             images.append({"id": image_id, "file_name": file_name,
                            "width": w_px, "height": h_px})
-            for lb in frame_labels:
-                bw, bh = lb.w * w_px, lb.h * h_px
-                x_min = max(lb.x * w_px - bw / 2, 0.0)
-                y_min = max(lb.y * h_px - bh / 2, 0.0)
-                bw = min(lb.x * w_px + bw / 2, w_px) - x_min
-                bh = min(lb.y * h_px + bh / 2, h_px) - y_min
+            for x_min, y_min, bw, bh in boxes:
                 annotations.append({
                     "id": len(annotations) + 1, "image_id": image_id,
                     "category_id": BALL_CATEGORY["id"],
