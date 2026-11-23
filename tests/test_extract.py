@@ -114,14 +114,17 @@ def test_linker_survives_three_frame_gaps():
     assert len(recovered) >= 11, f"only recovered {len(recovered)}/12 arcs"
 
 
-def _carried_ball(n_flights=8, fps=30.0, flight_s=0.6, carry_s=0.3, ay=2.0, sink=False):
+def _carried_ball(n_flights=8, fps=30.0, flight_s=0.6, carry_s=0.3, ay=2.0, sink=False,
+                  fall=False, hand_y=0.7, sides=(0.35, 0.65), t0=0.0):
     """One ball as a detector that never loses it reports it: a flight from
     one hand to the other, then a carry in which the hand dips with the ball
     before it throws it back. With ``sink`` the last carry is replaced by
     the ball sinking with the hand at half the speed it landed at, until the
-    track ends. Returns the detections and each flight's (throw, catch)
-    times."""
-    hand_y, sides, dip = 0.7, (0.35, 0.65), 0.05
+    track ends. With ``fall`` the hand touches the ball instead: it keeps
+    falling under gravity at a quarter of its landing speed, as a dropped ball
+    does, until the track ends. The track starts at ``t0``. Returns the
+    detections and each flight's (throw, catch) times."""
+    dip = 0.05
     cycle = flight_s + carry_s
     dets = []
     for f in range(round(n_flights * cycle * fps)):
@@ -134,11 +137,15 @@ def _carried_ball(n_flights=8, fps=30.0, flight_s=0.6, carry_s=0.3, ay=2.0, sink
         elif sink and k == n_flights - 1:
             x = x1
             y = hand_y + 0.5 * ay * flight_s * (phase - flight_s)
+        elif fall and k == n_flights - 1:
+            p = phase - flight_s
+            x = x1
+            y = hand_y + 0.25 * ay * flight_s * p + ay * p * p
         else:
             x = x1
             y = hand_y + dip * np.sin(np.pi * (phase - flight_s) / carry_s)
-        dets.append(Detection(frame_idx=f, t=t, x=x, y=y))
-    return dets, [(k * cycle, k * cycle + flight_s) for k in range(n_flights)]
+        dets.append(Detection(frame_idx=f + round(t0 * fps), t=t0 + t, x=x, y=y))
+    return dets, [(t0 + k * cycle, t0 + k * cycle + flight_s) for k in range(n_flights)]
 
 
 def test_a_ball_tracked_through_its_carries_yields_one_arc_per_flight():
@@ -170,6 +177,23 @@ def test_no_arc_takes_in_the_ball_sinking_with_the_hand_after_the_last_flight():
     assert len(arcs) == len(flights)
     assert arcs[-1].t_end == pytest.approx(flights[-1][1], abs=1 / 30)
     assert arcs[-1].ay == pytest.approx(2.0, rel=0.02)
+
+
+def test_a_ball_that_falls_on_after_the_last_flight_keeps_its_fall_as_an_arc():
+    """A hand that touches the ball without catching it leaves it falling to
+    the floor. That fall is no carry: it moves on a parabola with the
+    flights' gravity, and the drop detector needs its arc to see the ball end
+    below the hands (measured on flywheel-t2/analyze-ftv2c/af1 at 35.9 s)."""
+    dets, flights = _carried_ball(fall=True)
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights) + 1
+    landing, end = flights[-1][1], max(d.t for d in dets)
+    flight, fall = arcs[-2], arcs[-1]
+    assert flight.t_end == pytest.approx(landing, abs=1 / 30)
+    assert flight.ay == pytest.approx(2.0, rel=0.02)
+    assert landing - 1e-6 <= fall.t_start <= landing + 1 / 30 + 1e-6
+    assert fall.t_end == pytest.approx(end, abs=1e-6)
+    assert fall.ay == pytest.approx(2.0, rel=0.02)
 
 
 def test_false_positives_do_not_create_arcs():
