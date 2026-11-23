@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -76,6 +77,9 @@ def test_scores_a_clean_cascade_and_repeats_byte_for_byte(tmp_path):
     assert 0 < clip["offset_s"] < 0.1
     assert f"{clip['offset_s']:+.3f}" in procs[0].stdout
     assert (clip["fps"], clip["width"], clip["height"]) == (_FPS, *_SIZE)
+    assert clip["frame_count"] == 5
+    assert clip["video_sha256"] == hashlib.sha256(
+        (data / "videos" / "cascade.MP4").read_bytes()).hexdigest()
     assert report["totals"]["all"] == report["totals"]["trusted"]
     assert report["totals"]["all"]["flights"] == 24
     for digest in (clip["detections_sha256"], clip["labels_sha256"],
