@@ -174,10 +174,13 @@ Each row has these columns.
   landing, and within 0.3 of the pattern width of the landing position. Both
   bounds follow the footage, so slow motion and real time are held to the same
   standard.
-- `duplicates`: the catches on a flight that already has one.
+- `duplicates`: the catches on a flight that already has one. A flight that
+  the labels do not show whole still lands once, so a second catch on it is a
+  duplicate too.
 - `unmatched`: the catches near no flight.
-- `ignored`: the catches outside the labelled span, or on a flight that the
-  labels do not show whole. These catches count neither for nor against.
+- `ignored`: the catches outside the labelled span, and the one catch on a
+  flight that the labels do not show whole. These catches count neither for
+  nor against.
 - `missed`: the flights with no catch.
 - `count_error`: `matched + duplicates + unmatched - flights`.
 - `offset_s`: the median of catch time minus landing time over the matched

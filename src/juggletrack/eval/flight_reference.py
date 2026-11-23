@@ -281,13 +281,14 @@ class CatchScore(BaseModel):
     ``catches`` counts the catches given. ``matched`` is how many of those
     flights got a catch. ``duplicates`` are catches on a flight that already
     has one, and ``unmatched`` are catches near no flight. ``ignored``
-    catches fall outside the labelled span or on a flight that was not seen
-    whole, and count neither for nor against. ``count_error`` is the catches
-    that were not ignored, minus ``flights``. ``offset_s`` is the median of
-    catch time minus landing time over the matched pairs, positive when the
-    catches come late, and None when nothing matched. The time tolerance is
-    loose, so a shift of the catch clock shows here long before it turns
-    matched catches into unmatched ones.
+    catches fall outside the labelled span, or are the one catch on a flight
+    that was not seen whole, and count neither for nor against. Such a flight
+    still lands once, so a second catch on it is a duplicate. ``count_error``
+    is the catches that were not ignored, minus ``flights``. ``offset_s`` is
+    the median of catch time minus landing time over the matched pairs,
+    positive when the catches come late, and None when nothing matched. The
+    time tolerance is loose, so a shift of the catch clock shows here long
+    before it turns matched catches into unmatched ones.
 
     ``verdicts`` has one entry per catch, in the order given. ``missed``
     holds the indices into ``FlightReference.flights`` of the counted

@@ -424,6 +424,22 @@ def test_catches_outside_the_labels_or_on_cut_flights_are_ignored():
     assert score.count_error == 0 and score.missed == []
 
 
+def test_a_second_catch_on_a_cut_flight_is_a_duplicate():
+    # The labels begin after the first ball left the hand, so its flight does
+    # not count. It still lands once. Live mode has been seen to confirm one
+    # landing twice in the opening seconds of five of the labelled clips.
+    throws = cascade_throws()
+    start = throws[0].t0 + 0.3 * throws[0].dur
+    ref = flight_reference([[d for d in track if d.t >= start] for track in juggle_tracks(throws)])
+    catches = [_catch(throws[0]), _catch(throws[0], late=0.05)] + [_catch(th) for th in throws[1:]]
+
+    score = score_catches(ref, catches)
+
+    assert sorted(score.verdicts[:2]) == ["duplicate", "ignored"]
+    assert (score.matched, score.duplicates, score.ignored) == (score.flights, 1, 1)
+    assert score.count_error == 1
+
+
 def test_a_catch_on_a_dropped_ball_matches_no_flight():
     throws = [th for th in cascade_throws() if th.ball != 0 or th.t0 < 3.0]
     dropped = [th for th in throws if th.ball == 0][-1]
