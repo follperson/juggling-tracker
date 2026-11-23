@@ -759,6 +759,20 @@ def test_live_hands_a_stream_or_image_sequence_to_the_capture(monkeypatch, sourc
 
 
 @pytest.mark.parametrize("source", ["http://127.0.0.1:8765/clip.mp4", "seq/f_%03d.png"])
+def test_live_replays_detections_over_a_stream_or_image_sequence(workspace, monkeypatch, source):
+    """A replay cannot count the frames of a source that is not a local file,
+    so it skips that check and still hands the source to the capture."""
+    from juggletrack.cli import app
+
+    _, _, dets, _ = workspace
+    opened = _fake_capture(monkeypatch)
+    result = runner.invoke(app, ["live", source, "--detections", str(dets), "--no-display"])
+    assert result.exit_code == 0, result.output
+    assert opened == [source]
+    assert "runs," in result.output
+
+
+@pytest.mark.parametrize("source", ["http://127.0.0.1:8765/clip.mp4", "seq/f_%03d.png"])
 def test_live_stream_that_will_not_open_is_a_usage_error(monkeypatch, source):
     from juggletrack.cli import app
 
