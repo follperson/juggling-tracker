@@ -72,9 +72,13 @@ uses their `t`, an empty frame between two detected frames is interpolated
 linearly, and empty frames before the first or after the last detected frame
 step by `1 / fps`. On detected frames this is exactly the clock that
 `live VIDEO --detections FILE` feeds for the same recording; on empty frames it
-agrees with the decoder's timestamps to within rounding. Substituting
-`frame_idx / fps` would differ by rounding errors that change which detections
-the sliding window keeps. This decoder-free mode requires constant-rate
+agrees with the decoder's timestamps to within rounding. The realtime analyzer
+compares times against its clock with a 1 µs tolerance, so rounding-level clock
+differences do not change its output: on the 22 saved `meschke-val` sessions,
+`frame_idx / fps` at each video's own rate gives the same state on every frame
+as the recorded clock. A clock that differs by more, such as `frame_idx / 30`
+for 29.75 fps footage, can still change the emitted states.
+This decoder-free mode requires constant-rate
 timestamps starting at zero; inconsistent timestamps, and detections in one
 frame with different `t`, are rejected. For variable-rate footage, use the
 existing `live VIDEO --detections FILE --no-display` path, which reads the

@@ -64,7 +64,7 @@ All commands (`--help` on each for options):
   not a verified holdout accuracy claim.
 - Realtime throughput was previously measured at 32–47 fps on Apple Silicon
   (MPS). Accuracy on long sessions remains unresolved: a direct live replay of
-  saved `ss3_id_016` detections (`juggletrack live --detections`) counts 210
+  saved `ss3_id_016` detections (`juggletrack live --detections`) counts 208
   catches and 8 drops versus offline's 41 catches and 0 drops. Both report 9
   runs; the generated reference reports 5 runs and 52 catches. Offline parity
   alone is not sufficient.
