@@ -193,3 +193,14 @@ def test_recordings_key_naming_no_source_rejected_before_writing(tmp_path):
     assert "negs-a" in str(err.value) and "crop-b" in str(err.value)
     assert "labels-a" not in str(err.value)
     assert not out.exists()
+
+
+def test_recordings_key_that_is_not_a_string_is_rejected_with_the_keys(tmp_path):
+    # The sources are Path objects, so keying the mapping by Path is an easy
+    # mistake. It names no source directory and fails the same way as a typo.
+    sources = [make_coco_source(tmp_path, n, 1) for n in ("a", "b")]
+    out = tmp_path / "ds"
+    with pytest.raises(ValueError) as err:
+        assemble_dataset(sources, out, recordings={sources[0]: "r", sources[1]: "r"})
+    assert str(sources[0]) in str(err.value) and str(sources[1]) in str(err.value)
+    assert not out.exists()
