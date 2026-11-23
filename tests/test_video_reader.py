@@ -206,6 +206,41 @@ def test_transport_stream_reads_from_first_frame(tmp_path, suffix):
         assert np.array_equal(frame0, first_decoded)
 
 
+@pytest.mark.parametrize("first_pass_frames", [5, None], ids=["partial", "full"])
+def test_second_pass_starts_over_when_the_backend_reports_no_position(
+    video_path, monkeypatch, first_pass_frames,
+):
+    """Not every OpenCV backend implements CAP_PROP_POS_FRAMES. One that
+    does not reports 0 after any number of reads, so the reader has to know
+    on its own that a pass has begun."""
+    import cv2
+
+    class _NoPositionCap:
+        def __init__(self, real):
+            self._real = real
+
+        def get(self, prop_id):
+            if prop_id == cv2.CAP_PROP_POS_FRAMES:
+                return 0.0
+            return self._real.get(prop_id)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    with VideoReader(video_path) as reader:
+        monkeypatch.setattr(reader, "_cap", _NoPositionCap(reader._cap))
+        first = []
+        for item in reader.frames():
+            first.append(item)
+            if len(first) == first_pass_frames:
+                break
+        second = list(reader.frames())
+
+    assert len(second) == reader.info.frame_count
+    assert (second[0][0], second[0][1]) == (0, 0.0)
+    assert np.array_equal(second[0][2], first[0][2])
+
+
 def test_missing_file_raises():
     with pytest.raises(FileNotFoundError):
         VideoReader("/nonexistent/nope.mp4")
