@@ -12,8 +12,15 @@ setup, the commands, and the output files.
   worktree, link them from the main checkout: `ln -s <main>/data data`, and the
   same for `outputs` and `models`. Read through those links and write nothing
   through them.
-- Pass `--out` with a directory of your own to every command that writes. The
-  default `outputs/<stem>` lands in the shared data.
+- Send every command's output to a place of your own. Where it goes differs by
+  command:
+  - `analyze`, `label` and `live` take `--out` with a directory. The default
+    for the first two, `outputs/<stem>`, lands in the shared data. `label
+    --negatives` takes a second directory.
+  - `eval`, `benchmark` and `detection-eval` take `--out` with a JSON file path.
+  - `train` writes under `--project` (default `runs/finetune`).
+  - `export` writes beside the weights it is given, so copy the weights out of
+    `models` first.
 
 ## Checks
 
