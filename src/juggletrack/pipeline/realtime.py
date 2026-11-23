@@ -26,10 +26,11 @@ from juggletrack.analyze import AnalyzeConfig, _events_from_arcs, analyze_detect
 from juggletrack.events.catches import derive_events
 from juggletrack.types import Arc, Detection
 
-# window_s and window_s - edge_pad are whole numbers of frames at common frame
-# rates, so a detection lands exactly on a cut every frame. Comparing with this
-# margin, far below a frame interval and far above float noise in the clock,
-# keeps the tie rule (on the cut stays, on the edge is not flagged) stable.
+# window_s, window_s - edge_pad and RUN_CLOSE_DEBOUNCE_S are whole numbers of
+# frames at common frame rates, so a time lands exactly on a cut every frame.
+# Comparing with this margin, far below a frame interval and far above float
+# noise in the clock, keeps each tie rule stable: a detection on the cut stays,
+# an arc on the edge is not flagged, and a run is not closed at exactly 0.5 s.
 _CLOCK_EPS_S = 1e-6
 
 
@@ -393,7 +394,7 @@ class RealtimeAnalyzer:
         elif self._run_start is not None:
             if self._pending_close_t is None:
                 self._pending_close_t = self._now
-            elif self._now - self._pending_close_t > self.RUN_CLOSE_DEBOUNCE_S:
+            elif self._now - self._pending_close_t > self.RUN_CLOSE_DEBOUNCE_S + _CLOCK_EPS_S:
                 self._runs_completed += 1
                 self._run_start = None
                 self._pending_close_t = None
