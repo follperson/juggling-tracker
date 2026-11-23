@@ -114,6 +114,45 @@ def test_linker_survives_three_frame_gaps():
     assert len(recovered) >= 11, f"only recovered {len(recovered)}/12 arcs"
 
 
+def _carried_ball(n_flights=8, fps=30.0, flight_s=0.6, carry_s=0.3, ay=2.0):
+    """One ball as a detector that never loses it reports it: a flight from
+    one hand to the other, then a carry in which the hand dips with the ball
+    before it throws it back. Returns the detections and each flight's
+    (throw, catch) times."""
+    hand_y, sides, dip = 0.7, (0.35, 0.65), 0.05
+    cycle = flight_s + carry_s
+    dets = []
+    for f in range(round(n_flights * cycle * fps)):
+        t = f / fps
+        k, phase = int(t // cycle), t % cycle
+        x0, x1 = sides[k % 2], sides[(k + 1) % 2]
+        if phase <= flight_s:
+            x = x0 + (x1 - x0) * phase / flight_s
+            y = hand_y - ay * flight_s * phase + ay * phase * phase
+        else:
+            x = x1
+            y = hand_y + dip * np.sin(np.pi * (phase - flight_s) / carry_s)
+        dets.append(Detection(frame_idx=f, t=t, x=x, y=y))
+    return dets, [(k * cycle, k * cycle + flight_s) for k in range(n_flights)]
+
+
+def test_a_ball_tracked_through_its_carries_yields_one_arc_per_flight():
+    """GitHub issue #7. When the detector never loses a ball, the linker
+    joins flight, carry, flight into one fragment, and splitting it left to
+    right cuts inside the flights. Those pieces join half a flight to part
+    of a carry, fit a gravity far below the flight's and are pruned. Each
+    flight must still come out as one arc, from its throw to its catch, with
+    the flight's own gravity."""
+    dets, flights = _carried_ball()
+    assert len(_link_fragments(_sorted_points(dets), 0.18, 0.08)) == 1
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights)
+    for (t_throw, t_catch), arc in zip(flights, arcs):
+        assert arc.t_start == pytest.approx(t_throw, abs=0.05)
+        assert arc.t_end == pytest.approx(t_catch, abs=0.1)
+        assert arc.ay == pytest.approx(2.0, rel=0.05)
+
+
 def test_false_positives_do_not_create_arcs():
     r = simulate_cascade(n_throws=12, fps=30.0, false_positives_per_frame=0.5, seed=3)
     arcs = extract_arcs(r.detections)
