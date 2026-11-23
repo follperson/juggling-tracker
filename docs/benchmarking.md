@@ -124,7 +124,8 @@ value ends up replaying no session, whether because it matches nothing under
 empty. It checks the match before the run starts, so a typo fails at once.
 
 `compare` prints `PARITY OK` and the speed ratio, or names each session whose
-digest or input changed and exits nonzero. Each snapshot records the source
+digest or input changed and exits nonzero. When the two snapshots share no
+session it compares nothing, says so and exits 2. Each snapshot records the source
 hash of the package it imported and the git commit of the checkout that holds
 it, so a baseline can come from an older checkout on `PYTHONPATH`. When both
 snapshots record the same source hash, `compare` says so: matching digests then

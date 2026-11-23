@@ -247,6 +247,9 @@ def compare(args: argparse.Namespace) -> int:
         if base["meta"][key] != new["meta"][key]:
             print(f"warning: {key} differs ({base['meta'][key]} vs {new['meta'][key]}); "
                   "digests are only comparable on one machine and environment")
+    if not set(base["offline"]) & set(new["offline"]):
+        print("the snapshots share no session, so nothing was compared", file=sys.stderr)
+        return 2
     failures = _compare_section("offline", base["offline"], new["offline"], "seconds")
     if base["realtime"] or new["realtime"]:
         failures += _compare_section("realtime", base["realtime"], new["realtime"], "feed_seconds")
