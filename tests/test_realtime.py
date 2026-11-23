@@ -934,3 +934,15 @@ def test_run_liveness_does_not_depend_on_float_noise_in_clock():
     r = simulate_cascade(n_throws=60, fps=fps, noise=0.015, dropout=0.15, seed=seed)
     _assert_same_states(r, fps, [-1] * (max(d.frame_idx for d in r.detections) + 1),
                         "a 1-ulp clock nudge down")
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+def test_event_confirmation_does_not_depend_on_float_noise_in_clock():
+    """Without position noise a catch time lands exactly on the frame grid, so
+    a catch at `now - freeze_s` was confirmed in this cycle or the next
+    depending on the last bit of `now`."""
+    fps, seed = 24.0, 1
+    r = simulate_cascade(n_throws=60, fps=fps, noise=0.0, dropout=0.0, seed=seed)
+    _assert_same_states(r, fps, [-1] * (max(d.frame_idx for d in r.detections) + 1),
+                        "a 1-ulp clock nudge down")
+
