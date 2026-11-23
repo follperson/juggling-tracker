@@ -101,6 +101,23 @@ def test_whole_pixel_labels_in_slow_motion_keep_the_apex_centred():
     _assert_flights_match_throws(ref.flights, throws, abs_t=0.02, abs_apex_t=1 / FPS)
 
 
+def test_single_frame_label_glitches_add_no_flights():
+    throws = cascade_throws()
+    tracks = juggle_tracks(throws)
+    first, second = [th for th in throws if th.ball == 0][1:3]
+    # One frame mislabelled far below the ball on its way down, and one far
+    # above it on its way up, as hand-labelled CSVs sometimes are.
+    for t, jump in ((first.t0 + 0.75 * first.dur, 0.3), (second.t0 + 0.2 * second.dur, -0.2)):
+        i = round(t * FPS)
+        tracks[0][i] = tracks[0][i].model_copy(update={"y": tracks[0][i].y + jump})
+
+    ref = flight_reference(tracks)
+
+    assert len(ref.flights) == 18
+    _assert_flights_match_throws(ref.flights, throws)
+    assert ref.trusted
+
+
 def test_scattered_missing_samples_change_nothing():
     throws = cascade_throws()
     thinned = [[d for d in track if d.frame_idx % 4] for track in juggle_tracks(throws)]
