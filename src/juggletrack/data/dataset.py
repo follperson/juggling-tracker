@@ -45,7 +45,7 @@ def assemble_dataset(
     if (len({s.name for s in sources}) != len(sources)
             or len({s.resolve() for s in sources}) != len(sources)):
         raise ValueError("source directories must have unique names and unique resolved paths")
-    unknown = sorted(set(recordings or {}) - {s.name for s in sources})
+    unknown = sorted(map(str, set(recordings or {}) - {s.name for s in sources}))
     if unknown:
         raise ValueError(f"recordings keys name no source: {', '.join(unknown)}")
 
