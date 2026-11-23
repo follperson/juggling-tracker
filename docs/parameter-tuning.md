@@ -166,9 +166,17 @@ each flight from its own apex and grows it outward while the next point stays
 on the fit (`_seed_pieces`, `_grow_flight`). The grown flights replace the
 left-to-right pieces only in a fragment where one of those pieces ends inside
 a flight. The points between two flights, and the points after the last
-flight while the ball sinks with the hand, are dropped before EM. A grown
-flight must be seen over its top and keep every x within `2 * resid_tol` of
-one line. Separately, a catch counts as witnessed when its falling hand-line
+flight while the ball sinks with the hand, are dropped before EM, with two
+exceptions. Points after the last flight that lie on one parabola falling
+with the window's gravity are the ball still in flight, a ball the hand
+touched and let fall or a second ball the linker jumped to, and are seeded
+as their own piece (`_keeps_falling`). That gravity is the median over every
+grown flight, and the stretch must last long enough for it to bend a
+straight line by `resid_tol`. A held point that a flight grown in another
+fragment explains by EM's own test is that ball's detection, handed to the
+wrong fragment by the linker, and stays in EM (`_in_hand`). A grown flight
+must be seen over its top and keep every x within `2 * resid_tol` of one
+line. Separately, a catch counts as witnessed when its falling hand-line
 crossing lies within `catch_witness_margin`, which is
 `max(0.15 s, 0.15 x flight)` from the rising to the falling crossing. The
 video-end check uses the same margin for the flight that ends the run, with
@@ -183,12 +191,17 @@ commit):
   witness margin only           | 350             | 1065        | 2 + 9
   + apex seeding                | 498             | 1267        | 5 + 11
   + sink dropped, x-line check  | 498             | 1270        | 1 + 13
+  + falls and other balls kept  | 498             | 1270        | 1 + 13
 
 `ss3_id_016` goes from 40 to 177 of 177 flights matched, in one run instead
 of nine. No labelled clip reports a drop or a second run. The junk session
 `flywheel-t2/labels-motion/182734164` counts 12 catches (13 before) and the
 real-time clip `af1` 51 (51 before). The unmatched catches added on flagged
-clips are listed in `docs/benchmarking.md`.
+clips are listed in `docs/benchmarking.md`. The last row changes no number
+on the 22 clips. It exists for real-time footage: it gives back the fall to
+the floor on `flywheel-t2/analyze-ftv2c/af1` at 35.8 s, the real catch at
+10.6 s on the noisy simulator fixture, and the whole run on
+`plan2-validation/af2`.
 
 **The witness fraction.** With the seeding in place, each fraction was run
 through the same judge and the extraction bake-off's gates:
@@ -205,10 +218,11 @@ margin there and the smaller over-count.
 
 **Every saved session** (`scripts/event_core_parity.py`, offline, 113
 sessions, against a snapshot of `c772c28`, whose offline output the base
-reproduces exactly): runs 201 to 148, catches 4,191 to 5,551, drops 35 to 37.
-24 sessions are unchanged and 9 move only in their digest. 70 gain catches
-with no more runs or drops, and 3 lose one catch (the three copies of
-`ss531_id_014`). 7 gain a run or a drop:
+reproduces exactly): runs 201 to 147, catches 4,191 to 5,557, drops 35 to 37.
+24 sessions are unchanged and 9 move only in their digest. 71 gain catches
+with no more runs or drops, among them `plan2-validation/af2` (24 to 40
+catches, still 2 runs), and 3 lose one catch (the three copies of
+`ss531_id_014`). 6 gain a run or a drop:
 
 - `plan3-flywheel/analyze-ft/af1`: a drop at 36.1 s ends the third run. An
   earlier frame-by-frame diagnosis of this video puts a real drop near 36 s,
@@ -216,40 +230,51 @@ with no more runs or drops, and 3 lose one catch (the three copies of
 - `plan3-flywheel/analyze-ft/af2` and `plan4-bench/analyze-v3/af2`: a new run
   from 6.4 s ends in a drop at 10.4 s. The frames show juggling up to 10 s,
   then a ball on the grass and the juggler stopping. The base found neither.
-- `plan2-validation/af2`, on the stock COCO detector: the second run splits at
-  22.6 s, though the frames show juggling straight through. More throws make
-  the median throw interval fall from 0.62 s to 0.37 s, so the run gap
-  allowance, 1.3 periods, no longer bridges a 0.55 s hole in the detections,
-  and an arc the base had at 22.9 s is lost.
 - `flywheel-t2/labels-motion/182734164`, the junk session: a junk run splits
-  in two for the same reason (period 0.41 s to 0.26 s), and catches fall from
-  13 to 12.
-- `flywheel-t2/labels-motion/191622045`, motion-detector output: two runs
-  merge into one that ends in a drop at 15.4 s. The detections follow the
-  juggler's body as much as the balls, and the drop is unconfirmed.
+  in two. More arcs make the median throw interval fall from 0.41 s to
+  0.26 s, so the run gap allowance, 1.3 periods, no longer bridges a hole.
+  Catches fall from 13 to 12.
+- `flywheel-t2/labels-motion/191622045`, motion-detector output: apex
+  seeding grows a new arc at 14.9 s on a track that follows the juggler's
+  body. It ends 0.001 short of the floor margin until the sink is dropped,
+  which moves its end to y 0.522, 0.004 past it, so the run it extends ends
+  in a drop at 15.4 s. The same commit merges three arcs at 28 to 30 s into
+  one and leaves the junk run there short of 3 arcs. The drop is
+  unconfirmed. The fall and other-ball rules do not move it.
 - `plan2-validation/yt-5easy`, a five-ball tutorial outside the three-ball
-  scope: a new three-arc run at 294 s ends in two drops, so drops go from 15
-  to 17.
+  scope: apex seeding adds an arc at 296.3 s, which makes a three-arc run at
+  294 s that ends in two floor-bound arcs, and a hand line 0.003 higher
+  makes an arc at 595 s end past the floor margin. A new arc at 27.3 s
+  removes the drop at 27.1 s. Drops go from 15 to 17.
 
-**Speed.** Same machine, base and head alternated three times each, offline
-over all 113 sessions and realtime over the 22 `post-hardening-2b` clips
-capped at 900 frames. `analyze_total` median 101.3 s to 95.5 s (0.94x), and
-12.1 s to 9.8 s without the two motion-label sessions that take 90% of it.
-Realtime cycle median p50 10.6 ms to 10.2 ms and median p95 12.9 ms to
-12.0 ms. On the 22 clips 15% of the points reach EM no more, dropped as in
-hand, which is the likely source of the saving. The load average fell from
-14 to 3 during the runs, and every head run was faster than every base run.
+**Speed.** Same machine, base (the flight-reference commit) and head
+alternated three times each, offline over all 113 sessions and realtime over
+the 22 `post-hardening-2b` clips capped at 900 frames. `analyze_total`
+median 94.8 s to 93.3 s (0.98x), and 11.1 s to 9.5 s (0.86x) without the two
+motion-label sessions that take 88% of it. Realtime cycle median p50 9.7 ms
+to 9.9 ms (1.02x), median p95 11.3 ms to 11.3 ms, and the worst clip's p95
+70.5 ms to 73.2 ms (1.04x). Each side's three runs lie within 0.4 s and
+0.2 ms of each other. The 1-minute load average stayed between 1.2 and 4.3
+except for a spike to 41 at the end of the first head run, whose numbers
+match the other two head runs.
 
 **Live replay.** The 22 `post-hardening-2b` clips replayed whole through
 `RealtimeAnalyzer` on their recorded clocks (`event_core_parity.py
 --realtime-frames 0`), against the commit before this change: runs 33 to 23,
-catches 1,360 to 1,444, drops 33 to 6. `ss3_id_016` goes from 9 runs, 208
+catches 1,360 to 1,445, drops 33 to 6. `ss3_id_016` goes from 9 runs, 208
 catches and 8 drops to 1 run, 181 catches and 0 drops, against 177 flights.
 The likely reason, not yet traced: each 8 s window now extracts the same
 whole flights that the full video does, where before the half-flight pieces
 changed from one window to the next and counted twice. Every clip but
-`ss90501_id_145` (3 runs to 2) is one live run. `ss531_id_005` gains a live
-drop (0 to 1) and `ss8040_id_070` loses 3 live catches (33 to 30).
+`ss90501_id_145` (3 runs to 2) is one live run. Apex seeding alone makes the
+two other moves. `ss531_id_005` gains a live drop at 6.2 s: in the first
+window, too few arcs for `_gravity_prune`, an arc with ay 0.075 against
+about 0.17 for the clip's flights runs over a low hop of ball 1 and ends
+0.13 below the hand line. The labels show no drop. `ss8040_id_070` loses
+3 live catches (33 to 30): four landings that the base caught twice, 0.15 s
+apart, are caught once, and one catch is new. The fall and other-ball rules
+move one live count: `ss531_id_989` gains a catch at 29.02 s, 0.16 s before
+another at 29.18 s near one reference landing, so likely a double count.
 
 **Tried and reverted.**
 
@@ -260,15 +285,42 @@ drop (0 to 1) and `ss8040_id_070` loses 3 live catches (33 to 30).
   matched, and three trusted clips each lost flights.
 - Rejecting a grown flight whose gravity falls outside `g_range`: no change
   on the 22 clips, and it moved the noisy simulator fixtures both ways.
+- Judging a fall by the gravity of its own fragment's flights: on the
+  simulator fixture the fragment's only grown flight fits ay 1.87 against a
+  true 1.0, and the fall to the 10.6 s catch was rejected.
+- Letting any seed of another fragment, not only a grown flight, speak for a
+  held point: a short piece of a duplicate box's track ran through the same
+  ball's carry on `ss441_id_013`, an arc grew over a hop and counted it
+  0.21 s late, and `ss3_id_110` gained a duplicate.
+- Keeping every held point that an adjacent flight of its own fragment
+  explains within `2 * resid_tol`, and keeping the lift into the next throw:
+  neither brought back the arc on `plan2-validation/af2`, because the
+  release points there lie 0.041 and 0.052 off the next flight's x line.
+- A tighter `arc_dedup_traj_tol` (not run): the pair dedup took on `af2`
+  sits at a mean separation of 0.131, and a value below that would also
+  release 8 pairs it collapses on other saved sessions, at 0.12 to 0.15,
+  none of them checked.
 
 **Limits.**
 
 - When the linker joins two balls into one fragment, the other ball's points
-  between or after the grown flights are dropped as in hand. On the noisy
-  simulator fixture of
-  `test_left_edge_guard_prevents_phantom_catches_from_truncated_refit` this
-  loses one real catch (10.6 s), and on `plan2-validation/af2` the arc at
-  22.9 s.
+  between or after the grown flights stay in EM only when a flight grown in
+  another fragment explains them, or when they fall on as one parabola after
+  the last flight. A point of a ball that has no grown flight is still
+  dropped as in hand.
+- On real-time footage the hand line moves. On
+  `flywheel-t2/analyze-ftv2c/af1` it goes from 0.812 to 0.753: 19 arcs that
+  crept into the carry on the base (median ay 2.92, median end height 0.712)
+  now end where the flight ends (3.05 and 0.646). Both human-checked drops
+  there, at 17.46 s and 35.95 s, are then lost in `detect_drops`: the miss
+  time, the falling crossing of the new line, comes before the first
+  detection of a throw made at the same moment (17.38 s against 17.44 s,
+  35.89 s against 35.90 s), so the throw reads as the pattern going on. On
+  the base the margins were 0.02 s and 0.05 s. The same line move counts a
+  catch at 17.38 s on the ball that was dropped. The fix belongs in
+  `events/` (the drop rule or the hand-line estimate). Ignoring throws less
+  than 0.15 to 0.5 periods after the miss brings both drops back but adds a
+  false one at 33.6 s on `flywheel-t2/analyze-ftv2b/af1`.
 - A flight split across two fragments with no apex in either is still seeded
   by `_split_ballistic`, and `_gravity_prune` can delete both halves.
 - EM still lets an arc claim points up to 0.15 s past its span per iteration,
