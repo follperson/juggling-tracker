@@ -770,12 +770,15 @@ def test_left_edge_guard_prevents_phantom_catches_from_truncated_refit():
     not count, not phantoms. Before apex seeding offline counted 20 (19
     real and a second catch at 6.55 s) and the unguarded live count added
     the real catches at 3.4, 4.3 and 4.75 s. Apex seeding (GitHub issue #7)
-    counts 3.4 and 4.3 offline, so offline is 22 and disabling the guard
-    adds only 4.75. The guard still holds live to offline exactly."""
+    counts 3.4 and 4.3 offline, and dropping the points that sink with the
+    hand after a fragment's last flight removes the second catch at 6.55
+    and loses the real one at 10.6. Offline is 20, all real, and disabling
+    the guard adds only 4.75. The guard still holds live to offline
+    exactly."""
     r = simulate_cascade(n_throws=24, fps=30.0, noise=0.01, dropout=0.1, seed=4)
     offline = analyze_detections(r.detections)
     off_catches = sum(run.catches for run in offline.runs)
-    assert off_catches == 22, "pinned offline baseline for this fixture"
+    assert off_catches == 20, "pinned offline baseline for this fixture"
 
     guarded = stream(r, RealtimeAnalyzer(RealtimeConfig(edge_pad=0.5)))[-1]
     assert guarded.catches_total == off_catches, (

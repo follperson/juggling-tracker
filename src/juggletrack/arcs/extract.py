@@ -340,16 +340,18 @@ def _seed_pieces(
     shipped splitter fails, which is where one of its pieces ends inside a
     flight. Every other fragment is split exactly as before.
 
-    The points between two flights of one fragment are the ball in a hand.
-    They are returned second, so that no arc is fitted to them: an arc that
-    takes them in bends toward the hand, fits a gravity that is too low, and
-    crosses the hand line late.
+    The points between two flights of one fragment are the ball in a hand,
+    and so are the points after the last flight while the ball sinks with
+    the hand (`_sink_end`). They are returned second, so that no arc is
+    fitted to them: an arc that takes them in bends toward the hand, fits a
+    gravity that is too low, and crosses the hand line late.
     """
     rows = arr[idxs].tolist()
+    ys = [row[2] for row in rows]
     swing = 2 * resid_tol
     flights: list[tuple[int, int]] = []
     free = 0  # first position no flight has claimed yet
-    for apex in _apexes([row[2] for row in rows], swing):
+    for apex in _apexes(ys, swing):
         if apex < free:
             continue
         span = _grow_flight(rows, apex, free, swing, resid_tol)
@@ -374,14 +376,32 @@ def _seed_pieces(
     else:
         return [piece for piece in shipped if len(piece) >= 4], []
 
+    head, last = flights[0][0], flights[-1][1]
+    tail = _sink_end(ys, last, swing) + 1
     pieces = [idxs[lo : hi + 1] for lo, hi in flights]
     in_hand = [i for (_, hi), (lo, _) in zip(flights, flights[1:]) for i in idxs[hi + 1 : lo]]
-    head, tail = flights[0][0], flights[-1][1] + 1
+    in_hand.extend(idxs[last + 1 : tail])
     if head >= 4:
         pieces.extend(_split_ballistic(arr, idxs[:head], resid_tol))
     if len(idxs) - tail >= 4:
         pieces.extend(_split_ballistic(arr, idxs[tail:], resid_tol))
     return pieces, in_hand
+
+
+def _sink_end(ys: list[float], landing: int, swing: float) -> int:
+    """The position where a ball caught at ``landing`` stops sinking with the
+    hand: the lowest point (largest y) after it, before the track climbs
+    ``swing`` above that point again. ``landing`` itself when nothing follows.
+
+    A piece fitted to the sinking stretch alone looks like the falling end of
+    a flight whose apex is out of view, and counts the catch a second time."""
+    low = landing
+    for i in range(landing + 1, len(ys)):
+        if i == landing + 1 or ys[i] > ys[low]:
+            low = i
+        elif ys[low] - ys[i] >= swing:
+            break
+    return low
 
 
 def _apexes(ys: list[float], swing: float) -> list[int]:
@@ -420,7 +440,12 @@ def _grow_flight(
 
     The run must be a flight seen over its top: the fit climbs ``swing`` to
     its apex and falls ``swing`` after it, inside the run. A wobble in noise
-    passes the apex test on raw heights and fails this one.
+    passes the apex test on raw heights and fails this one. Every x in the
+    run must also lie within ``2 * resid_tol`` of the final x line, as
+    `_split_ballistic` requires of a piece. Growth tests each point against
+    the fit as it stood when that point joined, so two balls that cross on
+    one y parabola can grow into one run. This check returns them to the
+    split.
     """
     ceiling = rows[apex][2] + swing
     lo = hi = apex
@@ -457,6 +482,9 @@ def _grow_flight(
     apex_dt = -fit[1] / (2 * fit[0])
     reach = min(apex_dt - (rows[lo][0] - mom.t0), rows[hi][0] - mom.t0 - apex_dt)
     if reach <= 0 or fit[0] * reach * reach < swing:
+        return None
+    bx, cx = fit[3], fit[4]
+    if any(abs(bx * (t - mom.t0) + cx - x) > 2 * resid_tol for t, x, _, _ in rows[lo : hi + 1]):
         return None
     return lo, hi
 
