@@ -796,6 +796,48 @@ def test_left_edge_guard_prevents_phantom_catches_from_truncated_refit():
     )
 
 
+def _unmatched(found, truth, tol):
+    """Times in ``found`` left over after matching each one to the nearest
+    unused time in ``truth`` within ``tol``."""
+    free = sorted(truth)
+    extra = []
+    for t in sorted(found):
+        near = [g for g in free if abs(g - t) <= tol]
+        if near:
+            free.remove(min(near, key=lambda g: abs(g - t)))
+        else:
+            extra.append(round(t, 2))
+    return extra
+
+
+def test_left_edge_guard_blocks_phantom_catches_on_slow_flights():
+    """A cascade at half the simulator's speed (2.2 s flights), with the balls
+    also seen in the hands. Live mode refits each 8 s window, and a flight
+    the window's left edge cuts is refit from its tail alone and caught a
+    second time. The guard drops arcs that start within edge_pad of that
+    edge. With it, live counts what offline counts, and each live catch is
+    a different simulated one. Without it, live counts the first three
+    landings (2.7, 3.6 and 4.5 s) again, once each window has moved past
+    them (measured at 2.75, 3.63 and 4.58 s)."""
+    p = CascadeParams(period_s=0.9, dwell_s=0.5, g=0.5)
+    r = simulate_cascade(n_throws=24, fps=30.0, params=p, noise=0.003, dropout=0.1,
+                         include_held=True, seed=3)
+    offline = analyze_detections(r.detections)
+    tol = 0.2 * p.flight_s
+
+    guarded = RealtimeAnalyzer(RealtimeConfig(edge_pad=0.5))
+    final = stream(r, guarded)[-1]
+    assert final.catches_total == sum(run.catches for run in offline.runs)
+    assert _unmatched(guarded._confirmed["catch"], r.catch_times, tol) == []
+
+    unguarded = RealtimeAnalyzer(RealtimeConfig(edge_pad=0.0))
+    stream(r, unguarded)
+    assert _unmatched(unguarded._confirmed["catch"], r.catch_times, tol) == [2.75, 3.63, 4.58], (
+        "this pins the measured phantoms without the guard; if they change, "
+        "re-measure the guard's repro against the simulated catches"
+    )
+
+
 def test_hand_line_ema_blends_across_cycles():
     """T4: EMA blending arithmetic, direct check (zero coverage before).
     cadence_frames=1 forces _analyze to run on every feed() call, so the
