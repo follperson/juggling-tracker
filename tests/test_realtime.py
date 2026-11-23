@@ -758,6 +758,19 @@ def test_confirm_counts_a_flight_once_when_its_catch_time_moves():
     assert analyzer.confirmed_catches() == [(29.7995, 0.5681)]
 
 
+def test_confirm_counts_a_flight_once_when_a_later_cycle_recuts_its_arc():
+    """Issue #20. In a live replay of ss423_id_017 a later cycle re-cuts the
+    arc of ball 2's flight, from 84.10-85.80 s to 83.83-85.80 s. Its apex
+    moves 0.052 s, a tenth of the half flight, and its catch moves 0.216 s.
+    The labels show one landing there, ball 2 at 85.54 s."""
+    analyzer = RealtimeAnalyzer()
+    analyzer._confirm("catch", [_Event(85.5205, 0.6371, 84.8738, 0.6703, 0.0679)],
+                      horizon=85.567)
+    analyzer._confirm("catch", [_Event(85.3047, 0.6352, 84.8224, 0.6770, 0.0296)],
+                      horizon=87.267)
+    assert analyzer.confirmed_catches() == [(85.5205, 0.6371)]
+
+
 def test_confirm_keeps_throws_whose_apexes_coincide_at_different_heights():
     """In ss531_id_005 a 5 and the 3 thrown after it peak 0.02 s apart, and
     the hands are only 0.05 of the frame apart. Their heights differ, so
