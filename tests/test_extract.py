@@ -8,6 +8,7 @@ from juggletrack.arcs.extract import (
     _link_fragments,
     _merge_pass,
     _Moments,
+    _seed_pieces,
     _split_ballistic,
     dedup_parallel_arcs,
     extract_arcs,
@@ -163,6 +164,22 @@ def test_a_ball_tracked_through_its_carries_yields_one_arc_per_flight():
         assert arc.t_start == pytest.approx(t_throw, abs=0.05)
         assert arc.t_end == pytest.approx(t_catch, abs=0.1)
         assert arc.ay == pytest.approx(2.0, rel=0.05)
+
+
+def test_a_fragment_the_shipped_split_cuts_at_the_hands_keeps_that_split():
+    """Apex seeding replaces the left-to-right split only in a fragment where
+    one of its pieces ends inside a flight. Here the ball turns at each hand
+    with no carry, and crosses fast enough that the split cuts right at each
+    turn, so every piece is one whole flight. The fragment must keep exactly
+    the shipped pieces. With three pieces, each piece's place in the
+    fragment has to be counted on from the end of the one before."""
+    dets, flights = _carried_ball(n_flights=3, carry_s=0.0, ay=1.0, sides=(0.2, 0.8))
+    arr = _sorted_points(dets)
+    (frag,) = _link_fragments(arr, 0.18, 0.08)
+    cut = _seed_pieces(arr, frag, 0.02)
+    assert cut.flights == []
+    assert cut.pieces == _split_ballistic(arr, frag, 0.02)
+    assert len(cut.pieces) == len(flights)
 
 
 def test_a_flight_whose_top_noise_hides_still_yields_an_arc():
