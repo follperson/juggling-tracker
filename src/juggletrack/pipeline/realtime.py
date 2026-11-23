@@ -19,6 +19,7 @@ This module must stay cv2-free: it consumes Detections, not frames.
 from __future__ import annotations
 
 import time
+from typing import NamedTuple
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -33,6 +34,11 @@ from juggletrack.types import Arc, Detection
 # the cut stays, an arc on the edge is not flagged, an arc ending on the
 # liveness horizon is not recent, and a run is not closed at exactly 0.5 s.
 _CLOCK_EPS_S = 1e-6
+
+
+class _Event(NamedTuple):
+    t: float
+    x: float
 
 
 class RealtimeConfig(BaseModel):
@@ -172,7 +178,7 @@ class RealtimeAnalyzer:
         self._buffer: list[Detection] = []
         self._frames_since_analysis = 0
         self._now = 0.0
-        self._confirmed: dict[str, list[float]] = {"throw": [], "catch": [], "drop": []}
+        self._confirmed: dict[str, list[_Event]] = {"throw": [], "catch": [], "drop": []}
         self._runs_completed = 0
         self._run_start: float | None = None
         self._pending_close_t: float | None = None
@@ -331,9 +337,9 @@ class RealtimeAnalyzer:
             if d.arc_id is None or d.arc_id not in truncated_ids
         ]
 
-        self._confirm("throw", [e.t for e in throws], self._now - freeze)
-        self._confirm("catch", [e.t for e in catches], self._now - freeze)
-        self._confirm("drop", [d.t for d in drops], self._now - drop_freeze)
+        self._confirm("throw", [_Event(e.t, e.x) for e in throws], self._now - freeze)
+        self._confirm("catch", [_Event(e.t, e.x) for e in catches], self._now - freeze)
+        self._confirm("drop", [_Event(d.t, d.x) for d in drops], self._now - drop_freeze)
 
         # Run liveness: the naive `end_t > now - freeze` check is exactly
         # right for deciding whether to OPEN a new tracked run (it's
@@ -408,19 +414,19 @@ class RealtimeAnalyzer:
             runs_completed=self._runs_completed,
             run_active=self._run_start is not None,
             catches_current_run=sum(
-                1 for ct in self._confirmed["catch"]
-                if self._run_start is not None and ct >= self._run_start
+                1 for c in self._confirmed["catch"]
+                if self._run_start is not None and c.t >= self._run_start
             ),
             hand_line_y=hand_line,
             window_arcs=session.arcs,
             last_analysis_ms=(time.perf_counter() - t0) * 1000.0,
         )
 
-    def _confirm(self, kind: str, times: list[float], horizon: float) -> None:
+    def _confirm(self, kind: str, events: list[_Event], horizon: float) -> None:
         known = self._confirmed[kind]
         # E8: dedup only against events confirmed in PRIOR cycles (`prior`,
         # snapshotted before this call's loop starts) -- NOT against entries
-        # this same call appends as it goes. `times` is the FULL set of
+        # this same call appends as it goes. `events` is the FULL set of
         # currently-derived event times for this window (re-derived from
         # scratch every cycle, so it naturally re-includes already-known
         # events alongside any new ones). Checking against `known` as it
@@ -447,13 +453,17 @@ class RealtimeAnalyzer:
         # event_match_tol on every fixture measured. The residual
         # cross-cycle over-count from overlapping arc candidates (§9) is a
         # separate, out-of-scope mechanism this snapshot fix does not reach.
-        prior = list(known)
-        for et in sorted(times):
-            if et > horizon + _CLOCK_EPS_S:
+        prior = [k.t for k in known]
+        for event in sorted(events):
+            if event.t > horizon + _CLOCK_EPS_S:
                 continue
-            if any(abs(et - k) <= self.cfg.event_match_tol for k in prior):
+            if any(abs(event.t - k) <= self.cfg.event_match_tol for k in prior):
                 continue
-            known.append(et)
+            known.append(event)
+
+    def confirmed_catches(self) -> list[tuple[float, float]]:
+        """Time and x of every catch confirmed so far, in the order confirmed."""
+        return [(c.t, c.x) for c in self._confirmed["catch"]]
 
     def _state(self) -> RealtimeState:
         return self._last_state.model_copy(update={"t": self._now})

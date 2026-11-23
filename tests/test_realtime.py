@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from juggletrack.analyze import analyze_detections
-from juggletrack.pipeline.realtime import RealtimeAnalyzer, RealtimeConfig
+from juggletrack.pipeline.realtime import RealtimeAnalyzer, RealtimeConfig, _Event
 from juggletrack.sim import CascadeParams, simulate_cascade
 from juggletrack.types import Detection
 
@@ -729,8 +729,8 @@ def test_confirm_does_not_dedup_within_same_cycle():
     that pairing is cross-kind and never enters the same dedup comparison,
     so it does not threaten a real collision under this mechanism."""
     analyzer = RealtimeAnalyzer()
-    analyzer._confirm("catch", [1.000, 1.100], horizon=10.0)
-    assert analyzer._confirmed["catch"] == [1.000, 1.100]
+    analyzer._confirm("catch", [_Event(1.000, 0.3), _Event(1.100, 0.7)], horizon=10.0)
+    assert analyzer.confirmed_catches() == [(1.000, 0.3), (1.100, 0.7)]
 
 
 def test_confirm_still_dedups_across_cycles():
@@ -740,9 +740,10 @@ def test_confirm_still_dedups_across_cycles():
     for (e.g. a re-fit shouldn't double a real confirmation across
     cycles), and E8's fix must not break it."""
     analyzer = RealtimeAnalyzer()
-    analyzer._confirm("catch", [1.000], horizon=10.0)
-    analyzer._confirm("catch", [1.05], horizon=10.0)  # later cycle, same physical event
-    assert analyzer._confirmed["catch"] == [1.000]
+    analyzer._confirm("catch", [_Event(1.000, 0.3)], horizon=10.0)
+    # later cycle, same physical event
+    analyzer._confirm("catch", [_Event(1.05, 0.3)], horizon=10.0)
+    assert analyzer.confirmed_catches() == [(1.000, 0.3)]
 
 
 def test_left_edge_guard_prevents_phantom_catches_from_truncated_refit():
