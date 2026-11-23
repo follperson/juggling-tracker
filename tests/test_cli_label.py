@@ -110,3 +110,43 @@ def test_label_negatives_count_every_raw_junk_box(tmp_path):
     coco = json.loads((neg / "annotations.json").read_text())
     assert len(coco["images"]) == 40
     assert coco["annotations"] == []
+
+
+def test_label_never_exports_a_labelled_frame_as_a_negative(tmp_path, monkeypatch):
+    # Labels come from clustered detections, negatives from the raw ones, so
+    # the raw arcs can miss a flight that the label path verified (seen on
+    # ss3_id_016). Stand in for that by handing negative mining only the
+    # first raw arc: the cascade frames after it then look like idle junk.
+    import juggletrack.data.autolabel as autolabel
+    from juggletrack.cli import app
+    from juggletrack.types import Detection
+
+    real_export = autolabel.export_hard_negatives
+
+    def export_with_missed_flights(video, dets, arcs, out_dir, **kwargs):
+        return real_export(video, dets, arcs[:1], out_dir, **{**kwargs, "max_frames": 10**6})
+
+    monkeypatch.setattr(autolabel, "export_hard_negatives", export_with_missed_flights)
+    fps = 30.0
+    sim = simulate_cascade(n_throws=12, fps=fps, seed=1)
+    n_frames = max(d.frame_idx for d in sim.detections) + 1 + int(3 * fps)
+    junk = [Detection(frame_idx=f, t=f / fps, x=x, y=0.1, w=0.03, h=0.03, confidence=c)
+            for f in range(n_frames) for x, c in ((0.9, 0.3), (0.907, 0.2))]
+    video = tmp_path / "cascade.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+    det_path = tmp_path / "dets.jsonl"
+    save_detections_jsonl(sorted(sim.detections + junk, key=lambda d: d.frame_idx), det_path)
+    labels_out, neg = tmp_path / "labels_out", tmp_path / "neg"
+
+    result = runner.invoke(app, [
+        "label", str(video), "--out", str(labels_out),
+        "--detections", str(det_path), "--negatives", str(neg), "--neg-person-model", "none",
+    ])
+
+    assert result.exit_code == 0, result.output
+    labelled = {_frame_of(im["file_name"])
+                for im in json.loads((labels_out / "annotations.json").read_text())["images"]}
+    negatives = {_frame_of(im["file_name"])
+                 for im in json.loads((neg / "annotations.json").read_text())["images"]}
+    assert negatives
+    assert labelled & negatives == set()

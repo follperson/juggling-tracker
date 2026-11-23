@@ -736,3 +736,27 @@ def test_export_hard_negatives_still_mines_genuinely_idle_tail(tmp_path):
     coco = json.loads((out / "annotations.json").read_text())
     exported_frames = {int(im["file_name"][6:12]) for im in coco["images"]}
     assert tail_frames <= exported_frames
+
+
+def test_export_hard_negatives_skips_frames_labelled_in_this_run(tmp_path):
+    # `label` verifies balls on clustered detections, so it can label a frame
+    # that this function's raw detections and arcs call idle junk. Such a
+    # frame must not also become a zero-box negative; every other frame is
+    # exported exactly as without the labels.
+    r, dets, arcs, n_frames, fps, tail_start = _persistent_junk_cascade_with_held()
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+    plain = export_hard_negatives(video, dets, arcs, tmp_path / "plain", max_frames=10**6)
+    plain_frames = {int(im["file_name"][6:12])
+                    for im in json.loads((tmp_path / "plain" / "annotations.json").read_text())["images"]}
+    labelled = set(sorted(plain_frames)[::3])
+    assert labelled
+
+    stats = export_hard_negatives(
+        video, dets, arcs, tmp_path / "neg", max_frames=10**6, labelled_frames=labelled,
+    )
+
+    coco = json.loads((tmp_path / "neg" / "annotations.json").read_text())
+    exported = {int(im["file_name"][6:12]) for im in coco["images"]}
+    assert exported == plain_frames - labelled
+    assert stats["n_skipped_active"] == plain["n_skipped_active"] + len(labelled)
