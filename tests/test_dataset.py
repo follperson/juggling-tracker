@@ -179,3 +179,17 @@ def test_seed_chooses_the_validation_recordings(tmp_path):
         for seed in range(6)
     }
     assert len(val_sets) > 1
+
+
+def test_recordings_key_naming_no_source_rejected_before_writing(tmp_path):
+    # A misspelt key would leave its source as a recording of its own, free
+    # to land on the other side of the split from the rest of its recording.
+    sources = [make_coco_source(tmp_path, n, 1) for n in ("labels-a", "neg-a", "labels-b")]
+    out = tmp_path / "ds"
+    with pytest.raises(ValueError) as err:
+        assemble_dataset(sources, out, recordings={
+            "labels-a": "a", "negs-a": "a", "labels-b": "b", "crop-b": "b",
+        })
+    assert "negs-a" in str(err.value) and "crop-b" in str(err.value)
+    assert "labels-a" not in str(err.value)
+    assert not out.exists()
