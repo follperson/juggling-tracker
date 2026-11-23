@@ -746,6 +746,18 @@ def test_confirm_still_dedups_across_cycles():
     assert analyzer.confirmed_catches() == [(1.000, 0.3)]
 
 
+def test_confirm_counts_a_flight_once_when_its_catch_time_moves():
+    """Issue #20. Three cycles of a live replay of ss90501_id_145 derive one
+    flight from the same arc, apex 28.447 s. The hand line moves between them,
+    so the catch time moves by 0.171 s and then 0.151 s, each more than
+    event_match_tol from the catch before. The flight was caught once."""
+    analyzer = RealtimeAnalyzer()
+    for t, x, rise in ((29.7995, 0.5681, 0.0925), (29.9702, 0.5693, 0.1173),
+                       (30.1210, 0.5704, 0.1417)):
+        analyzer._confirm("catch", [_Event(t, x, 28.4469, 0.5333, rise)], horizon=t)
+    assert analyzer.confirmed_catches() == [(29.7995, 0.5681)]
+
+
 def test_left_edge_guard_prevents_phantom_catches_from_truncated_refit():
     """T1: the left-edge guard (dd01055) was otherwise delete-proof -- no
     existing fixture failed with edge_pad=0 (verified: every parity test
