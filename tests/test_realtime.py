@@ -468,7 +468,11 @@ def test_parity_very_long_stream():
     confidence absorption -- two real balls tied at confidence=1.0 never
     merge, so clustering is a no-op on this fixture at the AnalyzeConfig
     default. Verified directly; reverted the transient
-    cluster_merge_dist=0.0 override on both configs below."""
+    cluster_merge_dist=0.0 override on both configs below.
+
+    Apex seeding (GitHub issue #7) moves offline from 23 to 26 catches. All
+    26 match a simulated catch one to one within 0.1 s, against 23 of 23
+    before; live is 28, still over and within the band."""
     dets = _three_run_stream(gap_s=3.0, noise=0.015, dropout=0.15)
     offline = analyze_detections(dets)
     total_span = max(d.t for d in dets) - min(d.t for d in dets)
@@ -476,7 +480,7 @@ def test_parity_very_long_stream():
     assert len(offline.runs) == 3, "fixture must offline-segment into 3 runs"
     assert len(offline.drops) == 0, "fixture has no drops by construction"
     off_catches = sum(run.catches for run in offline.runs)
-    assert off_catches == 23, "pinned offline baseline for this fixture; revisit if sim.py changes"
+    assert off_catches == 26, "pinned offline baseline for this fixture; revisit if sim.py changes"
 
     analyzer = RealtimeAnalyzer()
     final = stream_dets(dets, analyzer)[-1]
@@ -759,11 +763,19 @@ def test_left_edge_guard_prevents_phantom_catches_from_truncated_refit():
     absorption -- two real balls tied at confidence=1.0 never merge, so
     clustering is a no-op on this fixture at the AnalyzeConfig default.
     Verified directly; reverted the transient cluster_merge_dist=0.0
-    override on both configs below."""
+    override on both configs below.
+
+    Re-measured against the simulator's catch times (one to one, 0.1 s):
+    the catches that edge_pad=0.0 adds are real flights that offline does
+    not count, not phantoms. Before apex seeding offline counted 20 (19
+    real and a second catch at 6.55 s) and the unguarded live count added
+    the real catches at 3.4, 4.3 and 4.75 s. Apex seeding (GitHub issue #7)
+    counts 3.4 and 4.3 offline, so offline is 22 and disabling the guard
+    adds only 4.75. The guard still holds live to offline exactly."""
     r = simulate_cascade(n_throws=24, fps=30.0, noise=0.01, dropout=0.1, seed=4)
     offline = analyze_detections(r.detections)
     off_catches = sum(run.catches for run in offline.runs)
-    assert off_catches == 20, "pinned offline baseline for this fixture"
+    assert off_catches == 22, "pinned offline baseline for this fixture"
 
     guarded = stream(r, RealtimeAnalyzer(RealtimeConfig(edge_pad=0.5)))[-1]
     assert guarded.catches_total == off_catches, (
@@ -772,7 +784,7 @@ def test_left_edge_guard_prevents_phantom_catches_from_truncated_refit():
     )
 
     unguarded = stream(r, RealtimeAnalyzer(RealtimeConfig(edge_pad=0.0)))[-1]
-    assert unguarded.catches_total == off_catches + 3, (
+    assert unguarded.catches_total == off_catches + 1, (
         "this pins the CURRENT measured effect of disabling the guard "
         f"(edge_pad=0.0); got {unguarded.catches_total} -- if this changes, the "
         "guard's isolating repro needs to be re-measured, not just loosened"

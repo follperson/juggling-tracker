@@ -147,8 +147,11 @@ def extract_arcs(
 
     fragments = _link_fragments(arr, link_max_dt, link_max_dist)
     seeds: list[list[int]] = []
+    in_hand: list[int] = []
     for frag in fragments:
-        seeds.extend(_split_ballistic(arr, frag, resid_tol))
+        pieces, held = _seed_pieces(arr, frag, resid_tol)
+        seeds.extend(pieces)
+        in_hand.extend(held)
 
     arcs: list[Arc] = []
     for idxs in seeds:
@@ -159,6 +162,8 @@ def extract_arcs(
         except ValueError:
             continue  # degenerate seed (e.g. all-same-timestamp cluster)
 
+    if in_hand:
+        arr = np.delete(arr, in_hand, axis=0)
     for _ in range(em_iters):
         arcs = _em_assign_refit(arr, arcs, resid_tol)
         arcs = _merge_pass(arr, arcs, resid_tol)
@@ -314,6 +319,146 @@ class _Moments:
         dt = pts[:, 0] - self.t0
         ry = ((ay * dt + by) * dt + cy - pts[:, 2]) * pts[:, 3]
         return math.sqrt(float(ry @ ry) / self.s[0]), bx * dt + cx - pts[:, 1]
+
+
+def _seed_pieces(
+    arr: np.ndarray, idxs: list[int], resid_tol: float,
+) -> tuple[list[list[int]], list[int]]:
+    """Cut one fragment into seed pieces, and name the points in it that are a
+    ball in a hand.
+
+    A detector that never loses a ball links it into one fragment for many
+    throws: flight, hand carry, flight. `_split_ballistic` scans left to
+    right, so after the first hand each of its pieces starts inside a carry
+    and runs on into half of the next flight. Those pieces fit a gravity far
+    below the real one and are pruned, and nothing rebuilds the flight. Every
+    flight has an apex, and the apex is the point farthest from both hands,
+    so `_grow_flight` builds each flight outward from its apex and stops at
+    the hands.
+
+    The flights replace the shipped pieces only in a fragment where the
+    shipped splitter fails, which is where one of its pieces ends inside a
+    flight. Every other fragment is split exactly as before.
+
+    The points between two flights of one fragment are the ball in a hand.
+    They are returned second, so that no arc is fitted to them: an arc that
+    takes them in bends toward the hand, fits a gravity that is too low, and
+    crosses the hand line late.
+    """
+    rows = arr[idxs].tolist()
+    swing = 2 * resid_tol
+    flights: list[tuple[int, int]] = []
+    free = 0  # first position no flight has claimed yet
+    for apex in _apexes([row[2] for row in rows], swing):
+        if apex < free:
+            continue
+        span = _grow_flight(rows, apex, free, swing, resid_tol)
+        if span is not None:
+            flights.append(span)
+            free = span[1] + 1
+
+    # Take the shipped pieces one at a time, and stop at the first that ends
+    # inside a flight: a long fragment fails at its first hand, and the rest
+    # of its shipped pieces would be thrown away.
+    shipped: list[list[int]] = []
+    held = 0  # flights[:held] sit whole inside one shipped piece
+    start = 0
+    for piece in _ballistic_pieces(arr, idxs, resid_tol):
+        end = start + len(piece) - 1
+        while held < len(flights) and start <= flights[held][0] and flights[held][1] <= end:
+            held += 1
+        if held < len(flights) and flights[held][0] <= end:
+            break
+        shipped.append(piece)
+        start = end + 1
+    else:
+        return [piece for piece in shipped if len(piece) >= 4], []
+
+    pieces = [idxs[lo : hi + 1] for lo, hi in flights]
+    in_hand = [i for (_, hi), (lo, _) in zip(flights, flights[1:]) for i in idxs[hi + 1 : lo]]
+    head, tail = flights[0][0], flights[-1][1] + 1
+    if head >= 4:
+        pieces.extend(_split_ballistic(arr, idxs[:head], resid_tol))
+    if len(idxs) - tail >= 4:
+        pieces.extend(_split_ballistic(arr, idxs[tail:], resid_tol))
+    return pieces, in_hand
+
+
+def _apexes(ys: list[float], swing: float) -> list[int]:
+    """Positions where a track tops out: it climbed at least ``swing`` to get
+    there and fell at least ``swing`` afterwards. y grows downward, so an apex
+    is a minimum of y. Wobble smaller than ``swing`` leaves none."""
+    apexes: list[int] = []
+    top = low = 0  # highest and lowest point since the last turn
+    climbing: bool | None = None
+    for i in range(1, len(ys)):
+        y = ys[i]
+        if y < ys[top]:
+            top = i
+        if y > ys[low]:
+            low = i
+        if climbing is not False and y - ys[top] >= swing:
+            if climbing:
+                apexes.append(top)
+            climbing, low = False, i
+        elif climbing is not True and ys[low] - y >= swing:
+            climbing, top = True, i
+    return apexes
+
+
+def _grow_flight(
+    rows: list[list[float]], apex: int, free: int, swing: float, resid_tol: float,
+) -> tuple[int, int] | None:
+    """The run of ``rows`` around ``apex`` that one flight explains, as
+    inclusive positions, or None when the top of the track is not a flight.
+
+    The fit starts from the points within ``swing`` of the apex height, which
+    is deep enough to show the curvature above the noise. It then takes the
+    next point on either side while that point lies on the current fit, and
+    refits. The hands end the run: a ball that touches a hand leaves its
+    parabola within a few frames. Positions before ``free`` are taken.
+
+    The run must be a flight seen over its top: the fit climbs ``swing`` to
+    its apex and falls ``swing`` after it, inside the run. A wobble in noise
+    passes the apex test on raw heights and fails this one.
+    """
+    ceiling = rows[apex][2] + swing
+    lo = hi = apex
+    while lo > free and rows[lo - 1][2] <= ceiling:
+        lo -= 1
+    last = len(rows) - 1
+    while hi < last and rows[hi + 1][2] <= ceiling:
+        hi += 1
+    if hi - lo < 3:
+        return None
+    mom = _Moments(rows[lo][0])
+    for row in rows[lo : hi + 1]:
+        mom.add(*row)
+    fit = mom.solve()
+    grew = fit is not None
+    while grew:
+        grew = False
+        for nxt in (hi + 1, lo - 1):
+            if not free <= nxt <= last:
+                continue
+            t, x, y, _ = rows[nxt]
+            ay, by, cy, bx, cx = fit
+            dt = t - mom.t0
+            if abs((ay * dt + by) * dt + cy - y) > resid_tol or abs(bx * dt + cx - x) > 2 * resid_tol:
+                continue
+            mom.add(*rows[nxt])
+            refit = mom.solve()
+            if refit is None:
+                return None
+            fit, grew = refit, True
+            lo, hi = min(lo, nxt), max(hi, nxt)
+    if fit is None or fit[0] <= 0:
+        return None
+    apex_dt = -fit[1] / (2 * fit[0])
+    reach = min(apex_dt - (rows[lo][0] - mom.t0), rows[hi][0] - mom.t0 - apex_dt)
+    if reach <= 0 or fit[0] * reach * reach < swing:
+        return None
+    return lo, hi
 
 
 def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list[list[int]]:
