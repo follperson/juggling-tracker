@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 from typer.testing import CliRunner
@@ -7,6 +8,12 @@ from juggletrack.cli import app
 from juggletrack.types import Run, SessionResult
 
 runner = CliRunner()
+
+
+def words(output: str) -> str:
+    """Typer's output as plain words. It colours help and errors when
+    GITHUB_ACTIONS is set, boxes them, and wraps long paths."""
+    return " ".join(re.sub(r"\x1b\[[0-9;]*m", "", output).replace("│", " ").split())
 
 
 @pytest.fixture()
@@ -35,7 +42,7 @@ def test_eval_refuses_to_overwrite_an_input(inputs, which):
     before = [p.read_bytes() for p in inputs]
     result = runner.invoke(app, ["eval", *map(str, inputs), "--out", str(inputs[which])])
     assert result.exit_code == 2
-    assert "must not overwrite an input" in result.output
+    assert "must not overwrite an input" in words(result.output)
     assert [p.read_bytes() for p in inputs] == before
 
 
@@ -59,7 +66,7 @@ def test_eval_rejects_analysis_without_schema_version(inputs, document):
     analysis.write_text(json.dumps(document))
     result = runner.invoke(app, ["eval", str(analysis), str(labels)])
     assert result.exit_code == 2
-    assert "schema_version" in result.output
+    assert "schema_version" in words(result.output)
     assert "runs:" not in result.output
 
 
@@ -72,7 +79,7 @@ def test_eval_rejects_versioned_json_that_is_not_an_analysis(inputs, document):
     analysis.write_text(json.dumps(document))
     result = runner.invoke(app, ["eval", str(analysis), str(labels)])
     assert result.exit_code == 2, result.output
-    assert "has no runs, arcs key" in " ".join(result.output.replace("│", " ").split())
+    assert "has no runs, arcs key" in words(result.output)
     assert "predicted" not in result.output
 
 
@@ -82,12 +89,9 @@ def test_eval_rejects_analysis_that_is_not_an_object(inputs, text):
     analysis.write_text(text)
     result = runner.invoke(app, ["eval", str(analysis), str(labels)])
     assert result.exit_code == 2, result.output
-    assert "has no schema_version, runs, arcs key" in " ".join(
-        result.output.replace("│", " ").split()
-    )
+    assert "has no schema_version, runs, arcs key" in words(result.output)
 
 
 def test_eval_has_a_help_summary():
     result = runner.invoke(app, ["--help"])
-    line = next(row for row in result.output.splitlines() if " eval " in row)
-    assert "Score" in line
+    assert "Score a saved analysis.json" in words(result.output)
