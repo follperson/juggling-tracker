@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from juggletrack.analyze import AnalyzeConfig, _events_from_arcs, analyze_detections
 from juggletrack.events.catches import derive_events
-from juggletrack.types import Arc, Detection
+from juggletrack.types import Arc, CatchEvent, Detection, ThrowEvent
 
 # window_s, window_s - edge_pad, freeze_s and RUN_CLOSE_DEBOUNCE_S are whole
 # numbers of frames at common frame rates, so a time lands exactly on a cut
@@ -37,8 +37,15 @@ _CLOCK_EPS_S = 1e-6
 
 
 class _Event(NamedTuple):
+    """A confirmable event. A throw or catch also carries its arc's apex time
+    and height, and how far that apex rose above the hand line; a drop does
+    not."""
+
     t: float
     x: float
+    apex_t: float | None = None
+    apex_y: float = 0.0
+    rise: float = 0.0
 
 
 class RealtimeConfig(BaseModel):
@@ -337,8 +344,14 @@ class RealtimeAnalyzer:
             if d.arc_id is None or d.arc_id not in truncated_ids
         ]
 
-        self._confirm("throw", [_Event(e.t, e.x) for e in throws], self._now - freeze)
-        self._confirm("catch", [_Event(e.t, e.x) for e in catches], self._now - freeze)
+        arcs = {a.id: a for a in session.arcs}
+
+        def flight(e: ThrowEvent | CatchEvent) -> _Event:
+            arc = arcs[e.arc_id]
+            return _Event(e.t, e.x, arc.apex_t(), arc.apex_y(), hand_line - arc.apex_y())
+
+        self._confirm("throw", [flight(e) for e in throws], self._now - freeze)
+        self._confirm("catch", [flight(e) for e in catches], self._now - freeze)
         self._confirm("drop", [_Event(d.t, d.x) for d in drops], self._now - drop_freeze)
 
         # Run liveness: the naive `end_t > now - freeze` check is exactly
