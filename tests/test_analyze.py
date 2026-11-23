@@ -107,6 +107,25 @@ def _slow_run(last_seen: float) -> list[Arc]:
     return arcs
 
 
+@pytest.mark.xfail(strict=True, reason="known gap: every top of a held ball moved up and down "
+                   "grows into a flight, and no rule found separates it from a thrown ball "
+                   "(docs/parameter-tuning.md)")
+def test_a_held_ball_moved_up_and_down_counts_no_catch():
+    """A ball held in one hand and lifted and lowered by 5% of the frame
+    once a second, for 20 s, is never thrown, so no catch may count. Before
+    apex seeding this counted 0. Seeding counts 19."""
+    rng = np.random.default_rng(0)
+    dets = [
+        Detection(
+            frame_idx=f, t=f / 30.0, x=0.5 + rng.normal(0, 0.005),
+            y=0.6 + 0.05 * np.sin(2 * np.pi * f / 30.0) + rng.normal(0, 0.005),
+        )
+        for f in range(601)
+    ]
+    sr = analyze_detections(dets)
+    assert sum(run.catches for run in sr.runs) == 0
+
+
 def test_video_end_margin_follows_the_catch_witness_margin():
     """A run's end_t is the falling hand-line crossing of its last flight,
     the same time the catch on that flight must be witnessed at. When the
