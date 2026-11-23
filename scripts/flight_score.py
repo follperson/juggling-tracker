@@ -15,7 +15,8 @@ and frame size, and the report records its hash and frame count.
 
 ``--live`` scores live mode instead. It replays each clip frame by frame
 through ``RealtimeAnalyzer`` on the clock recorded with the detections, scores
-the catches the analyzer confirmed, and adds its final throws, runs and drops.
+the catches the analyzer confirmed, and adds its final runs and drops and its
+throws, printed beside ``flights_found``, every flight the reference found.
 
 ``--controls`` also scores three seeded faults per clip: every tenth catch
 deleted, every tenth catch doubled, and every catch moved 2 s later. They
@@ -59,7 +60,7 @@ DEFAULT_ROOT = "outputs/meschke-val/post-hardening-2b"
 COUNTS = ("flights", "catches", "matched", "duplicates", "unmatched", "ignored", "missed",
           "count_error")
 ARC_COUNTS = ("arcs", "explained", "repeated")
-LIVE_COUNTS = ("throws", "runs", "drops")
+LIVE_COUNTS = ("throws", "flights_found", "runs", "drops")
 
 
 def _sha256(path: Path) -> str:
