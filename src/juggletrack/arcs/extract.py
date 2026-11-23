@@ -436,8 +436,11 @@ def _keeps_falling(pts: np.ndarray, gravity: float, resid_tol: float) -> bool:
     ball's flight. Either way they lie on one parabola, as `_split_ballistic`
     holds a piece to, and fall with the flights' ``gravity`` within
     `_GRAVITY_BAND`. A hand slows the ball it holds, so a sink fits a far
-    lower gravity, mostly below zero."""
-    if len(pts) < 4:
+    lower gravity, mostly below zero. The stretch must also last long enough
+    for that gravity to bend a straight line by ``resid_tol``, or noise
+    decides its fitted gravity: a 0.3 s sink in slow motion, where gravity
+    is 0.19, bends by 0.004."""
+    if len(pts) < 4 or gravity * ((pts[-1, 0] - pts[0, 0]) / 2) ** 2 < resid_tol:
         return False
     mom = _Moments.of(pts)
     fit, res = mom.solve(), mom.fit_residuals(pts)
