@@ -53,15 +53,24 @@ def _resolve_model(model: str | None) -> str:
         raise typer.BadParameter(str(exc)) from exc
 
 
-def _load_replay(detections: Path, video: Path | str) -> list[Detection]:
+def _is_local_path(source: str) -> bool:
+    """False for what OpenCV opens without a file of that name: a URL or an image-sequence pattern."""
+    return "://" not in source and "%" not in source
+
+
+def _load_replay(detections: Path, video: Path | str | None) -> list[Detection]:
+    """Load saved detections. With a local video, also check they fit inside it."""
     from juggletrack.pipeline.offline import check_frames_in_video, load_detections_jsonl
     from juggletrack.video.reader import VideoReader
 
-    with VideoReader(video) as reader:
-        frame_count = reader.info.frame_count
+    frame_count = None
+    if video is not None:
+        with VideoReader(video) as reader:
+            frame_count = reader.info.frame_count
     try:
         dets = load_detections_jsonl(detections)
-        check_frames_in_video(dets, frame_count)
+        if frame_count is not None:
+            check_frames_in_video(dets, frame_count)
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="--detections") from exc
     return dets
@@ -527,14 +536,15 @@ def live(
     # index has no frames to replay against.
     if detections is not None and isinstance(src, int):
         raise typer.BadParameter("--detections requires a file source")
-    if detections is not None and not Path(src).exists():
+    local = isinstance(src, str) and _is_local_path(src)
+    if detections is not None and local and not Path(src).exists():
         raise typer.BadParameter(f"file {src} does not exist", param_hint="source")
     if out is not None:
         _check_out_dir(out)
     if detections is not None:
         from juggletrack.detect.fake import FakeDetector
 
-        detector = FakeDetector(_load_replay(detections, src))
+        detector = FakeDetector(_load_replay(detections, src if local else None))
     else:
         from juggletrack.detect.yolo import YOLODetector
 
@@ -550,7 +560,7 @@ def live(
     except SourceOpenError as exc:
         if isinstance(src, int):
             message = f"{exc}; check the camera index and that this terminal may use the camera"
-        elif "://" not in src and "%" not in src and not Path(src).exists():
+        elif local and not Path(src).exists():
             message = f"could not open source {src}: the file does not exist"
         else:
             message = f"could not open source {src}"
