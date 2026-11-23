@@ -493,7 +493,7 @@ def live(
     out: Path | None = typer.Option(None, help="Directory to write live_session.json into"),
 ) -> None:
     """Live juggling tracker: webcam or file, realtime HUD."""
-    from juggletrack.pipeline.live import run_live
+    from juggletrack.pipeline.live import SourceOpenError, run_live
     from juggletrack.pipeline.realtime import RealtimeConfig
 
     # S4: str.isdigit() is true for various non-ASCII digit characters
@@ -509,7 +509,7 @@ def live(
     # index has no frames to replay against.
     if detections is not None and isinstance(src, int):
         raise typer.BadParameter("--detections requires a file source")
-    if isinstance(src, str) and not Path(src).exists():
+    if detections is not None and not Path(src).exists():
         raise typer.BadParameter(f"file {src} does not exist", param_hint="source")
     if out is not None:
         _make_out_dir(out)
@@ -529,13 +529,14 @@ def live(
             src, detector, config=RealtimeConfig(),
             display=display, max_frames=max_frames,
         )
-    except ValueError as exc:
-        if isinstance(src, str):
-            raise
-        raise typer.BadParameter(
-            f"{exc}; check the camera index and that this terminal may use the camera",
-            param_hint="source",
-        ) from exc
+    except SourceOpenError as exc:
+        if isinstance(src, int):
+            message = f"{exc}; check the camera index and that this terminal may use the camera"
+        elif "://" not in src and "%" not in src and not Path(src).exists():
+            message = f"could not open source {src}: the file does not exist"
+        else:
+            message = f"could not open source {src}"
+        raise typer.BadParameter(message, param_hint="source") from exc
     if out is not None:
         (out / "live_session.json").write_text(final.model_dump_json(indent=2))
     typer.echo(
