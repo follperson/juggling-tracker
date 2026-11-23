@@ -347,7 +347,7 @@ class _Cut(NamedTuple):
 
     flights: list[list[int]]  # flights grown from their apexes, as seeds
     pieces: list[list[int]]  # `_split_ballistic` pieces, as seeds
-    in_hand: list[int]  # points between two flights
+    in_hand: list[int]  # points between two flights where the track does not top out
     after: list[int]  # points after the last flight, down to `_sink_end`
     gravities: list[float]  # ay of every flight grown here, seeds or not
 
@@ -373,7 +373,10 @@ def _seed_pieces(arr: np.ndarray, idxs: list[int], resid_tol: float) -> _Cut:
     and so are the points after the last flight while the ball sinks with
     the hand (`_sink_end`). No arc may be fitted to them: an arc that takes
     them in bends toward the hand, fits a gravity that is too low, and
-    crosses the hand line late. Two kinds are no carry, and `extract_arcs`
+    crosses the hand line late. Between two flights the track can still top
+    out where a flight did not grow, because detector noise hid the
+    curvature at its top. That stretch holds a flight, so `_split_ballistic`
+    seeds it as before. Two more kinds are no carry, and `extract_arcs`
     tells them apart because it needs every fragment's flights to do so: a
     ball that falls on after its last flight (`_keeps_falling`), and a point
     the linker took from another ball (`_in_hand`).
@@ -383,6 +386,7 @@ def _seed_pieces(arr: np.ndarray, idxs: list[int], resid_tol: float) -> _Cut:
     swing = 2 * resid_tol
     flights: list[tuple[int, int]] = []
     gravities: list[float] = []
+    failed: list[int] = []  # tops that did not grow into a flight
     free = 0  # first position no flight has claimed yet
     for apex in _apexes(ys, swing):
         if apex < free:
@@ -393,6 +397,8 @@ def _seed_pieces(arr: np.ndarray, idxs: list[int], resid_tol: float) -> _Cut:
             flights.append((lo, hi))
             gravities.append(ay)
             free = hi + 1
+        else:
+            failed.append(apex)
 
     # Take the shipped pieces one at a time, and stop at the first that ends
     # inside a flight: a long fragment fails at its first hand, and the rest
@@ -418,10 +424,16 @@ def _seed_pieces(arr: np.ndarray, idxs: list[int], resid_tol: float) -> _Cut:
         pieces.extend(_split_ballistic(arr, idxs[:head], resid_tol))
     if len(idxs) - tail >= 4:
         pieces.extend(_split_ballistic(arr, idxs[tail:], resid_tol))
+    in_hand: list[int] = []
+    for (_, hi), (lo, _) in zip(flights, flights[1:]):
+        if any(hi < apex < lo for apex in failed):
+            pieces.extend(_split_ballistic(arr, idxs[hi + 1 : lo], resid_tol))
+        else:
+            in_hand.extend(idxs[hi + 1 : lo])
     return _Cut(
         flights=[idxs[lo : hi + 1] for lo, hi in flights],
         pieces=pieces,
-        in_hand=[i for (_, hi), (lo, _) in zip(flights, flights[1:]) for i in idxs[hi + 1 : lo]],
+        in_hand=in_hand,
         after=idxs[last + 1 : tail],
         gravities=gravities,
     )
