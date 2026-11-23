@@ -758,6 +758,27 @@ def test_confirm_counts_a_flight_once_when_its_catch_time_moves():
     assert analyzer.confirmed_catches() == [(29.7995, 0.5681)]
 
 
+def test_confirm_keeps_throws_whose_apexes_coincide_at_different_heights():
+    """In ss531_id_005 a 5 and the 3 thrown after it peak 0.02 s apart, and
+    the hands are only 0.05 of the frame apart. Their heights differ, so
+    they are two flights."""
+    analyzer = RealtimeAnalyzer()
+    analyzer._confirm("throw", [_Event(2.4960, 0.5093, 4.2902, 0.1060, 0.5719)], horizon=2.567)
+    analyzer._confirm("throw", [_Event(3.3967, 0.5561, 4.2701, 0.5911, 0.0833)], horizon=3.467)
+    assert len(analyzer._confirmed["throw"]) == 2
+
+
+@pytest.mark.parametrize("period_s", [0.3, 0.45])
+def test_fast_cascade_counts_every_flight_once(period_s):
+    """Real-time juggling: at a 0.3 s period flights last 0.65 s and apexes
+    come 0.3 s apart. Matching a re-derived flight by its apex must not merge
+    two of them."""
+    r = simulate_cascade(n_throws=60, fps=30.0, params=CascadeParams(period_s=period_s), seed=1)
+    final = stream(r, RealtimeAnalyzer())[-1]
+    assert (final.catches_total, final.throws_total) == (len(r.catch_times), len(r.throw_times))
+    assert (final.runs_completed, final.drops_total) == (1, 0)
+
+
 def test_left_edge_guard_prevents_phantom_catches_from_truncated_refit():
     """T1: the left-edge guard (dd01055) was otherwise delete-proof -- no
     existing fixture failed with edge_pad=0 (verified: every parity test
