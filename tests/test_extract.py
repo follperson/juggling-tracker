@@ -247,6 +247,26 @@ def test_no_arc_takes_in_the_ball_sinking_with_the_hand_after_the_last_flight():
     assert arcs[-1].ay == pytest.approx(2.0, rel=0.02)
 
 
+def test_a_short_noisy_sink_in_slow_motion_stays_in_the_hand():
+    """In slow motion gravity bends a 0.3 s stretch by less than the noise,
+    so a ball that sinks with the hand for that long after its last catch
+    can fit the flights' gravity by chance (measured with this seed: ay
+    within the band). It is still a ball in a hand: the last flight's arc
+    must end at its catch and keep its gravity, not bend on into the sink.
+    Without the stretch-length check, turn3/analyze-ftv1/ss441_id_013 lost
+    a catch this way."""
+    dets, flights = _carried_ball(n_flights=5, flight_s=3.0, carry_s=0.3, ay=0.08, sink=True)
+    rng = np.random.default_rng(48)
+    dets = [
+        Detection(frame_idx=d.frame_idx, t=d.t, x=d.x + rng.normal(0, 0.005), y=d.y + rng.normal(0, 0.005))
+        for d in dets
+    ]
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights)
+    assert arcs[-1].t_end == pytest.approx(flights[-1][1], abs=0.1)
+    assert arcs[-1].ay == pytest.approx(0.08, rel=0.02)
+
+
 def test_a_ball_that_falls_on_after_the_last_flight_keeps_its_fall_as_an_arc():
     """A hand that touches the ball without catching it leaves it falling to
     the floor. That fall is no carry: it moves on a parabola with the
