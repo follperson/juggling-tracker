@@ -26,11 +26,12 @@ from juggletrack.analyze import AnalyzeConfig, _events_from_arcs, analyze_detect
 from juggletrack.events.catches import derive_events
 from juggletrack.types import Arc, Detection
 
-# window_s, window_s - edge_pad and RUN_CLOSE_DEBOUNCE_S are whole numbers of
-# frames at common frame rates, so a time lands exactly on a cut every frame.
-# Comparing with this margin, far below a frame interval and far above float
-# noise in the clock, keeps each tie rule stable: a detection on the cut stays,
-# an arc on the edge is not flagged, and a run is not closed at exactly 0.5 s.
+# window_s, window_s - edge_pad, freeze_s and RUN_CLOSE_DEBOUNCE_S are whole
+# numbers of frames at common frame rates, so a time lands exactly on a cut
+# every frame. Comparing with this margin, far below a frame interval and far
+# above float noise in the clock, keeps each tie rule stable: a detection on
+# the cut stays, an arc on the edge is not flagged, an arc ending on the
+# liveness horizon is not recent, and a run is not closed at exactly 0.5 s.
 _CLOCK_EPS_S = 1e-6
 
 
@@ -374,7 +375,7 @@ class RealtimeAnalyzer:
             live = strict_live
         else:
             recent_activity = any(
-                a.t_end > self._now - liveness_freeze
+                a.t_end > self._now - liveness_freeze + _CLOCK_EPS_S
                 for a in session.arcs if a.id in event_bearing_ids
             )
             live = strict_live or recent_activity
