@@ -165,6 +165,27 @@ def test_a_ball_tracked_through_its_carries_yields_one_arc_per_flight():
         assert arc.ay == pytest.approx(2.0, rel=0.05)
 
 
+def test_a_flight_whose_top_noise_hides_still_yields_an_arc():
+    """Detector noise can hide the curvature at a flight's top, and then the
+    flight does not grow from its apex. With noise of 0.008 and this seed,
+    that happens to the fourth flight (measured). The track still tops out
+    between the third and fifth flights, so the ball there is in the air,
+    not in a hand, and that flight must come out as an arc like the others.
+    Deleting such a stretch as a ball in a hand cut the catches matched on
+    simulated real-time 3-ball footage at this noise from 464 to 390 of 480."""
+    dets, flights = _carried_ball()
+    rng = np.random.default_rng(14)
+    dets = [
+        Detection(frame_idx=d.frame_idx, t=d.t, x=d.x + rng.normal(0, 0.008), y=d.y + rng.normal(0, 0.008))
+        for d in dets
+    ]
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights)
+    for (t_throw, t_catch), arc in zip(flights, arcs):
+        assert arc.t_start == pytest.approx(t_throw, abs=0.1)
+        assert arc.t_end == pytest.approx(t_catch, abs=0.1)
+
+
 def test_no_arc_takes_in_the_ball_sinking_with_the_hand_after_the_last_flight():
     """After its last catch the ball sinks with the hand, slower than it
     fell, and the track ends there. An arc fitted to that stretch alone has
