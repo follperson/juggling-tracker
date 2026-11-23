@@ -213,6 +213,25 @@ def test_run_with_two_drops_ends_at_the_first():
     assert runs[0].end_t == pytest.approx(4 * PERIOD + FLIGHT_S)
 
 
+def test_a_drop_ends_only_the_run_it_belongs_to():
+    """Two runs with a pause between them, and a drop in the second. A drop
+    belongs to the run whose arc it sits on, not to every run that started
+    before it, so the first run keeps its own end and its stop tag.
+    """
+    clean = simulate_cascade(n_throws=10, fps=FPS, seed=1)
+    dropped = simulate_cascade(n_throws=14, fps=FPS, seed=2, drop_at_throw=8)
+    shift = round((clean.run_end + 4.0) * FPS)
+    later = [
+        d.model_copy(update={"frame_idx": d.frame_idx + shift, "t": d.t + shift / FPS})
+        for d in dropped.detections
+    ]
+    sr = analyze_detections(clean.detections + later)
+
+    assert [r.end_reason for r in sr.runs] == ["stop", "drop"]
+    assert sr.runs[0].end_t == pytest.approx(clean.run_end, abs=0.1)
+    assert sr.runs[1].end_t == pytest.approx(dropped.missed_catch_t + shift / FPS, abs=0.1)
+
+
 @pytest.mark.parametrize(
     "kw, low_catch",
     [
