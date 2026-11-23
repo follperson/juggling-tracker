@@ -1,4 +1,5 @@
 import json
+import os
 import re
 
 import numpy as np
@@ -192,6 +193,62 @@ def test_unusable_out_fails_before_detection(workspace, monkeypatch, command):
     output = flat(result.output)
     assert result.exit_code == 2, output
     assert re.search(r"Invalid value for '?--out'?", output), output
+
+
+@pytest.mark.parametrize("case", ["bad-row", "missing-model", "other-video"])
+@pytest.mark.parametrize("command", ["analyze", "label", "live"])
+def test_rejected_command_leaves_no_out_directory(workspace, command, case):
+    from juggletrack.cli import app
+
+    sim, video, dets, tmp = workspace
+    if case == "bad-row":
+        bad = tmp / "bad.jsonl"
+        bad.write_text('{"frame_idx": 2, "t": 0.07, "x": 0.5, "y": 0.5}\n{"frame_idx": 3')
+        source = ["--detections", str(bad)]
+    elif case == "missing-model":
+        source = ["--model", str(tmp / "nope" / "best.pt")]
+    else:
+        longer = tmp / "longer.jsonl"
+        save_detections_jsonl(
+            [*sim.detections, Detection(frame_idx=10_000, t=333.3, x=0.5, y=0.5)], longer,
+        )
+        source = ["--detections", str(longer)]
+    out = tmp / "out" / "run"
+    args = [command, str(video), *source, "--out", str(out)]
+    if command == "live":
+        args.append("--no-display")
+    result = runner.invoke(app, args)
+    assert result.exit_code == 2, result.output
+    assert not (tmp / "out").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+@pytest.mark.parametrize("target", ["locked", "locked/run"])
+@pytest.mark.parametrize("command", ["analyze", "label", "live"])
+def test_out_in_a_read_only_directory_fails_before_detection(
+    workspace, monkeypatch, command, target,
+):
+    from juggletrack.cli import app
+
+    _, video, _, tmp = workspace
+    monkeypatch.setattr(
+        "juggletrack.detect.yolo.YOLODetector", lambda model_path, **kwargs: _NeverDetects(),
+    )
+    locked = tmp / "locked"
+    locked.mkdir()
+    locked.chmod(0o555)
+    try:
+        args = [command, str(video), "--model", "x.pt", "--out", str(tmp / target)]
+        if command == "live":
+            args.append("--no-display")
+        result = runner.invoke(app, args)
+        assert list(locked.iterdir()) == []
+    finally:
+        locked.chmod(0o755)
+    output = flat(result.output)
+    assert result.exit_code == 2, output
+    assert re.search(r"Invalid value for '?--out'?", output), output
+    assert "not writable" in output
 
 
 @pytest.mark.parametrize(("command", "help_text"), [
