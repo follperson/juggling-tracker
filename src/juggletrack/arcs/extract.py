@@ -156,28 +156,34 @@ def extract_arcs(
     gravities = [g for cut in cuts for g in cut.gravities]
     gravity = float(np.median(gravities)) if gravities else 0.0
 
-    seeds: list[list[int]] = []
-    in_hand: list[int] = []
-    for cut in cuts:
-        seeds.extend(cut.flights)
+    # (points, fragment, grown flight) per seed, and (point, fragment) per
+    # point that may be a ball in a hand
+    seeds: list[tuple[list[int], int, bool]] = []
+    held: list[tuple[int, int]] = []
+    for k, cut in enumerate(cuts):
+        seeds.extend((flight, k, True) for flight in cut.flights)
         if _keeps_falling(arr[cut.after], gravity, resid_tol):
-            seeds.append(cut.after)
+            seeds.append((cut.after, k, False))
         else:
-            in_hand.extend(cut.after)
-        seeds.extend(cut.pieces)
-        in_hand.extend(cut.in_hand)
+            held.extend((i, k) for i in cut.after)
+        seeds.extend((piece, k, False) for piece in cut.pieces)
+        held.extend((i, k) for i in cut.in_hand)
 
     arcs: list[Arc] = []
-    for idxs in seeds:
+    flights: list[tuple[Arc, int]] = []
+    for idxs, k, grown in seeds:
         if len(idxs) < 4:
             continue
         try:
-            arcs.append(fit_arc(arr[idxs]))
+            arc = fit_arc(arr[idxs])
         except ValueError:
             continue  # degenerate seed (e.g. all-same-timestamp cluster)
+        arcs.append(arc)
+        if grown:
+            flights.append((arc, k))
 
-    if in_hand:
-        arr = np.delete(arr, in_hand, axis=0)
+    if held:
+        arr = np.delete(arr, _in_hand(arr, held, flights, resid_tol), axis=0)
     for _ in range(em_iters):
         arcs = _em_assign_refit(arr, arcs, resid_tol)
         arcs = _merge_pass(arr, arcs, resid_tol)
@@ -367,9 +373,10 @@ def _seed_pieces(arr: np.ndarray, idxs: list[int], resid_tol: float) -> _Cut:
     and so are the points after the last flight while the ball sinks with
     the hand (`_sink_end`). No arc may be fitted to them: an arc that takes
     them in bends toward the hand, fits a gravity that is too low, and
-    crosses the hand line late. A ball that falls on after its last flight
-    is no carry, and `extract_arcs` tells it apart (`_keeps_falling`), since
-    it needs every fragment's flights to know the gravity.
+    crosses the hand line late. Two kinds are no carry, and `extract_arcs`
+    tells them apart because it needs every fragment's flights to do so: a
+    ball that falls on after its last flight (`_keeps_falling`), and a point
+    the linker took from another ball (`_in_hand`).
     """
     rows = arr[idxs].tolist()
     ys = [row[2] for row in rows]
@@ -442,6 +449,36 @@ def _keeps_falling(pts: np.ndarray, gravity: float, resid_tol: float) -> bool:
         and y_rmse <= resid_tol
         and float(np.abs(x_res).max()) <= 2 * resid_tol
     )
+
+
+def _in_hand(
+    arr: np.ndarray, held: list[tuple[int, int]], flights: list[tuple[Arc, int]],
+    resid_tol: float,
+) -> list[int]:
+    """The points of ``held`` that stay out of EM as a ball in a hand.
+
+    ``held`` pairs each point that may be in a hand with its fragment, and
+    ``flights`` pairs each grown flight's arc with its own. The linker
+    sometimes hands a ball's detection to another ball's fragment, where it
+    sits after a flight like a point in a hand. A flight grown in another
+    fragment that explains the point by EM's own test (within
+    ``2 * resid_tol``, up to `_EM_TIME_MARGIN` past its ends) shows whose
+    point it is, and EM may give it to that flight's arc. Only a grown
+    flight counts: a `_split_ballistic` piece can be a duplicate box's track
+    of the same ball through the same carry."""
+    held = sorted(held)
+    idx = np.array([i for i, _ in held])
+    frag = np.array([k for _, k in held])
+    pts = arr[idx]
+    other = np.zeros(len(idx), dtype=bool)
+    for arc, k in flights:
+        lo = np.searchsorted(pts[:, 0], arc.t_start - _EM_TIME_MARGIN, side="left")
+        hi = np.searchsorted(pts[:, 0], arc.t_end + _EM_TIME_MARGIN, side="right")
+        if lo < hi:
+            win = pts[lo:hi]
+            fits = np.maximum(y_residuals(arc, win), x_residuals(arc, win)) < 2 * resid_tol
+            other[lo:hi] |= fits & (frag[lo:hi] != k)
+    return idx[~other].tolist()
 
 
 def _sink_end(ys: list[float], landing: int, swing: float) -> int:
