@@ -359,12 +359,20 @@ def test_the_offset_is_the_median_of_catch_minus_landing(cascade):
     late, early = score_catches(ref, at_landings(0.05)), score_catches(ref, at_landings(-0.05))
     mostly_late = score_catches(ref, at_landings(0.05, 0.05, -0.08))
     nothing = score_catches(ref, [_catch(th, late=0.15) for th in throws])
+    doubled = score_catches(ref, sorted(
+        (CatchEvent(t=f.landing_t + late_by, x=f.landing_x, arc_id=0)
+         for f in ref.flights for late_by in (0.05, 0.09)),
+        key=lambda c: c.t,
+    ))
 
     assert late.matched == early.matched == mostly_late.matched == 18
     assert late.offset_s == pytest.approx(0.05)
     assert early.offset_s == pytest.approx(-0.05)
     assert mostly_late.offset_s == pytest.approx(0.05)
     assert nothing.matched == 0 and nothing.offset_s is None
+    # A second catch on a flight is a duplicate and stays out of the median.
+    assert (doubled.matched, doubled.duplicates) == (18, 18)
+    assert doubled.offset_s == pytest.approx(0.05)
 
 
 def test_two_landings_close_together_each_keep_their_own_catch():
