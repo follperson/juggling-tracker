@@ -165,6 +165,21 @@ def test_compare_fails_on_any_difference(offline, realtime, line, tmp_path):
     assert "PARITY FAILED (1)" in proc.stdout
 
 
+@pytest.mark.parametrize("base_offline, new_offline", [
+    ({}, {}),
+    ({"s": _OFFLINE_ROW}, {"t": _OFFLINE_ROW}),
+], ids=["both-empty", "disjoint"])
+def test_compare_fails_when_the_snapshots_share_no_session(base_offline, new_offline, tmp_path):
+    base = _snapshot_file(tmp_path / "base.json", "a" * 64, offline=base_offline)
+    new = _snapshot_file(tmp_path / "new.json", "b" * 64, offline=new_offline)
+
+    proc = _parity("compare", base, new)
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "PARITY OK" not in proc.stdout
+    assert "nothing was compared" in proc.stderr
+
+
 def _load_script():
     spec = importlib.util.spec_from_file_location("event_core_parity", _SCRIPT)
     module = importlib.util.module_from_spec(spec)
