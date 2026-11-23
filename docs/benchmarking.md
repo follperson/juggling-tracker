@@ -203,6 +203,21 @@ see each kind of error. It deletes every tenth catch, doubles every tenth
 catch, and moves every catch 2 s later. The faults must appear as `missed`,
 `duplicates` and `unmatched`.
 
+`--live` scores live mode instead of offline analysis:
+
+```bash
+uv run --no-sync python scripts/flight_score.py live-score.json --live
+```
+
+It replays each clip frame by frame through `RealtimeAnalyzer` on the clock
+recorded with the detections, the same replay that the
+[event-core parity](#event-core-parity) check uses, and scores the catches
+that live mode confirmed. The catch columns mean the same as offline. In live
+mode `duplicates` counts a flight confirmed again by a later analysis cycle.
+Each row also has live mode's final `runs` and `drops`, and its `throws` next
+to `flights_found`, the number of flights the reference found, caught or not.
+A replay cuts new arcs every cycle, so live rows have no `explained` column.
+
 On 2026-11-22 the default root gave 1,485 flights and 1,041 catches over 22
 clips, with 1,016 flights matched. Six clips were trusted, with 501 flights
 and 344 matched. On `ss3_id_016` the labels show 177 flights, the extractor
@@ -259,8 +274,8 @@ Limits:
   the `ss441` clips, so the reference does not use one.
 - The saved detections must be on the `frame_idx / fps` clock that the labels
   use. The script stops when they are not.
-- The check scores offline analysis only. It needs per-ball labels, which only
-  the Meschke clips have.
+- The check needs per-ball labels, which only the Meschke clips have, so it
+  cannot score live mode on real-time footage.
 
 ## Detector center benchmark
 
