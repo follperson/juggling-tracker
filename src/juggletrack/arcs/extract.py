@@ -6,6 +6,7 @@ switches upstream cannot corrupt results (spec section 4).
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
 
 import numpy as np
 
@@ -279,10 +280,9 @@ class _Moments:
         s[3] += p
         s[4] += p * dt
 
-    def fit_residuals(self, pts: np.ndarray) -> tuple[float, np.ndarray] | None:
-        """Least-squares parabola y(dt) and line x(dt) from the sums, evaluated
-        on ``pts`` (the summed points): the weighted y-rmse as fit_arc defines
-        it and the signed x residuals, or None when the system is too
+    def solve(self) -> tuple[float, float, float, float, float] | None:
+        """Coefficients (ay, by, cy, bx, cx) of the least-squares parabola
+        y(dt) and line x(dt) from the sums, or None when the system is too
         ill-conditioned. The x system is the y system's leading 2x2 block, so
         by Fischer's inequality passing the y check also clears the x one."""
         s0, s1, s2, s3, s4 = self.s
@@ -301,10 +301,19 @@ class _Moments:
         cy = (c13 * r2 + c23 * r1 + c33 * r0) / det
         bx = (s0 * self.sx[1] - s1 * self.sx[0]) / c11
         cx = (s2 * self.sx[0] - s1 * self.sx[1]) / c11
+        return ay, by, cy, bx, cx
 
+    def fit_residuals(self, pts: np.ndarray) -> tuple[float, np.ndarray] | None:
+        """The fit of ``solve`` evaluated on ``pts`` (the summed points): the
+        weighted y-rmse as fit_arc defines it and the signed x residuals, or
+        None when ``solve`` gives no fit."""
+        fit = self.solve()
+        if fit is None:
+            return None
+        ay, by, cy, bx, cx = fit
         dt = pts[:, 0] - self.t0
         ry = ((ay * dt + by) * dt + cy - pts[:, 2]) * pts[:, 3]
-        return math.sqrt(float(ry @ ry) / s0), bx * dt + cx - pts[:, 1]
+        return math.sqrt(float(ry @ ry) / self.s[0]), bx * dt + cx - pts[:, 1]
 
 
 def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list[list[int]]:
@@ -334,7 +343,14 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
     the y-rmse, since no parabola beats the least-squares minimum; the x side
     relies on the well-conditioned 2x2 solve plus the margin.
     """
-    pieces: list[list[int]] = []
+    return [piece for piece in _ballistic_pieces(arr, idxs, resid_tol) if len(piece) >= 4]
+
+
+def _ballistic_pieces(
+    arr: np.ndarray, idxs: list[int], resid_tol: float,
+) -> Iterator[list[int]]:
+    """`_split_ballistic`'s pieces in order, each as soon as it is cut. Every
+    point of ``idxs`` is in exactly one, so some are shorter than four."""
     cur: list[int] = []
     rows = arr[idxs]
     margin = _exact_margin(rows)
@@ -355,13 +371,12 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
             # Known gap: some crossing-ball fusions are invisible to both curvature
             # and the incremental x-line check here; next locus would be _link_fragments.
             if arc.rmse > resid_tol or x_bad:
-                pieces.append(cur[:-1])
+                yield cur[:-1]
                 cur = [i]
                 mom = _Moments(row[0])
                 mom.add(*row)
-    if len(cur) >= 4:
-        pieces.append(cur)
-    return [p for p in pieces if len(p) >= 4]
+    if cur:
+        yield cur
 
 
 def _em_assign_refit(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]:
