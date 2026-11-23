@@ -449,7 +449,7 @@ class RealtimeAnalyzer:
         # separate, out-of-scope mechanism this snapshot fix does not reach.
         prior = list(known)
         for et in sorted(times):
-            if et > horizon:
+            if et > horizon + _CLOCK_EPS_S:
                 continue
             if any(abs(et - k) <= self.cfg.event_match_tol for k in prior):
                 continue
