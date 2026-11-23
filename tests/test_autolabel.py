@@ -51,6 +51,26 @@ def test_select_autolabels_keeps_one_label_per_arc_per_frame():
     assert sum(per_frame) >= 25
 
 
+
+def test_select_autolabels_keeps_the_detection_closest_to_its_arc():
+    # Each frame has a stray box 0.015 below the ball, listed first. Both fit
+    # the arc, and the label must be the box that lies on it.
+    fps, g = 30.0, 1.2
+    on_arc, dets = [], []
+    for i in range(30):
+        t = i / fps
+        x, y = 0.3 + 0.2 * t, 0.8 - 1.0 * t + 0.5 * g * t * t
+        ball = Detection(frame_idx=i, t=t, x=x, y=y, w=0.03, h=0.03, confidence=0.5)
+        on_arc.append(ball)
+        dets += [ball.model_copy(update={"y": y + 0.015}), ball]
+    arcs = extract_arcs(on_arc)
+    assert len(arcs) == 1
+
+    labels, _ = select_autolabels(dets, arcs)
+
+    assert len(labels) == 30
+    assert {(lb.frame_idx, lb.y) for lb in labels} == {(d.frame_idx, d.y) for d in on_arc}
+
 def test_export_writes_coco_and_frames(tmp_path, sim_with_junk):
     r, dets = sim_with_junk
     arcs = extract_arcs(dets)

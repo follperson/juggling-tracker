@@ -170,3 +170,12 @@ def test_adding_a_source_moves_at_most_one_other(tmp_path):
         more = sources + [make_coco_source(tmp_path, f"s{extra:02d}", 1)]
         b = _split_of(assemble_dataset(more, tmp_path / f"b{extra}", seed=0))
         assert sum(a[k] != b[k] for k in a) <= 1
+
+
+def test_seed_chooses_the_validation_recordings(tmp_path):
+    sources = [make_coco_source(tmp_path, f"s{i:02d}", 1) for i in range(10)]
+    val_sets = {
+        tuple(assemble_dataset(sources, tmp_path / f"ds{seed}", seed=seed)["val_sources"])
+        for seed in range(6)
+    }
+    assert len(val_sets) > 1

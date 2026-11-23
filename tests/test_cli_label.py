@@ -2,6 +2,7 @@ import json
 from collections import Counter
 
 import numpy as np
+import pytest
 from typer.testing import CliRunner
 
 from juggletrack.pipeline.offline import save_detections_jsonl
@@ -150,3 +151,38 @@ def test_label_never_exports_a_labelled_frame_as_a_negative(tmp_path, monkeypatc
                  for im in json.loads((neg / "annotations.json").read_text())["images"]}
     assert negatives
     assert labelled & negatives == set()
+
+
+def test_label_merges_a_detectors_duplicate_boxes_into_one(tmp_path):
+    # Every ball also gets a weaker, wider echo box 0.008 to its right, inside
+    # the clustering radius. `label` merges the two into one box weighted by
+    # confidence before it looks for arcs, as `analyze` does: width
+    # (0.9 * 0.03 + 0.3 * 0.05) / 1.2 = 0.035 of the frame.
+    from juggletrack.cli import app
+
+    sim = simulate_cascade(n_throws=12, fps=30.0, seed=1)
+    dets = []
+    for d in sim.detections:
+        dets.append(d.model_copy(update={"w": 0.03, "h": 0.03, "confidence": 0.9}))
+        dets.append(d.model_copy(update={"x": d.x + 0.008, "w": 0.05, "h": 0.05,
+                                         "confidence": 0.3}))
+    n_frames = max(d.frame_idx for d in dets) + 1
+    video = tmp_path / "cascade.mp4"
+    write_test_video(video, n_frames=n_frames, fps=30.0)
+    det_path = tmp_path / "dets.jsonl"
+    save_detections_jsonl(dets, det_path)
+    out = tmp_path / "labels_out"
+
+    result = runner.invoke(app, [
+        "label", str(video), "--out", str(out), "--detections", str(det_path),
+    ])
+
+    assert result.exit_code == 0, result.output
+    coco = json.loads((out / "annotations.json").read_text())
+    w_px, h_px = coco["images"][0]["width"], coco["images"][0]["height"]
+    inside = [a["bbox"] for a in coco["annotations"]
+              if a["bbox"][0] > 0 and a["bbox"][1] > 0
+              and a["bbox"][0] + a["bbox"][2] < w_px and a["bbox"][1] + a["bbox"][3] < h_px]
+    assert len(inside) >= 0.9 * len(sim.detections)
+    assert all(bw == pytest.approx(0.035 * w_px) and bh == pytest.approx(0.035 * h_px)
+               for _, _, bw, bh in inside)
