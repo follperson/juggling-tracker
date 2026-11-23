@@ -1,3 +1,4 @@
+import math
 import sys
 import subprocess
 from collections import defaultdict
@@ -865,3 +866,36 @@ def test_duplicate_injection_inherits_clustering_via_analyze_detections():
         "pinned clean baseline for this fixture; revisit if sim.py changes"
     )
     assert abs(dirty_final.catches_total - clean_final.catches_total) <= 1
+
+
+def _states_on_clock(r, fps, nudge):
+    by = defaultdict(list)
+    for d in r.detections:
+        by[d.frame_idx].append(d)
+    analyzer = RealtimeAnalyzer()
+    states = []
+    for i in range(max(by) + 1):
+        now = i / fps
+        if nudge:
+            now = math.nextafter(now, math.inf)
+        states.append(analyzer.feed(by.get(i, []), now))
+    states.append(analyzer.finalize())
+    return [s.model_dump(exclude={"t", "last_analysis_ms"}) for s in states]
+
+
+@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
+@pytest.mark.parametrize("fps, seed", [(30.0, 3), (25.0, 0)])
+def test_state_does_not_depend_on_float_noise_in_clock(fps, seed):
+    """At 25 and 30 fps the 8.0 s window and its 7.5 s left-edge pad are whole
+    numbers of frames, so on every frame one detection sits exactly on a cut.
+    Moving `now` up by one float step must not change what the analyzer
+    reports, or live counts depend on the container and decoder."""
+    r = simulate_cascade(n_throws=60, fps=fps, noise=0.015, dropout=0.15, seed=seed)
+    exact = _states_on_clock(r, fps, nudge=False)
+    nudged = _states_on_clock(r, fps, nudge=True)
+    differing = [i for i, (a, b) in enumerate(zip(exact, nudged)) if a != b]
+    assert not differing, (
+        f"{len(differing)}/{len(exact)} frame states change with a 1-ulp clock nudge; "
+        f"first at frame {differing[0]}: final exact {exact[-1]['catches_total']} catches "
+        f"vs nudged {nudged[-1]['catches_total']}"
+    )
