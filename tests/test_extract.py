@@ -5,6 +5,7 @@ from juggletrack.arcs import extract
 from juggletrack.arcs.extract import (
     _EM_TIME_MARGIN,
     _em_assign_refit,
+    _grow_flight,
     _link_fragments,
     _merge_pass,
     _Moments,
@@ -166,6 +167,35 @@ def test_a_ball_tracked_through_its_carries_yields_one_arc_per_flight():
         assert arc.ay == pytest.approx(2.0, rel=0.05)
 
 
+def test_a_flight_stops_growing_where_the_ball_leaves_its_x_line():
+    """A flight grows only onto points that lie on its parabola in y and
+    within 2 * resid_tol of its x line. After this flight the track stays on
+    the parabola in y but moves 0.05 to 0.07 off the x line, as a hand that
+    pulls the ball sideways or another ball would. Growth must stop at the
+    catch and keep the flight. A flight that took those points in would fail
+    the check that every x lies near one line, and be lost."""
+    rows = [[f / 30, 0.35 + 0.5 * f / 30, 0.7 - 1.2 * f / 30 + 2.0 * (f / 30) ** 2, 1.0] for f in range(19)]
+    for f, dx in zip(range(19, 22), (0.05, 0.06, 0.07)):
+        t = f / 30
+        rows.append([t, 0.35 + 0.5 * t - dx, 0.7 - 1.2 * t + 2.0 * t * t, 1.0])
+    grown = _grow_flight(rows, apex=9, free=0, swing=0.04, resid_tol=0.02)
+    assert grown is not None
+    lo, hi, ay = grown
+    assert (lo, hi) == (0, 18)
+    assert ay == pytest.approx(2.0)
+
+
+def test_a_top_seen_on_fewer_than_four_points_does_not_grow():
+    """A flight starts from the points within 2 * resid_tol of its apex
+    height, and needs at least four of them to show its curvature above the
+    noise. A ball at rest whose track jumps up for three frames, 0.035, 0.05
+    and 0.035 above where it rests, tops out on three such points and is
+    no flight."""
+    lift = {10: 0.035, 11: 0.05, 12: 0.035}
+    rows = [[f / 30, 0.5, 0.6 - lift.get(f, 0.0), 1.0] for f in range(24)]
+    assert _grow_flight(rows, apex=11, free=0, swing=0.04, resid_tol=0.02) is None
+
+
 def test_a_fragment_the_shipped_split_cuts_at_the_hands_keeps_that_split():
     """Apex seeding replaces the left-to-right split only in a fragment where
     one of its pieces ends inside a flight. Here the ball turns at each hand
@@ -234,18 +264,22 @@ def test_a_ball_that_falls_on_after_the_last_flight_keeps_its_fall_as_an_arc():
     assert fall.ay == pytest.approx(2.0, rel=0.02)
 
 
-def test_a_point_the_linker_gives_to_another_ball_stays_with_its_own_flight():
+@pytest.mark.parametrize("x_off", [0.0, 0.03])
+def test_a_point_the_linker_gives_to_another_ball_stays_with_its_own_flight(x_off):
     """Ball B lands and leaves the view. Ball A is thrown 0.1 s later near
     where B's track was heading, so the linker hands A's first detection to
     B's fragment, where it follows B's last flight like the ball in a hand.
     A is missed once more, and the rest of its track is a fragment of its
     own. That first detection lies on A's flight and must stay on A's arc
     (measured on plan2-validation/af2 at 22.997 s, where losing it shortened
-    the arc until dedup_parallel_arcs took it for a duplicate)."""
+    the arc until dedup_parallel_arcs took it for a duplicate). It stays
+    when the box sits off A's x line by more than resid_tol but within
+    EM's 2 * resid_tol: on af2 it sat 0.026 off."""
     ball_b, _ = _carried_ball(n_flights=3)
     ball_b = [d for d in ball_b if d.t <= 2.4 + 1e-9]
     ball_a, flights_a = _carried_ball(n_flights=3, hand_y=0.76, sides=(0.68, 0.38), t0=2.5)
     ball_a = [d for d in ball_a if abs(d.t - (2.5 + 1 / 30)) > 1e-9]
+    ball_a = [d.model_copy(update={"x": d.x + x_off}) if abs(d.t - 2.5) < 1e-9 else d for d in ball_a]
     pts = _sorted_points(ball_a + ball_b)
     owner = {i: k for k, frag in enumerate(_link_fragments(pts, 0.18, 0.08)) for i in frag}
     at = {round(float(t), 4): i for i, t in enumerate(pts[:, 0])}
