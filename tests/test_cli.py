@@ -568,22 +568,53 @@ def test_out_of_range_detector_options_are_usage_errors(
     assert re.search(rf"Invalid value for '?{option}'?", output), output
 
 
-def test_analyze_warns_when_the_video_ends_early(workspace, monkeypatch):
+@pytest.mark.parametrize("args", [
+    ["analyze", "--model", "x.pt", "--no-overlay", "--out"],
+    ["label", "--model", "x.pt", "--out"],
+    ["label", "--detector", "motion", "--out"],
+    ["coverage", "--model", "x.pt"],
+], ids=["analyze", "label", "label-motion", "coverage"])
+def test_decoding_commands_warn_once_when_the_video_ends_early(workspace, monkeypatch, args):
     from juggletrack.cli import app
     from tests.test_pipeline_offline import decode_only_first
 
     sim, video, _, tmp = workspace
     _replay_as_yolo(monkeypatch, sim.detections)
-    args = ["analyze", str(video), "--model", "x.pt", "--no-overlay"]
-    full = runner.invoke(app, [*args, "--out", str(tmp / "full")])
+
+    def invoke(name):
+        command, *options = args
+        out = [str(tmp / name)] if options[-1] == "--out" else []
+        return runner.invoke(app, [command, str(video), *options, *out])
+
+    full = invoke("full")
     assert full.exit_code == 0, full.output
     assert "warning" not in full.stderr
 
     decode_only_first(monkeypatch, 100)
-    cut = runner.invoke(app, [*args, "--out", str(tmp / "cut")])
+    cut = invoke("cut")
     assert cut.exit_code == 0, cut.output
-    assert "warning: only decoded 100/197 frames" in cut.stderr
-    assert cut.stdout.splitlines()[-1].startswith("1 run(s)")
+    warning = (
+        f"warning: decoded 100 of the 197 frames the header of {video} reports; "
+        "the file may be cut short or its header may be stale"
+    )
+    assert cut.stderr.splitlines().count(warning) == 1, cut.stderr
+    assert "warning" not in cut.stderr.replace(warning, "")
+    if args[0] == "coverage":
+        assert "over 100 sampled frames" in cut.stdout
+    if args[0] == "analyze":
+        assert cut.stdout.splitlines()[-1].startswith("1 run(s)")
+
+
+def test_coverage_replay_keeps_the_header_count_and_does_not_warn(workspace, monkeypatch):
+    from juggletrack.cli import app
+    from tests.test_pipeline_offline import decode_only_first
+
+    _, video, dets, _ = workspace
+    decode_only_first(monkeypatch, 100)
+    result = runner.invoke(app, ["coverage", str(video), "--detections", str(dets)])
+    assert result.exit_code == 0, result.output
+    assert "over 197 sampled frames" in result.stdout
+    assert "warning" not in result.stderr
 
 
 @pytest.mark.parametrize("replay", [False, True])
