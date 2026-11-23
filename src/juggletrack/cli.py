@@ -219,7 +219,8 @@ def label(
     negatives: Path | None = typer.Option(
         None,
         help="Also mine arc-rejected junk detections into zero-box hard-negative "
-        "images (COCO, same dets/arcs, no extra detection pass) at this dir",
+        "images (COCO, same detections, no extra detection pass) at this dir; "
+        "a frame that got a label is never a negative",
     ),
     neg_person_model: str = typer.Option(
         "yolo11n.pt",
@@ -280,6 +281,7 @@ def label(
         neg_stats = export_hard_negatives(
             video, dets, extract_arcs(dets, link_max_dist=link_max_dist), negatives,
             person_model=None if neg_person_model.lower() == "none" else neg_person_model,
+            labelled_frames={lb.frame_idx for lb in labels},
         )
         typer.echo(
             f"negatives: {neg_stats['n_images']} images "

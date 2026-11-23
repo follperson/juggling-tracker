@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import statistics
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 import cv2
@@ -312,6 +313,7 @@ def export_hard_negatives(
     person_boxes: dict[int, list[tuple[float, float, float, float]]] | None = None,
     person_model: str | None = None,
     person_dilate_frames: int = 5,
+    labelled_frames: AbstractSet[int] = frozenset(),
 ) -> dict:
     """Mine arc-rejected detections into zero-box negative training images.
 
@@ -339,7 +341,10 @@ def export_hard_negatives(
     2. Frame time within `pad` s of any arc's [t_start, t_end] ->
        `n_skipped_active`. HELD balls are arc-unassigned by design (no
        parabola in a hand) and exist around flights, so near-activity
-       frames can't be trusted at all.
+       frames can't be trusted at all. A frame in `labelled_frames` (it
+       got a ball label in this run) counts here too; it is checked only
+       once a frame has passed gates 3-4 and `min_junk`, so the other
+       frames come out exactly as they would without it.
     3. Any detection outside every trusted static cluster ->
        `n_skipped_transient`. Rejects MOVING unassigned objects: real
        flights the linker failed to stitch (turn-4: a ball crossing the
@@ -436,8 +441,12 @@ def export_hard_negatives(
             if any(d.y > floor_band_y for d in frame_dets):
                 n_skipped_floor += 1
                 continue
-            if len(frame_dets) >= min_junk:
-                candidates[frame_idx] = frame_dets
+            if len(frame_dets) < min_junk:
+                continue
+            if frame_idx in labelled_frames:
+                n_skipped_active += 1
+                continue
+            candidates[frame_idx] = frame_dets
 
         dilate = range(-person_dilate_frames, person_dilate_frames + 1)
         if person_model is not None and person_boxes is None:
