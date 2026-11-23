@@ -17,7 +17,7 @@ from juggletrack.types import Detection, SessionResult
 from juggletrack.video.reader import VideoInfo, VideoReader
 
 
-def _detect_frames(
+def detect_frames(
     reader: VideoReader, detector: BallDetector, stride: int
 ) -> tuple[list[Detection], int]:
     """Return the detections and the number of frames decoded."""
@@ -36,7 +36,7 @@ def _detect_frames(
 def detect_video(
     reader: VideoReader, detector: BallDetector, *, stride: int = 1
 ) -> list[Detection]:
-    return _detect_frames(reader, detector, stride)[0]
+    return detect_frames(reader, detector, stride)[0]
 
 
 def save_detections_jsonl(dets: list[Detection], path: str | Path) -> None:
@@ -114,7 +114,7 @@ def run_offline(
                 (d for d in source if d.frame_idx % stride == 0), key=lambda d: d.frame_idx
             )
         else:
-            dets, frames_decoded = _detect_frames(reader, source, stride)
+            dets, frames_decoded = detect_frames(reader, source, stride)
 
     session = analyze_detections(dets, config)
     session.meta.update(

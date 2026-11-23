@@ -67,6 +67,33 @@ def _load_replay(detections: Path, video: Path | str) -> list[Detection]:
     return dets
 
 
+def _warn_if_short(video: Path, decoded: int, frame_count: int) -> None:
+    if decoded < 0.9 * frame_count:
+        typer.echo(
+            f"warning: decoded {decoded} of the {frame_count} frames the header of {video} "
+            "reports; the file may be cut short or its header may be stale",
+            err=True,
+        )
+
+
+def _detect(video: Path, detector, stride: int) -> tuple[list[Detection], int]:
+    """Return the detections and the number of frames decoded, warning on a short read."""
+    from juggletrack.pipeline.offline import detect_frames
+    from juggletrack.video.reader import VideoReader
+
+    with VideoReader(video) as reader:
+        dets, decoded = detect_frames(reader, detector, stride)
+        frame_count = reader.info.frame_count
+    _warn_if_short(video, decoded, frame_count)
+    return dets, decoded
+
+
+def _yolo_detector(model, conf, imgsz, device):
+    from juggletrack.detect.yolo import YOLODetector
+
+    return YOLODetector(model_path=_resolve_model(model), conf=conf, imgsz=imgsz, device=device)
+
+
 def _make_out_dir(out: Path) -> Path:
     try:
         out.mkdir(parents=True, exist_ok=True)
@@ -138,13 +165,8 @@ def analyze(
         out_dir=out_dir, save_intermediates=save_intermediates, stride=stride,
         config=config,
     )
-    decoded = session.meta.get("frames_decoded", info.frame_count)
-    if decoded < 0.9 * info.frame_count:
-        typer.echo(
-            f"warning: only decoded {decoded}/{info.frame_count} frames from {video}; "
-            "the video may be truncated",
-            err=True,
-        )
+    if "frames_decoded" in session.meta:
+        _warn_if_short(video, session.meta["frames_decoded"], info.frame_count)
 
     if overlay:
         from juggletrack.pipeline.overlay import render_overlay
@@ -232,16 +254,9 @@ def benchmark(
 
 
 def _get_detections(video, detections, model, conf, imgsz, stride, device):
-    from juggletrack.pipeline.offline import detect_video
-    from juggletrack.video.reader import VideoReader
-
     if detections is not None:
         return _load_replay(detections, video)
-    from juggletrack.detect.yolo import YOLODetector
-
-    det = YOLODetector(model_path=_resolve_model(model), conf=conf, imgsz=imgsz, device=device)
-    with VideoReader(video) as reader:
-        return detect_video(reader, det, stride=stride)
+    return _detect(video, _yolo_detector(model, conf, imgsz, device), stride)[0]
 
 
 @app.command()
@@ -306,11 +321,8 @@ def label(
             dets = _load_replay(detections, video)
         else:
             from juggletrack.detect.motion import MotionDetector
-            from juggletrack.pipeline.offline import detect_video
-            from juggletrack.video.reader import VideoReader
 
-            with VideoReader(video) as reader:
-                dets = detect_video(reader, MotionDetector(), stride=stride)
+            dets = _detect(video, MotionDetector(), stride)[0]
     else:
         dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
     arcs = extract_arcs(dets, link_max_dist=link_max_dist)
@@ -361,7 +373,12 @@ def coverage(
 
     from juggletrack.video.reader import VideoReader
 
-    dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
+    if detections is not None:
+        dets = _load_replay(detections, video)
+        with VideoReader(video) as reader:
+            n_frames = reader.info.frame_count
+    else:
+        dets, n_frames = _detect(video, _yolo_detector(model, conf, imgsz, device), stride)
     off_grid = next((d.frame_idx for d in dets if d.frame_idx % stride), None)
     if off_grid is not None:
         raise typer.BadParameter(
@@ -369,8 +386,7 @@ def coverage(
             "pass the stride the detections were made with",
             param_hint="--stride",
         )
-    with VideoReader(video) as reader:
-        n_sampled = math.ceil(reader.info.frame_count / stride)
+    n_sampled = math.ceil(n_frames / stride)
     per_frame = Counter(d.frame_idx for d in dets)
     cov = {
         k: sum(1 for v in per_frame.values() if v >= k) / n_sampled if n_sampled else 0.0
