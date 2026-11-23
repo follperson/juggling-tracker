@@ -186,3 +186,45 @@ def test_label_merges_a_detectors_duplicate_boxes_into_one(tmp_path):
     assert len(inside) >= 0.9 * len(sim.detections)
     assert all(bw == pytest.approx(0.035 * w_px) and bh == pytest.approx(0.035 * h_px)
                for _, _, bw, bh in inside)
+
+
+def _label_cascade_with_junk(tmp_path, *extra_args):
+    tmp_path.mkdir()
+    # The cascade's balls move 0.01 to 0.03 per frame; a linking distance of
+    # 0.0005 cannot join any two of them into a flight.
+    from juggletrack.cli import app
+    from juggletrack.types import Detection
+
+    fps = 30.0
+    sim = simulate_cascade(n_throws=12, fps=fps, seed=1)
+    n_frames = max(d.frame_idx for d in sim.detections) + 1 + int(3 * fps)
+    junk = [Detection(frame_idx=f, t=f / fps, x=x, y=0.1, w=0.03, h=0.03, confidence=c)
+            for f in range(n_frames) for x, c in ((0.9, 0.3), (0.907, 0.2))]
+    video = tmp_path / "cascade.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+    det_path = tmp_path / "dets.jsonl"
+    save_detections_jsonl(sorted(sim.detections + junk, key=lambda d: d.frame_idx), det_path)
+    labels_out, neg = tmp_path / "labels_out", tmp_path / "neg"
+    result = runner.invoke(app, [
+        "label", str(video), "--out", str(labels_out), "--detections", str(det_path),
+        "--negatives", str(neg), "--neg-person-model", "none", *extra_args,
+    ])
+    assert result.exit_code == 0, result.output
+    boxes = len(json.loads((labels_out / "annotations.json").read_text())["annotations"])
+    return boxes, result.output
+
+
+def test_label_link_max_dist_limits_the_flights_that_become_labels(tmp_path):
+    boxes, _ = _label_cascade_with_junk(tmp_path / "default")
+    assert boxes > 0
+    boxes, _ = _label_cascade_with_junk(tmp_path / "tight", "--link-max-dist", "0.0005")
+    assert boxes == 0
+
+
+def test_label_link_max_dist_limits_the_flights_that_screen_negatives(tmp_path):
+    _, output = _label_cascade_with_junk(tmp_path / "default")
+    assert "negatives: 40 images" in output
+    assert "skipped no-arcs" not in output
+    _, output = _label_cascade_with_junk(tmp_path / "tight", "--link-max-dist", "0.0005")
+    assert "negatives: 0 images" in output
+    assert "skipped no-arcs" in output

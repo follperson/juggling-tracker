@@ -154,6 +154,27 @@ def test_export_skips_boxes_that_lie_wholly_outside_the_frame(tmp_path):
     assert [a["bbox"] for a in coco["annotations"]] == [pytest.approx([144.0, 96.0, 32.0, 48.0])]
     assert stats["n_images"] == 1 and stats["n_boxes"] == 1
 
+
+def test_export_skips_boxes_that_touch_the_frame_edge_without_overlapping_it(tmp_path):
+    # A box whose own edge lies exactly on a frame edge clips to zero width or
+    # height. It is not exported, and a frame holding only such boxes is not
+    # exported either.
+    w, h = 320, 240
+    inside = Detection(frame_idx=0, t=0.0, x=0.5, y=0.5, w=0.125, h=0.25)
+    touching = [
+        Detection(frame_idx=f, t=0.0, x=x, y=y, w=0.125, h=0.25)
+        for f in (0, 1) for x, y in ((1.0625, 0.5), (-0.0625, 0.5), (0.5, 1.125), (0.5, -0.125))
+    ]
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=2, fps=30.0, size=(w, h))
+    out = tmp_path / "out"
+    stats = export_video_labels(video, [inside, *touching], out)
+    coco = json.loads((out / "annotations.json").read_text())
+    assert [im["file_name"] for im in coco["images"]] == ["frame_000000.jpg"]
+    assert [a["bbox"] for a in coco["annotations"]] == [pytest.approx([140.0, 90.0, 40.0, 60.0])]
+    assert stats["n_images"] == 1 and stats["n_boxes"] == 1
+
+
 def _hand_crafted_arc(arc_id: int = 0, t_start: float = 0.0, n_points: int = 16) -> Arc:
     """Same flight shape as tests/test_drops.py's `_make_floor_candidate`: thrown
     from hand_line=0.65 with g=2.0 (ay=1.0). apex at dt=0.55, catch at dt=1.1.

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import pytest
 
 from juggletrack.detect import BallDetector
 from juggletrack.video.reader import VideoReader
@@ -180,3 +181,25 @@ def test_area_gate_drops_arm_sized_blob_and_keeps_ball():
     dets = det.detect(frame, idx, idx / 30.0)
     assert len(dets) == 1
     assert abs(dets[0].x - 480 / w) < 0.01 and abs(dets[0].y - 120 / h) < 0.01
+
+
+def test_blob_smaller_than_min_area_is_not_detected():
+    # A 5x5 speck and a 12x12 ball-sized square appear together on a static
+    # background. With min_area set between their sizes, only the square is
+    # reported.
+    from juggletrack.detect.motion import MotionDetector
+
+    w, h = 640, 480
+    det = MotionDetector(warmup_frames=10, min_area=2e-4)
+    blank = np.full((h, w, 3), 90, dtype=np.uint8)
+    for idx in range(12):
+        assert det.detect(blank, idx, idx / 30.0) == []
+    frame = blank.copy()
+    frame[100:105, 100:105] = 255
+    frame[300:312, 400:412] = 255
+
+    dets = det.detect(frame, 12, 12 / 30.0)
+
+    assert len(dets) == 1
+    assert dets[0].x == pytest.approx(405.5 / w, abs=0.01)
+    assert dets[0].y == pytest.approx(305.5 / h, abs=0.01)
