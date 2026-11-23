@@ -329,6 +329,24 @@ def test_catches_shifted_by_half_a_beat_all_match_no_flight(cascade):
     assert score.count_error == 0 and len(score.missed) == 18
 
 
+def test_the_offset_is_the_median_of_catch_minus_landing(cascade):
+    throws, ref = cascade
+
+    def at_landings(*shifts):
+        return [CatchEvent(t=f.landing_t + shifts[k % len(shifts)], x=f.landing_x, arc_id=0)
+                for k, f in enumerate(ref.flights)]
+
+    late, early = score_catches(ref, at_landings(0.05)), score_catches(ref, at_landings(-0.05))
+    mostly_late = score_catches(ref, at_landings(0.05, 0.05, -0.08))
+    nothing = score_catches(ref, [_catch(th, late=0.15) for th in throws])
+
+    assert late.matched == early.matched == mostly_late.matched == 18
+    assert late.offset_s == pytest.approx(0.05)
+    assert early.offset_s == pytest.approx(-0.05)
+    assert mostly_late.offset_s == pytest.approx(0.05)
+    assert nothing.matched == 0 and nothing.offset_s is None
+
+
 def test_two_landings_close_together_each_keep_their_own_catch():
     first = Throw(ball=0, t0=1.0, dur=0.6, rise=0.3, x0=0.35, x1=0.5)
     second = Throw(ball=1, t0=1.14, dur=0.6, rise=0.3, x0=0.65, x1=0.5)

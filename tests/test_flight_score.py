@@ -71,6 +71,10 @@ def test_scores_a_clean_cascade_and_repeats_byte_for_byte(tmp_path):
     assert (clip["duplicates"], clip["unmatched"], clip["missed"], clip["count_error"]) == (
         0, 0, 0, 0)
     assert (clip["explained"], clip["repeated"]) == (24, 0)
+    # The pipeline's hand line is below the reference hand level here, so its
+    # catches come a few frames after the reference landings.
+    assert 0 < clip["offset_s"] < 0.1
+    assert f"{clip['offset_s']:+.3f}" in procs[0].stdout
     assert (clip["fps"], clip["width"], clip["height"]) == (_FPS, *_SIZE)
     assert report["totals"]["all"] == report["totals"]["trusted"]
     assert report["totals"]["all"]["flights"] == 24
