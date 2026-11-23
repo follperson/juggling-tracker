@@ -26,6 +26,12 @@ from juggletrack.analyze import AnalyzeConfig, _events_from_arcs, analyze_detect
 from juggletrack.events.catches import derive_events
 from juggletrack.types import Arc, Detection
 
+# window_s and window_s - edge_pad are whole numbers of frames at common frame
+# rates, so a detection lands exactly on a cut every frame. Comparing with this
+# margin, far below a frame interval and far above float noise in the clock,
+# keeps the tie rule (on the cut stays, on the edge is not flagged) stable.
+_CLOCK_EPS_S = 1e-6
+
 
 class RealtimeConfig(BaseModel):
     window_s: float = 8.0
@@ -194,7 +200,7 @@ class RealtimeAnalyzer:
         # defeats the proxy and defers eviction of everything behind it
         # indefinitely, growing the buffer -- and therefore every window's
         # re-analysis cost -- unboundedly).
-        self._buffer = [d for d in self._buffer if d.t >= cut]
+        self._buffer = [d for d in self._buffer if d.t >= cut - _CLOCK_EPS_S]
         self._frames_since_analysis += 1
         if self._frames_since_analysis >= self.cfg.cadence_frames:
             self._frames_since_analysis = 0
@@ -253,7 +259,10 @@ class RealtimeAnalyzer:
         # meant to fix. Filtering the DERIVED events/drops list is enough:
         # it can only ever remove a confirmation, never fabricate one.
         left_edge = self._now - self.cfg.window_s
-        truncated_ids = {a.id for a in session.arcs if a.t_start < left_edge + self.cfg.edge_pad}
+        truncated_ids = {
+            a.id for a in session.arcs
+            if a.t_start < left_edge + self.cfg.edge_pad - _CLOCK_EPS_S
+        }
 
         # Hand-line EMA (see RealtimeConfig.hand_line_ema_alpha's docstring
         # for the measured jitter this smooths).
