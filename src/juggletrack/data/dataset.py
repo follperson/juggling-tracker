@@ -25,15 +25,17 @@ def assemble_dataset(
 
     `recordings` maps a source directory's name to its recording id, so the
     labels, negatives and crops of one recording land on the same side. A
-    source it does not name is its own recording. Validation takes the
+    source it does not name is its own recording; a key that names no
+    source is an error. Validation takes the
     `n_val` recordings that rank first by a hash of the seed and the
     recording id, so reordering sources moves nothing and adding one can
     displace at most the recording at the edge of the validation set.
 
     Reusing a populated output can leave old images in the opposite split.
     Refuse that operation before writing; use a new versioned directory.
-    A single source remains useful for training smoke tests, but its
-    validation path aliases training and is not an accuracy measurement.
+    A single recording, however many sources it has, remains useful for
+    training smoke tests, but its validation path aliases training and is
+    not an accuracy measurement.
     """
     sources = [Path(s) for s in source_dirs]
     if not sources:
@@ -43,6 +45,9 @@ def assemble_dataset(
     if (len({s.name for s in sources}) != len(sources)
             or len({s.resolve() for s in sources}) != len(sources)):
         raise ValueError("source directories must have unique names and unique resolved paths")
+    unknown = sorted(set(recordings or {}) - {s.name for s in sources})
+    if unknown:
+        raise ValueError(f"recordings keys name no source: {', '.join(unknown)}")
 
     out = Path(out_dir)
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
