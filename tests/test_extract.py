@@ -11,6 +11,7 @@ from juggletrack.arcs.extract import (
     _merge_pass,
     _Moments,
     _seed_pieces,
+    _sink_end,
     _split_ballistic,
     dedup_parallel_arcs,
     extract_arcs,
@@ -205,6 +206,16 @@ def test_a_dip_smaller_than_the_swing_on_the_way_up_is_no_top():
     only apex."""
     ys = [0.7] * 5 + [0.67, 0.64, 0.655, 0.67, 0.62, 0.58, 0.55, 0.58, 0.63, 0.7]
     assert _apexes(ys, 0.04) == [11]
+
+
+def test_the_ball_stays_in_the_hand_down_to_its_lowest_point_after_the_catch():
+    """After a catch the ball sinks with the hand to its lowest point before
+    the hand lifts it, and those points are in the hand. Here the hand holds
+    the ball near the catch height for three frames, none below the catch
+    point, then lifts it 0.05. The three frames are still the ball in the
+    hand: the sink runs to the lowest of them."""
+    ys = [0.55, 0.58, 0.63, 0.7, 0.695, 0.698, 0.69, 0.65]
+    assert _sink_end(ys, 3, 0.04) == 5
 
 
 def test_a_ball_let_go_on_the_way_down_does_not_grow_into_a_flight():
