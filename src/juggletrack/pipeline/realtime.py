@@ -479,8 +479,14 @@ class RealtimeAnalyzer:
         # event_match_tol on every fixture measured. A later cycle that
         # re-cuts a confirmed flight can move its time past event_match_tol;
         # _same_flight matches those by the flight itself (issue #20).
-        prior = list(known)
-        for event in sorted(events):
+        # Two derivations of one flight lie well within a window of each
+        # other (at most 1.04 s apart on the 24 replays measured), so older
+        # confirmations stay out of `prior`: comparing with all of them made
+        # each cycle slower the longer the session ran.
+        events = sorted(events)
+        oldest = events[0].t - self.cfg.window_s if events else 0.0
+        prior = [k for k in known if k.t >= oldest]
+        for event in events:
             if event.t > horizon + _CLOCK_EPS_S:
                 continue
             if any(self._same_flight(k, event) for k in prior):
