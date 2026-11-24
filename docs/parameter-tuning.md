@@ -460,4 +460,4 @@ The unseeded-tops rule moves no live count on these clips.
   neither reports the drop. With the static filter turned off, both find
   the drop in all 6 streams and neither counts the catch. The filter
   removes detections on 48 of the 113 saved sessions and on 11 of the 22
-  labelled clips, up to 32% of `ss42_id_011` (5,801 of 18,120).
+  labelled clips. It removes 5,801 of 18,120 detections (32%) on `ss42_id_011`.
