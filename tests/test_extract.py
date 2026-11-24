@@ -218,6 +218,16 @@ def test_the_ball_stays_in_the_hand_down_to_its_lowest_point_after_the_catch():
     assert _sink_end(ys, 3, 0.04) == 5
 
 
+def test_the_sink_ends_where_the_hand_lifts_the_ball_by_the_swing():
+    """The sink ends at its lowest point once the track climbs 2 * resid_tol
+    above it: the hand has started the next throw. Here the hand sinks to
+    0.75 and lifts the ball 0.05, and the ball then falls past 0.78, as a
+    low throw that is not caught does. Those later points are the throw's,
+    not the hand's, so the sink still ends at 0.75."""
+    ys = [0.55, 0.58, 0.63, 0.7, 0.73, 0.75, 0.72, 0.7, 0.74, 0.78]
+    assert _sink_end(ys, 3, 0.04) == 5
+
+
 def test_a_ball_let_go_on_the_way_down_does_not_grow_into_a_flight():
     """A flight is seen over its top: its fit climbs to the apex and falls
     from it inside the run. A hand lifts the ball 0.1 and lets it go while
