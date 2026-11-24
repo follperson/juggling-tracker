@@ -863,9 +863,10 @@ def test_left_edge_guard_blocks_phantom_catches_on_slow_flights():
     the window's left edge cuts is refit from its tail alone and caught a
     second time. The guard drops arcs that start within edge_pad of that
     edge. With it, live counts what offline counts, and each live catch is
-    a different simulated one. Without it, live counts the first three
-    landings (2.7, 3.6 and 4.5 s) again, once each window has moved past
-    them (measured at 2.75, 3.63 and 4.58 s)."""
+    a different simulated one. Without it, the window moves past the first
+    three landings (2.7, 3.6 and 4.5 s) and refits each from its tail. The
+    flight match recognises two of those refits as flights already counted.
+    The landing at 3.6 s is still counted again (measured at 3.65 s)."""
     p = CascadeParams(period_s=0.9, dwell_s=0.5, g=0.5)
     r = simulate_cascade(n_throws=24, fps=30.0, params=p, noise=0.003, dropout=0.1,
                          include_held=True, seed=3)
@@ -875,12 +876,12 @@ def test_left_edge_guard_blocks_phantom_catches_on_slow_flights():
     guarded = RealtimeAnalyzer(RealtimeConfig(edge_pad=0.5))
     final = stream(r, guarded)[-1]
     assert final.catches_total == sum(run.catches for run in offline.runs)
-    assert _unmatched(guarded._confirmed["catch"], r.catch_times, tol) == []
+    assert _unmatched([t for t, _ in guarded.confirmed_catches()], r.catch_times, tol) == []
 
     unguarded = RealtimeAnalyzer(RealtimeConfig(edge_pad=0.0))
     stream(r, unguarded)
-    assert _unmatched(unguarded._confirmed["catch"], r.catch_times, tol) == [2.75, 3.63, 4.58], (
-        "this pins the measured phantoms without the guard; if they change, "
+    assert _unmatched([t for t, _ in unguarded.confirmed_catches()], r.catch_times, tol) == [3.65], (
+        "this pins the measured phantom without the guard; if it changes, "
         "re-measure the guard's repro against the simulated catches"
     )
 
