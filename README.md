@@ -69,8 +69,8 @@ All commands (`--help` on each for options):
   (MPS). On the long clip `ss3_id_016` the labels hold 177 whole flights in
   one run. Offline reports 178 catches in 1 run and matches all 177. A direct
   live replay of the saved detections (`juggletrack live --detections`)
-  counts 181 catches and 0 drops in 1 run, so live mode still counts a few
-  flights twice.
+  counts 178 catches and 0 drops in 1 run, with no flight counted twice
+  (`scripts/flight_score.py --live`).
 - Drops are the least reliable output. Across the saved sessions of the two
   real-time videos with human-checked drops and the one labelled clip with
   drops, offline analysis reports 5 of 17 known real drops, and it reports
