@@ -11,6 +11,12 @@ and frame size, and the report records its hash and frame count.
     uv run --no-sync python scripts/flight_score.py flight-score.json
     uv run --no-sync python scripts/flight_score.py controls.json \\
         --only ss3_id_987 --controls
+    uv run --no-sync python scripts/flight_score.py live-score.json --live
+
+``--live`` scores live mode instead. It replays each clip frame by frame
+through ``RealtimeAnalyzer`` on the clock recorded with the detections, scores
+the catches the analyzer confirmed, and adds its final runs and drops and its
+throws, printed beside ``flights_found``, every flight the reference found.
 
 ``--controls`` also scores three seeded faults per clip: every tenth catch
 deleted, every tenth catch doubled, and every catch moved 2 s later. They
@@ -32,6 +38,7 @@ from pathlib import Path
 
 import numpy as np
 import scipy
+from event_core_parity import _replay_clock
 
 import juggletrack
 from juggletrack.analyze import AnalyzeConfig, analyze_detections
@@ -45,13 +52,15 @@ from juggletrack.eval.flight_reference import (
 )
 from juggletrack.events.catches import derive_events
 from juggletrack.pipeline.offline import load_detections_jsonl
-from juggletrack.types import Arc, CatchEvent, SessionResult
+from juggletrack.pipeline.realtime import RealtimeAnalyzer, RealtimeConfig
+from juggletrack.types import Arc, CatchEvent, Detection, SessionResult
 from juggletrack.video.reader import VideoReader
 
 DEFAULT_ROOT = "outputs/meschke-val/post-hardening-2b"
 COUNTS = ("flights", "catches", "matched", "duplicates", "unmatched", "ignored", "missed",
           "count_error")
 ARC_COUNTS = ("arcs", "explained", "repeated")
+LIVE_COUNTS = ("throws", "flights_found", "runs", "drops")
 
 
 def _sha256(path: Path) -> str:
@@ -77,6 +86,22 @@ def _counted_catches(result: SessionResult) -> list[CatchEvent]:
             "matches how analyze_detections counts catches"
         )
     return counted
+
+
+def _live(dets: list[Detection], config: RealtimeConfig) -> tuple[list[CatchEvent], dict]:
+    """Replay a clip through live mode: the catches it confirmed and its final counts."""
+    by_frame: dict[int, list[Detection]] = {}
+    for d in dets:
+        by_frame.setdefault(d.frame_idx, []).append(d)
+    analyzer = RealtimeAnalyzer(config)
+    for idx, t in enumerate(_replay_clock(by_frame) if by_frame else []):
+        analyzer.feed(by_frame.get(idx, []), t)
+    final = analyzer.finalize()
+    # A confirmed catch outlives the window its arc came from, so it has no arc id.
+    catches = [CatchEvent(t=t, x=x, arc_id=-1) for t, x in analyzer.confirmed_catches()]
+    return catches, {
+        "throws": final.throws_total, "runs": final.runs_completed, "drops": final.drops_total,
+    }
 
 
 def _seeded_faults(catches: list[CatchEvent]) -> dict[str, list[CatchEvent]]:
@@ -117,12 +142,13 @@ def _line(name: str, trusted: str, row: dict) -> str:
         offset = f"{offset:+.3f}"
     elif offset is None:
         offset = "-"
-    arcs = f" | {cells(ARC_COUNTS)}" if "arcs" in row else ""
-    return f"{name:30s} {trusted:7s} {cells(COUNTS)} {offset:>8}{arcs}".rstrip()
+    extra = next((keys for keys in (ARC_COUNTS, LIVE_COUNTS) if keys[0] in row), ())
+    tail = f" | {cells(extra)}" if extra else ""
+    return f"{name:30s} {trusted:7s} {cells(COUNTS)} {offset:>8}{tail}".rstrip()
 
 
 def _total(rows: list[dict]) -> dict:
-    keys = [k for k in (*COUNTS, *ARC_COUNTS) if all(k in r for r in rows)]
+    keys = [k for k in (*COUNTS, *ARC_COUNTS, *LIVE_COUNTS) if all(k in r for r in rows)]
     return {"clips": len(rows), **{k: sum(r[k] for r in rows) for k in keys}}
 
 
@@ -140,6 +166,8 @@ def main() -> int:
                         help="keep clips whose name contains this substring (repeatable)")
     parser.add_argument("--controls", action="store_true",
                         help="also score three seeded faults per clip")
+    parser.add_argument("--live", action="store_true",
+                        help="score the catches live mode confirms on a frame-by-frame replay")
     args = parser.parse_args()
 
     root, out = Path(args.root), Path(args.out)
@@ -161,8 +189,10 @@ def main() -> int:
         return 2
 
     config = AnalyzeConfig()
+    live_config = RealtimeConfig(analyze=config)
     report: dict = {
         "meta": {
+            "mode": "live" if args.live else "offline",
             "package": str(Path(juggletrack.__file__).parent),
             "implementation_sha256": _implementation_sha256(),
             "script_sha256": _sha256(Path(__file__)),
@@ -174,10 +204,12 @@ def main() -> int:
             "csv_dir": str(Path(args.csv_dir).resolve()),
             "video_dir": str(Path(args.video_dir).resolve()),
             "analyze_config": config.model_dump(mode="json"),
+            **({"realtime_config": live_config.model_dump(mode="json")} if args.live else {}),
         },
         "clips": {},
     }
-    print(_line("clip", "trusted", {k: k for k in (*COUNTS, "offset_s", *ARC_COUNTS)}))
+    extra = LIVE_COUNTS if args.live else ARC_COUNTS
+    print(_line("clip", "trusted", {k: k for k in (*COUNTS, "offset_s", *extra)}))
 
     for clip in clips:
         with VideoReader(videos[clip]) as reader:
@@ -194,8 +226,12 @@ def main() -> int:
         ))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", np.exceptions.RankWarning)
-            result = analyze_detections(dets, config)
-        catches = _counted_catches(result)
+            if args.live:
+                catches, scored = _live(dets, live_config)
+            else:
+                result = analyze_detections(dets, config)
+                catches = _counted_catches(result)
+                scored = _explained(reference, result.arcs)
 
         row = {
             "detections_sha256": _sha256(saved[clip]),
@@ -209,7 +245,7 @@ def main() -> int:
             "flights_found": len(reference.flights),
             "median_flight_s": reference.median_flight_s,
             **_score(reference, catches),
-            **_explained(reference, result.arcs),
+            **scored,
         }
         print(_line(clip, "yes" if reference.trusted else "FLAGGED", row), flush=True)
         if args.controls:

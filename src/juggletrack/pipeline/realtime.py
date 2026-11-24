@@ -19,12 +19,13 @@ This module must stay cv2-free: it consumes Detections, not frames.
 from __future__ import annotations
 
 import time
+from typing import NamedTuple
 
 from pydantic import BaseModel, Field, model_validator
 
 from juggletrack.analyze import AnalyzeConfig, _events_from_arcs, analyze_detections
 from juggletrack.events.catches import derive_events
-from juggletrack.types import Arc, Detection
+from juggletrack.types import Arc, CatchEvent, Detection, ThrowEvent
 
 # window_s, window_s - edge_pad, freeze_s and RUN_CLOSE_DEBOUNCE_S are whole
 # numbers of frames at common frame rates, so a time lands exactly on a cut
@@ -33,6 +34,36 @@ from juggletrack.types import Arc, Detection
 # the cut stays, an arc on the edge is not flagged, an arc ending on the
 # liveness horizon is not recent, and a run is not closed at exactly 0.5 s.
 _CLOCK_EPS_S = 1e-6
+
+# Two derivations of a throw or catch are one flight when their apex times
+# agree to this share of the shorter half flight (apex to hand line), their
+# apex heights to this share of the smaller rise above the hand line, and
+# their x to this share of the frame width. Measured on live replays of 22
+# Meschke clips and two real-time sessions: a catch whose time moved past
+# event_match_tol kept its apex within 0.11 of a half flight, and a
+# different catch within 0.1 of the frame width had its apex 0.43 or more
+# away. Height tells apart throws whose apexes coincide, such as a 5 and a 3
+# thrown from hands 0.05 of the frame apart in ss531_id_005.
+_APEX_MATCH = 0.25
+_HEIGHT_MATCH = 0.3
+_X_MATCH = 0.1
+# The hand-line crossing can move along the arc as the hand estimate moves.
+# The apex is independent of that estimate. Requiring a closer horizontal
+# match there separates neighboring columns in a four-ball fountain.
+_APEX_X_MATCH = 0.03
+
+
+class _Event(NamedTuple):
+    """A confirmable event. A throw or catch also carries its arc's apex time
+    and height, and how far that apex rose above the hand line; a drop does
+    not."""
+
+    t: float
+    x: float
+    apex_t: float | None = None
+    apex_y: float = 0.0
+    rise: float = 0.0
+    apex_x: float = 0.0
 
 
 class RealtimeConfig(BaseModel):
@@ -172,7 +203,7 @@ class RealtimeAnalyzer:
         self._buffer: list[Detection] = []
         self._frames_since_analysis = 0
         self._now = 0.0
-        self._confirmed: dict[str, list[float]] = {"throw": [], "catch": [], "drop": []}
+        self._confirmed: dict[str, list[_Event]] = {"throw": [], "catch": [], "drop": []}
         self._runs_completed = 0
         self._run_start: float | None = None
         self._pending_close_t: float | None = None
@@ -331,9 +362,17 @@ class RealtimeAnalyzer:
             if d.arc_id is None or d.arc_id not in truncated_ids
         ]
 
-        self._confirm("throw", [e.t for e in throws], self._now - freeze)
-        self._confirm("catch", [e.t for e in catches], self._now - freeze)
-        self._confirm("drop", [d.t for d in drops], self._now - drop_freeze)
+        arcs = {a.id: a for a in session.arcs}
+
+        def flight(e: ThrowEvent | CatchEvent) -> _Event:
+            arc = arcs[e.arc_id]
+            apex_t = arc.apex_t()
+            apex_y = arc.y_at(apex_t)
+            return _Event(e.t, e.x, apex_t, apex_y, hand_line - apex_y, arc.x_at(apex_t))
+
+        self._confirm("throw", [flight(e) for e in throws], self._now - freeze)
+        self._confirm("catch", [flight(e) for e in catches], self._now - freeze)
+        self._confirm("drop", [_Event(d.t, d.x) for d in drops], self._now - drop_freeze)
 
         # Run liveness: the naive `end_t > now - freeze` check is exactly
         # right for deciding whether to OPEN a new tracked run (it's
@@ -408,19 +447,19 @@ class RealtimeAnalyzer:
             runs_completed=self._runs_completed,
             run_active=self._run_start is not None,
             catches_current_run=sum(
-                1 for ct in self._confirmed["catch"]
-                if self._run_start is not None and ct >= self._run_start
+                1 for c in self._confirmed["catch"]
+                if self._run_start is not None and c.t >= self._run_start
             ),
             hand_line_y=hand_line,
             window_arcs=session.arcs,
             last_analysis_ms=(time.perf_counter() - t0) * 1000.0,
         )
 
-    def _confirm(self, kind: str, times: list[float], horizon: float) -> None:
+    def _confirm(self, kind: str, events: list[_Event], horizon: float) -> None:
         known = self._confirmed[kind]
         # E8: dedup only against events confirmed in PRIOR cycles (`prior`,
         # snapshotted before this call's loop starts) -- NOT against entries
-        # this same call appends as it goes. `times` is the FULL set of
+        # this same call appends as it goes. `events` is the FULL set of
         # currently-derived event times for this window (re-derived from
         # scratch every cycle, so it naturally re-includes already-known
         # events alongside any new ones). Checking against `known` as it
@@ -444,16 +483,40 @@ class RealtimeAnalyzer:
         # this ordering bug on the field replays this branch re-measures
         # (ss3_id_016 catches 209 -> 207 across this wave, not up) --
         # closely-spaced real catches/throws sit well clear of
-        # event_match_tol on every fixture measured. The residual
-        # cross-cycle over-count from overlapping arc candidates (§9) is a
-        # separate, out-of-scope mechanism this snapshot fix does not reach.
-        prior = list(known)
-        for et in sorted(times):
-            if et > horizon + _CLOCK_EPS_S:
+        # event_match_tol on every fixture measured. A later cycle that
+        # re-cuts a confirmed flight can move its time past event_match_tol;
+        # _same_flight matches those by the flight itself (issue #20).
+        # Two derivations of one flight lie well within a window of each
+        # other (at most 1.04 s apart on the 24 replays measured), so older
+        # confirmations stay out of `prior`: comparing with all of them made
+        # each cycle slower the longer the session ran.
+        events = sorted(events)
+        lookback = max(self.cfg.window_s, self.cfg.event_match_tol)
+        oldest = events[0].t - lookback if events else 0.0
+        prior = [k for k in known if k.t >= oldest]
+        for event in events:
+            if event.t > horizon + _CLOCK_EPS_S:
                 continue
-            if any(abs(et - k) <= self.cfg.event_match_tol for k in prior):
+            if any(self._same_flight(k, event) for k in prior):
                 continue
-            known.append(et)
+            known.append(event)
+
+    def _same_flight(self, a: _Event, b: _Event) -> bool:
+        if abs(a.t - b.t) <= self.cfg.event_match_tol:
+            return True
+        if a.apex_t is None or b.apex_t is None:
+            return False
+        half_flight = min(abs(a.t - a.apex_t), abs(b.t - b.apex_t))
+        return (
+            abs(a.apex_t - b.apex_t) <= _APEX_MATCH * half_flight
+            and abs(a.apex_y - b.apex_y) <= _HEIGHT_MATCH * min(a.rise, b.rise)
+            and abs(a.x - b.x) <= _X_MATCH
+            and abs(a.apex_x - b.apex_x) <= _APEX_X_MATCH
+        )
+
+    def confirmed_catches(self) -> list[tuple[float, float]]:
+        """Time and x of every catch confirmed so far, in the order confirmed."""
+        return [(c.t, c.x) for c in self._confirmed["catch"]]
 
     def _state(self) -> RealtimeState:
         return self._last_state.model_copy(update={"t": self._now})

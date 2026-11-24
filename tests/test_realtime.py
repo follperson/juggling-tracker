@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from juggletrack.analyze import analyze_detections
-from juggletrack.pipeline.realtime import RealtimeAnalyzer, RealtimeConfig
+from juggletrack.pipeline.realtime import RealtimeAnalyzer, RealtimeConfig, _Event
 from juggletrack.sim import CascadeParams, simulate_cascade
 from juggletrack.types import Detection
 
@@ -47,6 +47,32 @@ def test_parity_short_clean_stream():
     assert final.catches_total == sum(run.catches for run in offline.runs)
     assert final.runs_completed == len(offline.runs)
     assert final.drops_total == len(offline.drops)
+
+
+def test_live_keeps_the_two_columns_of_a_four_ball_fountain():
+    # Each hand launches a vertical flight every 1.2 s. The columns peak
+    # 0.21 s apart at the same height, but at different horizontal positions.
+    dets = []
+    pairs = 8
+    for pair in range(pairs):
+        for x, offset in ((0.54, 0.0), (0.46, 0.21)):
+            start = 0.5 + 1.2 * pair + offset
+            for frame in range(math.ceil(30 * start), math.floor(30 * (start + 2.0)) + 1):
+                t = frame / 30.0
+                elapsed = t - start
+                y = 0.65 - 0.375 * elapsed * (2.0 - elapsed)
+                dets.append(Detection(frame_idx=frame, t=t, x=x, y=y))
+
+    final = stream_dets(dets, RealtimeAnalyzer())[-1]
+    assert final.catches_total == 2 * pairs
+    assert final.throws_total == 2 * pairs
+
+
+def test_confirmation_respects_a_time_tolerance_longer_than_the_window():
+    analyzer = RealtimeAnalyzer(RealtimeConfig(event_match_tol=10.0))
+    analyzer._confirm("catch", [_Event(1.0, 0.3)], horizon=1.0)
+    analyzer._confirm("catch", [_Event(10.0, 0.3)], horizon=10.0)
+    assert analyzer.confirmed_catches() == [(1.0, 0.3)]
 
 
 def test_parity_long_stream_exercises_trimming():
@@ -729,8 +755,8 @@ def test_confirm_does_not_dedup_within_same_cycle():
     that pairing is cross-kind and never enters the same dedup comparison,
     so it does not threaten a real collision under this mechanism."""
     analyzer = RealtimeAnalyzer()
-    analyzer._confirm("catch", [1.000, 1.100], horizon=10.0)
-    assert analyzer._confirmed["catch"] == [1.000, 1.100]
+    analyzer._confirm("catch", [_Event(1.000, 0.3), _Event(1.100, 0.7)], horizon=10.0)
+    assert analyzer.confirmed_catches() == [(1.000, 0.3), (1.100, 0.7)]
 
 
 def test_confirm_still_dedups_across_cycles():
@@ -740,9 +766,56 @@ def test_confirm_still_dedups_across_cycles():
     for (e.g. a re-fit shouldn't double a real confirmation across
     cycles), and E8's fix must not break it."""
     analyzer = RealtimeAnalyzer()
-    analyzer._confirm("catch", [1.000], horizon=10.0)
-    analyzer._confirm("catch", [1.05], horizon=10.0)  # later cycle, same physical event
-    assert analyzer._confirmed["catch"] == [1.000]
+    analyzer._confirm("catch", [_Event(1.000, 0.3)], horizon=10.0)
+    # later cycle, same physical event
+    analyzer._confirm("catch", [_Event(1.05, 0.3)], horizon=10.0)
+    assert analyzer.confirmed_catches() == [(1.000, 0.3)]
+
+
+def test_confirm_counts_a_flight_once_when_its_catch_time_moves():
+    """Issue #20. Three cycles of a live replay of ss90501_id_145 derive one
+    flight from the same arc, apex 28.447 s. The hand line moves between them,
+    so the catch time moves by 0.171 s and then 0.151 s, each more than
+    event_match_tol from the catch before. The flight was caught once."""
+    analyzer = RealtimeAnalyzer()
+    for t, x, rise in ((29.7995, 0.5681, 0.0925), (29.9702, 0.5693, 0.1173),
+                       (30.1210, 0.5704, 0.1417)):
+        analyzer._confirm("catch", [_Event(t, x, 28.4469, 0.5333, rise)], horizon=t)
+    assert analyzer.confirmed_catches() == [(29.7995, 0.5681)]
+
+
+def test_confirm_counts_a_flight_once_when_a_later_cycle_recuts_its_arc():
+    """Issue #20. In a live replay of ss423_id_017 a later cycle re-cuts the
+    arc of ball 2's flight, from 84.10-85.80 s to 83.83-85.80 s. Its apex
+    moves 0.052 s, a tenth of the half flight, and its catch moves 0.216 s.
+    The labels show one landing there, ball 2 at 85.54 s."""
+    analyzer = RealtimeAnalyzer()
+    analyzer._confirm("catch", [_Event(85.5205, 0.6371, 84.8738, 0.6703, 0.0679)],
+                      horizon=85.567)
+    analyzer._confirm("catch", [_Event(85.3047, 0.6352, 84.8224, 0.6770, 0.0296)],
+                      horizon=87.267)
+    assert analyzer.confirmed_catches() == [(85.5205, 0.6371)]
+
+
+def test_confirm_keeps_throws_whose_apexes_coincide_at_different_heights():
+    """In ss531_id_005 a 5 and the 3 thrown after it peak 0.02 s apart, and
+    the hands are only 0.05 of the frame apart. Their heights differ, so
+    they are two flights."""
+    analyzer = RealtimeAnalyzer()
+    analyzer._confirm("throw", [_Event(2.4960, 0.5093, 4.2902, 0.1060, 0.5719)], horizon=2.567)
+    analyzer._confirm("throw", [_Event(3.3967, 0.5561, 4.2701, 0.5911, 0.0833)], horizon=3.467)
+    assert len(analyzer._confirmed["throw"]) == 2
+
+
+@pytest.mark.parametrize("period_s", [0.3, 0.45])
+def test_fast_cascade_counts_every_flight_once(period_s):
+    """Real-time juggling: at a 0.3 s period flights last 0.65 s and apexes
+    come 0.3 s apart. Matching a re-derived flight by its apex must not merge
+    two of them."""
+    r = simulate_cascade(n_throws=60, fps=30.0, params=CascadeParams(period_s=period_s), seed=1)
+    final = stream(r, RealtimeAnalyzer())[-1]
+    assert (final.catches_total, final.throws_total) == (len(r.catch_times), len(r.throw_times))
+    assert (final.runs_completed, final.drops_total) == (1, 0)
 
 
 def test_left_edge_guard_prevents_phantom_catches_from_truncated_refit():
@@ -816,9 +889,10 @@ def test_left_edge_guard_blocks_phantom_catches_on_slow_flights():
     the window's left edge cuts is refit from its tail alone and caught a
     second time. The guard drops arcs that start within edge_pad of that
     edge. With it, live counts what offline counts, and each live catch is
-    a different simulated one. Without it, live counts the first three
-    landings (2.7, 3.6 and 4.5 s) again, once each window has moved past
-    them (measured at 2.75, 3.63 and 4.58 s)."""
+    a different simulated one. Without it, the window moves past the first
+    three landings (2.7, 3.6 and 4.5 s) and refits each from its tail. The
+    flight match recognises two of those refits as flights already counted.
+    The landing at 3.6 s is still counted again (measured at 3.65 s)."""
     p = CascadeParams(period_s=0.9, dwell_s=0.5, g=0.5)
     r = simulate_cascade(n_throws=24, fps=30.0, params=p, noise=0.003, dropout=0.1,
                          include_held=True, seed=3)
@@ -828,12 +902,12 @@ def test_left_edge_guard_blocks_phantom_catches_on_slow_flights():
     guarded = RealtimeAnalyzer(RealtimeConfig(edge_pad=0.5))
     final = stream(r, guarded)[-1]
     assert final.catches_total == sum(run.catches for run in offline.runs)
-    assert _unmatched(guarded._confirmed["catch"], r.catch_times, tol) == []
+    assert _unmatched([t for t, _ in guarded.confirmed_catches()], r.catch_times, tol) == []
 
     unguarded = RealtimeAnalyzer(RealtimeConfig(edge_pad=0.0))
     stream(r, unguarded)
-    assert _unmatched(unguarded._confirmed["catch"], r.catch_times, tol) == [2.75, 3.63, 4.58], (
-        "this pins the measured phantoms without the guard; if they change, "
+    assert _unmatched([t for t, _ in unguarded.confirmed_catches()], r.catch_times, tol) == [3.65], (
+        "this pins the measured phantom without the guard; if it changes, "
         "re-measure the guard's repro against the simulated catches"
     )
 

@@ -203,6 +203,63 @@ see each kind of error. It deletes every tenth catch, doubles every tenth
 catch, and moves every catch 2 s later. The faults must appear as `missed`,
 `duplicates` and `unmatched`.
 
+`--live` scores live mode instead of offline analysis:
+
+```bash
+uv run --no-sync python scripts/flight_score.py live-score.json --live
+```
+
+It replays each clip frame by frame through `RealtimeAnalyzer` on the clock
+recorded with the detections, the same replay that the
+[event-core parity](#event-core-parity) check uses, and scores the catches
+that live mode confirmed. The catch columns mean the same as offline. In live
+mode `duplicates` counts a flight confirmed again by a later analysis cycle.
+Each row also has live mode's final `runs` and `drops`, and its `throws` next
+to `flights_found`, the number of flights the reference found, caught or not.
+A replay cuts new arcs every cycle, so live rows have no `explained` column.
+
+Scored with `--live` on 2026-11-23, live mode confirmed 1,445 catches over
+the 22 clips, with 1,317 flights matched, 64 duplicates and 44 unmatched
+catches. It told a new catch from a confirmed one by time alone, so when a
+later cycle re-cut an arc and moved its catch more than 0.15 s, the flight
+counted again (GitHub issue #20). Live mode also recognizes a previous
+flight from its apex time, apex position and horizontal position at the
+hand line. The same root then gives 1,372 catches with 1,314 flights matched,
+2 duplicates and 37 unmatched catches. The trusted clips go from 3
+duplicates to 0 and still match 500 flights. Throws fall from 1,862 to
+1,525, against 1,576 flights found. Runs and drops do not change on any
+clip.
+
+In a four-ball fountain, the balls can reach the same height at almost the
+same time in adjacent columns. For a flight whose event time moved beyond
+the time tolerance, the horizontal apex positions must also agree within
+3% of the frame width. The original time rule can still merge separate
+flights that land within its tolerance.
+
+Three matched flights are lost. The labelled tracks show that each was a
+second confirmation of a flight that live mode still counts once:
+
+- `ss90501_id_145` at 10.80 s and 26.33 s: each came from the arc of a ball 0
+  flight whose catch live mode had already confirmed, at 10.95 s and
+  26.17 s. Before the change the scorer paired one catch of each pair with
+  ball 1's high throw, which lands 1.1 s to 1.2 s after ball 0, within 0.08
+  of the frame width. Live mode never confirmed a catch from ball 1's own arc.
+- `ss423_id_017` at 29.73 s: it came from the same arc as a catch at
+  29.57 s. That first catch is 0.29 s before ball 2 lands, because the hand
+  line sat only 0.02 of the frame height below this low flight's apex, so it
+  scores as unmatched.
+
+Two duplicates remain. Neither is a re-cut of a confirmed flight:
+
+- `ss423_id_088` at 8.32 s and 8.51 s: both catches are ball 2's landing at
+  8.46 s. The second comes from an arc in which the extractor joined ball 0's
+  launch to ball 2's fall, with a false apex at 8.12 s. The duplicate was
+  there before the change.
+- `ss531_id_989` at 31.82 s and 32.07 s: the second arc follows ball 2 moving
+  in the hand while ball 1's low throw lands beside it. Its apex time agrees
+  with ball 1's flight, but its apex is lower by 0.55 of the rise, past the
+  0.3 bound.
+
 On 2026-11-22 the default root gave 1,485 flights and 1,041 catches over 22
 clips, with 1,016 flights matched. Six clips were trusted, with 501 flights
 and 344 matched. On `ss3_id_016` the labels show 177 flights, the extractor
@@ -259,8 +316,8 @@ Limits:
   the `ss441` clips, so the reference does not use one.
 - The saved detections must be on the `frame_idx / fps` clock that the labels
   use. The script stops when they are not.
-- The check scores offline analysis only. It needs per-ball labels, which only
-  the Meschke clips have.
+- The check needs per-ball labels, which only the Meschke clips have, so it
+  cannot score live mode on real-time footage.
 
 ## Detector center benchmark
 

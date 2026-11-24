@@ -153,6 +153,33 @@ def test_refuses_detections_recorded_on_another_clock(tmp_path):
     assert not out.exists()
 
 
+def test_live_scores_the_catches_a_realtime_replay_confirms(tmp_path):
+    data = tmp_path / "data"
+    _save_clip(data, "cascade")
+    out = tmp_path / "live.json"
+
+    proc = _flight_score(out, data, "--live")
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    report = json.loads(out.read_text())
+    assert report["meta"]["mode"] == "live"
+    clip = report["clips"]["cascade"]
+    # Live mode confirms each of the 24 clean throws once, all in one run.
+    assert (clip["flights"], clip["catches"], clip["matched"]) == (24, 24, 24)
+    assert (clip["duplicates"], clip["unmatched"], clip["missed"]) == (0, 0, 0)
+    assert (clip["runs"], clip["drops"]) == (1, 0)
+    # Every flight the reference finds was thrown once.
+    assert (clip["throws"], clip["flights_found"]) == (24, 24)
+    assert 0 < clip["offset_s"] < 0.1
+    # A replay re-cuts its arcs every cycle, so no one arc set is scored.
+    assert "explained" not in clip
+    total = report["totals"]["all"]
+    assert (total["catches"], total["runs"], total["drops"]) == (24, 1, 0)
+    assert (total["throws"], total["flights_found"]) == (24, 24)
+    header = set(proc.stdout.splitlines()[0].split())
+    assert {"throws", "flights_found", "runs", "drops"} <= header
+
+
 def test_controls_show_each_seeded_fault_in_its_own_column(tmp_path):
     data = tmp_path / "data"
     _save_clip(data, "cascade")
