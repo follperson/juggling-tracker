@@ -208,7 +208,7 @@ noisy simulator fixture, and the whole run on `plan2-validation/af2`. The
 unseeded tops give back flights under detector noise (below) and the real
 drop at 17.46 s on `plan3-flywheel/analyze-ft/af1`.
 
-**Detector noise.** Review B's simulator (`noise_sweep.py`, 8 seeds, every
+**Detector noise.** A reviewer's simulator (`noise_sweep.py`, 8 seeds, every
 ball seen on every frame, in the air and in the hands) shows where seeding
 is weak. Matched catches against simulated truth:
 
@@ -226,7 +226,7 @@ of them growth stops at a stray point before the fit has fallen
 `2 * resid_tol` on that side. Before the tops rule the stretch around such a
 top was dropped as a ball in a hand. Real-time footage tracked through the
 hands still loses flights against the base above a noise of about 0.006.
-Review B measured a median arc rmse of 0.003 to 0.004 on `af1`.
+A reviewer measured a median arc rmse of 0.003 to 0.004 on `af1`.
 
 **The witness fraction.** With the seeding in place, each fraction was run
 through the same judge and the extraction bake-off's gates:
@@ -268,7 +268,7 @@ catches, still 2 runs), and 3 lose one catch (the three copies of
   one and leaves the junk run there short of 3 arcs. The drop is
   unconfirmed. The fall and other-ball rules do not move it.
 - `plan2-validation/yt-5easy`, a three-ball tutorial ("5 easy tricks"), not
-  five-ball footage. Review B checked the frames from 294.3 s to 298.3 s and
+  five-ball footage. A reviewer checked the frames from 294.3 s to 298.3 s and
   from 594.5 s to 598.3 s, which show three-ball juggling without a break.
   The three drops the head adds there are false. Apex seeding adds an arc at
   296.2 s, which makes a three-arc run at 294 s that ends in two
@@ -303,7 +303,7 @@ sessions. On `ss3_id_987` both count a catch on the first real drop, at
 19.41 s on the base and 19.39 s on the head. Away from the checked drops,
 the stock detector's `af1` session keeps the false drop at 26.2 s that it
 had before, and `yt-5easy` goes from 15 drops to 17. Three of the head's 17
-are false by review B's frame check. The others, on both sides, are
+are false by a reviewer's frame check. The others, on both sides, are
 unchecked.
 
 **Speed.** Same machine, base (the flight-reference commit) and head
@@ -405,8 +405,8 @@ The unseeded-tops rule moves no live count on these clips.
   late (`ss531_id_989` at 42.85 s).
 - A held ball moved up and down is counted as caught at every top, because
   each top of a smooth up-and-down motion is a parabola within `resid_tol`.
-  Measured offline with no throw in any stream (review A's
-  `probe_phantom.py` and review B's `phantoms.py`, rerun on base and head).
+  Measured offline with no throw in any stream (a reviewer's
+  `probe_phantom.py` and a reviewer's `phantoms.py`, rerun on base and head).
   Every stream has detector noise of 0.003 to 0.005:
 
   stream, 30 fps, 20 s unless noted               | base | head
@@ -432,7 +432,7 @@ The unseeded-tops rule moves no live count on these clips.
   slow-motion clips and 1.1 to 1.3 on real-time footage (one session with a
   single stretch reads 11), while held-ball streams span 1.1 to 18.9. The
   stretch between flights lasts 0.15 to 0.77 of a flight on real footage
-  and 0 to 0.78 on held balls (review B). A ball in free fall keeps one
+  and 0 to 0.78 on held balls (a reviewer). A ball in free fall keeps one
   acceleration, and the top of a smooth up-and-down path does not, so a
   parabola fitted to it leaves a fourth-order pattern in the residuals.
   That pattern does mark the held balls (median t statistic -2.8 to -11
