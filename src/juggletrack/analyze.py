@@ -84,10 +84,11 @@ class AnalyzeConfig(BaseModel):
         return self
 
 
-def _ending_flight_s(run: Run, by_id: dict[int, Arc], hand_line: float) -> float:
+def _ending_flight_s(run: Run, arcs: list[Arc], hand_line: float) -> float:
     """Hand line to hand line time of the arc whose falling crossing is the
     run's end_t, or 0.0 when no arc's is (segment_runs then took an arc's
     t_end)."""
+    by_id = {arc.id: arc for arc in arcs}
     for arc_id in run.arc_ids:
         crossings = hand_line_crossings(by_id[arc_id], hand_line) if arc_id in by_id else None
         if crossings is not None and crossings[1] == run.end_t:
@@ -120,7 +121,6 @@ def _events_from_arcs(
     closes: without a single shared line, the same arc could be counted as
     a catch per one line and a drop per the other.
     """
-    by_id = {a.id: a for a in arcs}
     hand_line = hand_line_override if hand_line_override is not None else estimate_hand_line(arcs)
     throws, catches = derive_events(arcs, hand_line)
     runs = segment_runs(
@@ -142,6 +142,7 @@ def _events_from_arcs(
     # arcs never reach detect_drops at all, so they can't mint a DropEvent
     # that would otherwise leak into SessionResult.drops even though the
     # corresponding run is absent from SessionResult.runs.
+    by_id = {a.id: a for a in arcs}
     runs = [
         run for run in runs
         if not is_drift_cohort([by_id[i] for i in run.arc_ids if i in by_id])
@@ -158,9 +159,11 @@ def _events_from_arcs(
         # reaches the hand line, end_t is extrapolated from the fitted
         # parabola well past t_last — that overshoot (not a small gap toward
         # t_last) is the signal that the ending is unconfirmed.
-        margin = catch_witness_margin(_ending_flight_s(run, by_id, hand_line), cfg.video_end_margin)
-        if run.end_reason == "stop" and run.end_t - dets_t_last > margin:
-            run = run.model_copy(update={"end_reason": "video_end"})
+        overshoot = run.end_t - dets_t_last
+        if run.end_reason == "stop" and overshoot > cfg.video_end_margin:
+            flight_s = _ending_flight_s(run, arcs, hand_line)
+            if overshoot > catch_witness_margin(flight_s, cfg.video_end_margin):
+                run = run.model_copy(update={"end_reason": "video_end"})
         final.append(run)
 
     return SessionResult(
