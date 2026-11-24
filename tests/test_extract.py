@@ -117,15 +117,16 @@ def test_linker_survives_three_frame_gaps():
 
 
 def _carried_ball(n_flights=8, fps=30.0, flight_s=0.6, carry_s=0.3, ay=2.0, sink=False,
-                  fall=False, hand_y=0.7, sides=(0.35, 0.65), t0=0.0):
+                  fall=False, fall_share=1.0, hand_y=0.7, sides=(0.35, 0.65), t0=0.0):
     """One ball as a detector that never loses it reports it: a flight from
     one hand to the other, then a carry in which the hand dips with the ball
     before it throws it back. With ``sink`` the last carry is replaced by
     the ball sinking with the hand at half the speed it landed at, until the
     track ends. With ``fall`` the hand touches the ball instead: it keeps
     falling under gravity at a quarter of its landing speed, as a dropped ball
-    does, until the track ends. The track starts at ``t0``. Returns the
-    detections and each flight's (throw, catch) times."""
+    does, until the track ends. ``fall_share`` scales that gravity: below 1
+    the hand still holds the ball and lowers it. The track starts at ``t0``.
+    Returns the detections and each flight's (throw, catch) times."""
     dip = 0.05
     cycle = flight_s + carry_s
     dets = []
@@ -142,7 +143,7 @@ def _carried_ball(n_flights=8, fps=30.0, flight_s=0.6, carry_s=0.3, ay=2.0, sink
         elif fall and k == n_flights - 1:
             p = phase - flight_s
             x = x1
-            y = hand_y + 0.25 * ay * flight_s * p + ay * p * p
+            y = hand_y + 0.25 * ay * flight_s * p + fall_share * ay * p * p
         else:
             x = x1
             y = hand_y + dip * np.sin(np.pi * (phase - flight_s) / carry_s)
@@ -285,6 +286,19 @@ def test_a_ball_that_falls_on_after_the_last_flight_keeps_its_fall_as_an_arc():
     assert landing - 1e-6 <= fall.t_start <= landing + 1 / 30 + 1e-6
     assert fall.t_end == pytest.approx(end, abs=1e-6)
     assert fall.ay == pytest.approx(2.0, rel=0.02)
+
+
+def test_a_ball_the_hand_lowers_after_the_last_flight_stays_in_the_hand():
+    """A fall moves with the flights' gravity. A ball that speeds up at half
+    of it after its last catch is still held: the hand lowers it. That
+    stretch is no fall, so no arc may be fitted to it, and the last flight's
+    arc must end at its catch with the flights' gravity rather than bend on
+    into the hand."""
+    dets, flights = _carried_ball(fall=True, fall_share=0.5)
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights)
+    assert arcs[-1].ay == pytest.approx(2.0, rel=0.02)
+    assert arcs[-1].t_end == pytest.approx(flights[-1][1], abs=0.5 / 30)
 
 
 @pytest.mark.parametrize("x_off", [0.0, 0.03])
