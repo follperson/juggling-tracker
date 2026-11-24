@@ -4,6 +4,7 @@ import pytest
 from juggletrack.arcs import extract
 from juggletrack.arcs.extract import (
     _EM_TIME_MARGIN,
+    _apexes,
     _em_assign_refit,
     _grow_flight,
     _link_fragments,
@@ -195,6 +196,15 @@ def test_a_top_seen_on_fewer_than_four_points_does_not_grow():
     lift = {10: 0.035, 11: 0.05, 12: 0.035}
     rows = [[f / 30, 0.5, 0.6 - lift.get(f, 0.0), 1.0] for f in range(24)]
     assert _grow_flight(rows, apex=11, free=0, swing=0.04, resid_tol=0.02) is None
+
+
+def test_a_dip_smaller_than_the_swing_on_the_way_up_is_no_top():
+    """A track tops out where it climbed 2 * resid_tol and then fell as far.
+    A hand lifts the ball 0.06, lets it sink back 0.03, then lifts it on and
+    throws it to 0.55. The 0.03 dip is wobble, so the throw's top is the
+    only apex."""
+    ys = [0.7] * 5 + [0.67, 0.64, 0.655, 0.67, 0.62, 0.58, 0.55, 0.58, 0.63, 0.7]
+    assert _apexes(ys, 0.04) == [11]
 
 
 def test_a_ball_let_go_on_the_way_down_does_not_grow_into_a_flight():
