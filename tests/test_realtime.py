@@ -49,6 +49,32 @@ def test_parity_short_clean_stream():
     assert final.drops_total == len(offline.drops)
 
 
+def test_live_keeps_the_two_columns_of_a_four_ball_fountain():
+    # Each hand launches a vertical flight every 1.2 s. The columns peak
+    # 0.21 s apart at the same height, but at different horizontal positions.
+    dets = []
+    pairs = 8
+    for pair in range(pairs):
+        for x, offset in ((0.54, 0.0), (0.46, 0.21)):
+            start = 0.5 + 1.2 * pair + offset
+            for frame in range(math.ceil(30 * start), math.floor(30 * (start + 2.0)) + 1):
+                t = frame / 30.0
+                elapsed = t - start
+                y = 0.65 - 0.375 * elapsed * (2.0 - elapsed)
+                dets.append(Detection(frame_idx=frame, t=t, x=x, y=y))
+
+    final = stream_dets(dets, RealtimeAnalyzer())[-1]
+    assert final.catches_total == 2 * pairs
+    assert final.throws_total == 2 * pairs
+
+
+def test_confirmation_respects_a_time_tolerance_longer_than_the_window():
+    analyzer = RealtimeAnalyzer(RealtimeConfig(event_match_tol=10.0))
+    analyzer._confirm("catch", [_Event(1.0, 0.3)], horizon=1.0)
+    analyzer._confirm("catch", [_Event(10.0, 0.3)], horizon=10.0)
+    assert analyzer.confirmed_catches() == [(1.0, 0.3)]
+
+
 def test_parity_long_stream_exercises_trimming():
     r = simulate_cascade(n_throws=24, fps=30.0, noise=0.003, dropout=0.1, seed=2)
     assert r.run_end > 8.0, "fixture must outlast the analysis window"

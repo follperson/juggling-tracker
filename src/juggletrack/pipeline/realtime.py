@@ -47,6 +47,10 @@ _CLOCK_EPS_S = 1e-6
 _APEX_MATCH = 0.25
 _HEIGHT_MATCH = 0.3
 _X_MATCH = 0.1
+# The hand-line crossing can move along the arc as the hand estimate moves.
+# The apex is independent of that estimate. Requiring a closer horizontal
+# match there separates neighboring columns in a four-ball fountain.
+_APEX_X_MATCH = 0.03
 
 
 class _Event(NamedTuple):
@@ -59,6 +63,7 @@ class _Event(NamedTuple):
     apex_t: float | None = None
     apex_y: float = 0.0
     rise: float = 0.0
+    apex_x: float = 0.0
 
 
 class RealtimeConfig(BaseModel):
@@ -361,7 +366,9 @@ class RealtimeAnalyzer:
 
         def flight(e: ThrowEvent | CatchEvent) -> _Event:
             arc = arcs[e.arc_id]
-            return _Event(e.t, e.x, arc.apex_t(), arc.apex_y(), hand_line - arc.apex_y())
+            apex_t = arc.apex_t()
+            apex_y = arc.y_at(apex_t)
+            return _Event(e.t, e.x, apex_t, apex_y, hand_line - apex_y, arc.x_at(apex_t))
 
         self._confirm("throw", [flight(e) for e in throws], self._now - freeze)
         self._confirm("catch", [flight(e) for e in catches], self._now - freeze)
@@ -484,7 +491,8 @@ class RealtimeAnalyzer:
         # confirmations stay out of `prior`: comparing with all of them made
         # each cycle slower the longer the session ran.
         events = sorted(events)
-        oldest = events[0].t - self.cfg.window_s if events else 0.0
+        lookback = max(self.cfg.window_s, self.cfg.event_match_tol)
+        oldest = events[0].t - lookback if events else 0.0
         prior = [k for k in known if k.t >= oldest]
         for event in events:
             if event.t > horizon + _CLOCK_EPS_S:
@@ -503,6 +511,7 @@ class RealtimeAnalyzer:
             abs(a.apex_t - b.apex_t) <= _APEX_MATCH * half_flight
             and abs(a.apex_y - b.apex_y) <= _HEIGHT_MATCH * min(a.rise, b.rise)
             and abs(a.x - b.x) <= _X_MATCH
+            and abs(a.apex_x - b.apex_x) <= _APEX_X_MATCH
         )
 
     def confirmed_catches(self) -> list[tuple[float, float]]:
