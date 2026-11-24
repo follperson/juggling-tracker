@@ -347,6 +347,27 @@ def test_a_ball_the_hand_lowers_after_the_last_flight_stays_in_the_hand():
     assert arcs[-1].t_end == pytest.approx(flights[-1][1], abs=0.5 / 30)
 
 
+def test_a_throw_after_the_last_whole_flight_still_yields_an_arc():
+    """The points after a fragment's last flight and its sink go to the
+    left-to-right split, so a throw there still gets an arc when it has no
+    apex to grow from. Here the hand hides the ball for 0.1 s in the last
+    carry, and the track ends 0.1 s after the last throw tops out, so that
+    throw falls less than 2 * resid_tol in view. Its arc still takes in the
+    end of the carry (measured: it starts 0.07 s before the throw, at ay
+    1.5), a limit of that split, but the throw must not be lost."""
+    dets, flights = _carried_ball()
+    (_, catch), (throw, _) = flights[-2], flights[-1]
+    hidden, end = (catch + throw) / 2, throw + 0.4
+    dets = [d for d in dets if d.t <= end + 1e-9 and abs(d.t - hidden) >= 0.05]
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights)
+    for (t_throw, t_catch), arc in zip(flights[:-1], arcs):
+        assert arc.t_start == pytest.approx(t_throw, abs=0.05)
+        assert arc.t_end == pytest.approx(t_catch, abs=0.05)
+    assert arcs[-1].t_start < throw + 0.1
+    assert arcs[-1].t_end == pytest.approx(end)
+
+
 @pytest.mark.parametrize("x_off", [0.0, 0.03])
 def test_a_point_the_linker_gives_to_another_ball_stays_with_its_own_flight(x_off):
     """Ball B lands and leaves the view. Ball A is thrown 0.1 s later near
