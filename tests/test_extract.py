@@ -197,6 +197,21 @@ def test_a_top_seen_on_fewer_than_four_points_does_not_grow():
     assert _grow_flight(rows, apex=11, free=0, swing=0.04, resid_tol=0.02) is None
 
 
+def test_a_ball_let_go_on_the_way_down_does_not_grow_into_a_flight():
+    """A flight is seen over its top: its fit climbs to the apex and falls
+    from it inside the run. A hand lifts the ball 0.1 and lets it go while
+    moving down, so it falls from its first free point on a parabola whose
+    vertex lies 0.5 s before that point (slow motion, ay 0.2). The track tops
+    out there, and the fall bends enough to clear 2 * resid_tol, but the run
+    never climbs, so it is no flight."""
+    rows = [[f / 30, 0.5, 0.7, 1.0] for f in range(10)]
+    rows += [[10 / 30, 0.5, 0.645, 1.0]]
+    for f in range(11, 42):
+        p = (f - 11) / 30
+        rows.append([f / 30, 0.5, 0.6 + 0.2 * p + 0.2 * p * p, 1.0])
+    assert _grow_flight(rows, apex=11, free=0, swing=0.04, resid_tol=0.02) is None
+
+
 def test_a_fragment_the_shipped_split_cuts_at_the_hands_keeps_that_split():
     """Apex seeding replaces the left-to-right split only in a fragment where
     one of its pieces ends inside a flight. Here the ball turns at each hand
