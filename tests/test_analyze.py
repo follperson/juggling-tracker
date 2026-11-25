@@ -122,7 +122,7 @@ def test_cluster_merge_dist_default_is_pinned_to_adjudicated_value():
     """IMPORTANT (final review): the shipped cluster_merge_dist=0.012 is
     the branch's most-contested tuned deliverable -- a controller-directed
     spec-6.1 adjudication (task-2b-report.md §10, quoted verbatim in
-    AnalyzeConfig's own comment above this field) that overrode a
+    docs/parameter-tuning.md) that overrode a
     scaffolding gate to restore a small amount of box-level clustering
     after task 2b had retired it to 0.0. No prior test distinguished 0.012
     from 0.0 or 0.023: every other fixture in the suite either forces the
@@ -131,8 +131,8 @@ def test_cluster_merge_dist_default_is_pinned_to_adjudicated_value():
     (this constant has already moved 0.03 -> 0.023 -> 0.0 -> 0.012 across
     this branch's history) would leave the entire suite green while
     silently dropping the measured cascade-low spec-6.1 result from 53.3%
-    to 31.2% (see AnalyzeConfig's own combo-sweep table). Pin the value
-    directly, mirroring how test_dedup_parallel_arcs_keeps_both_at_shipped_
+    to 31.2% (see the combo-sweep table in docs/parameter-tuning.md). Pin
+    the value directly, mirroring how test_dedup_parallel_arcs_keeps_both_at_shipped_
     crossing_floor (tests/test_extract.py) pins the arc-dedup knobs
     behaviorally against the measured 0.164 crossing floor."""
     assert AnalyzeConfig().cluster_merge_dist == pytest.approx(0.012)

@@ -839,7 +839,7 @@ def test_duplicate_injection_inherits_clustering_via_analyze_detections():
     analyze_detections, carrying this fixture's duplicate-collapsing work
     alone -- measured clean=12, dirty=11 there), then to 0.012 after a
     controller-directed spec-§6.1 adjudication restored a small amount of
-    box clustering alongside arc dedup (see AnalyzeConfig's own comment).
+    box clustering alongside arc dedup (see docs/parameter-tuning.md).
     Verified directly at the FINAL shipped default (merge_dist=0.012 + arc
     dedup): clean=12, dirty=12 -- exact match, matching the offline
     measurement in test_cluster.py.

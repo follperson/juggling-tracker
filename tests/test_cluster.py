@@ -134,7 +134,7 @@ def test_duplicate_injection_does_not_inflate_catches():
     work at the arc level -- measured clean=12, dirty=11 there), then to
     0.012 after a controller-directed spec-§6.1 adjudication restored a
     small amount of box clustering alongside arc dedup (see
-    AnalyzeConfig's own comment for the full combo-sweep rationale).
+    docs/parameter-tuning.md for the full combo-sweep rationale).
     Verified directly on this exact fixture at the FINAL shipped default
     (merge_dist=0.012 + arc dedup): clean=12, dirty=12 -- exact match,
     passing with margin rather than at the ±1 band edge.
