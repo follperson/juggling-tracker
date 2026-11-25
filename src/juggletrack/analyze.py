@@ -15,7 +15,6 @@ from juggletrack.events.catches import derive_events
 from juggletrack.events.drops import detect_drops
 from juggletrack.events.handline import estimate_hand_line
 from juggletrack.events.runs import segment_runs
-from juggletrack.events.validate import is_drift_cohort
 from juggletrack.types import Arc, Detection, Run, SessionResult
 
 
@@ -116,26 +115,6 @@ def _events_from_arcs(
         arcs, throws, catches, hand_line,
         gap_factor=cfg.gap_factor, min_arcs=cfg.min_arcs,
     )
-
-    # Drift-cohort run gate (spec §4 validator): a self-consistent slow-drift
-    # junk cohort can pass every arc-level check (each arc individually looks
-    # like a plausible ballistic flight) yet be one object drifting across the
-    # frame rather than juggling. Reject such a run outright; the conditions
-    # that define the cohort are in is_drift_cohort's docstring. The run's
-    # arcs stay in `arcs` (and in any other surviving run's arc_ids) untouched.
-    #
-    # This must run BEFORE detect_drops: a rejected run's arcs can still look
-    # like a floor-descending "drop" in isolation (e.g. a drift path that
-    # never returns to hand height), and detect_drops has no way to know the
-    # run it belongs to was just thrown out. Gating first means a junk run's
-    # arcs never reach detect_drops at all, so they can't mint a DropEvent
-    # that would otherwise leak into SessionResult.drops even though the
-    # corresponding run is absent from SessionResult.runs.
-    by_id = {a.id: a for a in arcs}
-    runs = [
-        run for run in runs
-        if not is_drift_cohort([by_id[i] for i in run.arc_ids if i in by_id])
-    ]
 
     drops, runs = detect_drops(arcs, runs, hand_line)
 
