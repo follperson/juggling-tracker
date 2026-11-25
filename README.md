@@ -83,6 +83,10 @@ with `uv run pytest -m detector`; set `JUGGLETRACK_TEST_VIDEO` to override the
 local smoke-test video. These checks can download stock weights and train a
 small smoke-test model.
 
+A weekly job runs `uv audit --locked` against `uv.lock`. To clear a finding,
+upgrade only the named package with `uv lock --upgrade-package <name>`, then
+rerun both test tiers.
+
 Dataset assembly requires an empty output directory and unique source names.
 Use a new versioned directory for each build. Split by independent recording;
 different crops/exports of the same recording must stay together. Single-source
