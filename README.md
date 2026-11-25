@@ -90,8 +90,11 @@ without the detector.
   (MPS). Accuracy on long sessions remains unresolved: a direct live replay of
   saved `ss3_id_016` detections (`juggletrack live --detections`) counts 208
   catches and 8 drops versus offline's 41 catches and 0 drops. Both report 9
-  runs; the generated reference reports 5 runs and 52 catches. Offline parity
-  alone is not sufficient.
+  runs; the generated reference reports 5 runs and 52 catches. That reference
+  is built with the arc extractor. Read off the ball labels with no arc fit,
+  `ss3_id_016` holds 177 whole flights in one run, against offline's 41
+  catches (`scripts/flight_score.py`, see `docs/benchmarking.md`). Offline
+  parity alone is not sufficient.
 - Scope: 3-ball patterns. The detector is trained on juggling balls — other
   thrown objects won't detect reliably.
 
