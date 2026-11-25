@@ -1,5 +1,8 @@
 """Physical controls for separating a descending hand carry from a flight."""
 
+import pytest
+
+import juggletrack.analyze as analyzer
 from juggletrack.arcs.fit import fit_arc, points_array
 from juggletrack.events.carry import trim_hand_carry
 from juggletrack.events.drops import is_floor_bound
@@ -85,3 +88,40 @@ def test_deflected_miss_continuing_ballistic_descent_is_not_a_catch():
     dets, arc = fixture(turn=True, slowed=False)
     assert is_floor_bound(arc, 0.35)
     assert trim_hand_carry(dets, [arc], 0.35, 0.02) == [arc]
+
+
+@pytest.mark.parametrize("slowed", [True, False], ids=["caught", "deflected-miss"])
+def test_analyze_detections_uses_hand_motion_to_distinguish_a_catch(monkeypatch, slowed):
+    # Inject the four camera tracks after extraction. Clustering, shared hand
+    # height, catch/drop decisions and run segmentation use the public pipeline.
+    detections, arcs = [], []
+    for flight in range(4):
+        last = flight == 3
+        samples, _ = fixture(turn=last, slowed=last and slowed)
+        start_frame = 20 * flight
+        samples = [
+            d.model_copy(
+                update={
+                    "frame_idx": start_frame + d.frame_idx,
+                    "t": (start_frame + d.frame_idx) / 40,
+                    "y": d.y if last else d.y - 0.05,
+                }
+            )
+            for d in samples
+            if last or d.frame_idx <= 40
+        ]
+        detections.extend(samples)
+        arcs.append(fit_arc(points_array(samples), flight))
+    monkeypatch.setattr(analyzer, "extract_arcs", lambda *args, **kwargs: list(arcs))
+    result = analyzer.analyze_detections(detections)
+    assert result.hand_line_y == pytest.approx(0.35)
+    assert result.arcs[:3] == arcs[:3]
+    assert len(result.runs) == 1
+    if slowed:
+        assert result.runs[0].catches == 4
+        assert 2.35 <= result.arcs[-1].t_end <= 2.45
+        assert result.drops == []
+    else:
+        assert result.runs[0].catches == 3
+        assert result.arcs[-1] == arcs[-1]
+        assert [drop.arc_id for drop in result.drops] == [3]
