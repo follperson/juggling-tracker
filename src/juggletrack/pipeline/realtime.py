@@ -370,12 +370,13 @@ class RealtimeAnalyzer:
         # runs_completed instead of being recognized and immediately
         # force-closed by finalize()'s own explicit close logic below.
         liveness_freeze = self.cfg.freeze_s
-        strict_live = any(r.end_t > self._now - liveness_freeze for r in ema_session.runs)
+        live_horizon = self._now - liveness_freeze + _CLOCK_EPS_S
+        strict_live = any(r.end_t > live_horizon for r in ema_session.runs)
         if self._run_start is None:
             live = strict_live
         else:
             recent_activity = any(
-                a.t_end > self._now - liveness_freeze + _CLOCK_EPS_S
+                a.t_end > live_horizon
                 for a in session.arcs if a.id in event_bearing_ids
             )
             live = strict_live or recent_activity
@@ -389,7 +390,7 @@ class RealtimeAnalyzer:
             if self._run_start is None:
                 starts = [
                     r.start_t for r in ema_session.runs
-                    if r.end_t > self._now - liveness_freeze
+                    if r.end_t > live_horizon
                 ]
                 self._run_start = min(starts)
         elif self._run_start is not None:

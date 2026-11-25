@@ -946,3 +946,25 @@ def test_event_confirmation_does_not_depend_on_float_noise_in_clock():
     _assert_same_states(r, fps, [-1] * (max(d.frame_idx for d in r.detections) + 1),
                         "a 1-ulp clock nudge down")
 
+
+def test_opening_a_run_at_finalize_uses_the_clock_tolerance():
+    """A run first recognized at the liveness horizon must not appear or
+    disappear because a decoder rounds the final clock by one float step."""
+    result = simulate_cascade(n_throws=8, fps=30.0, noise=0.0, dropout=0.0, seed=1)
+    session = analyze_detections(result.detections)
+    assert len(session.runs) == 1
+    cfg = RealtimeConfig(cadence_frames=100000, window_s=30.0)
+    boundary = session.runs[0].end_t + cfg.freeze_s
+    clocks = [math.nextafter(boundary, -math.inf), boundary,
+              math.nextafter(boundary, math.inf)]
+    for now in clocks:
+        analyzer = RealtimeAnalyzer(cfg)
+        analyzer.feed(result.detections, now)
+        final = analyzer.finalize()
+        # Exact-boundary activity is stale under the existing strict > rule.
+        assert final.runs_completed == 0
+        assert final.catches_total == 8
+    analyzer = RealtimeAnalyzer(cfg)
+    analyzer.feed(result.detections, boundary - 0.001)
+    assert analyzer.finalize().runs_completed == 1
+
