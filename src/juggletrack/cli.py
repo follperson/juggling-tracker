@@ -121,24 +121,48 @@ def eval(
     labels_json: Path = typer.Argument(..., exists=True, dir_okay=False),
     out: Path | None = typer.Option(None, help="Write EvalReport JSON here"),
 ) -> None:
+    """Score a saved analysis.json against hand-labeled runs and drops."""
     from juggletrack.eval.labels import VideoLabels
-    from juggletrack.eval.metrics import CATCH_ERROR_PASS, RUN_IOU_PASS, evaluate_session
+    from juggletrack.eval.metrics import (
+        CATCH_ERROR_PASS,
+        RUN_IOU_PASS,
+        aggregate_scores,
+        evaluate_session,
+    )
     from juggletrack.types import SessionResult
 
-    session = SessionResult.model_validate(json.loads(analysis_json.read_text()))
-    labels = VideoLabels.model_validate_json(labels_json.read_text())
+    try:
+        if out is not None:
+            _check_report_output(out, [analysis_json, labels_json])
+        document = json.loads(analysis_json.read_text())
+        keys = document if isinstance(document, dict) else {}
+        missing = [key for key in ("schema_version", "runs", "arcs") if key not in keys]
+        if missing:
+            raise ValueError(
+                f"{analysis_json} has no {', '.join(missing)} key; expected an analysis.json "
+                "written by juggletrack analyze"
+            )
+        session = SessionResult.model_validate(document)
+        labels = VideoLabels.model_validate_json(labels_json.read_text())
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     report = evaluate_session(session, labels)
+    scores = aggregate_scores([report])
+
+    def fmt(key: str, spec: str) -> str:
+        return "n/a" if scores[key] is None else format(scores[key], spec)
 
     typer.echo(f"video: {report.video}")
     typer.echo(f"runs: {report.n_pred_runs} predicted / {report.n_labeled_runs} labeled")
-    typer.echo(f"run boundary IoU>={RUN_IOU_PASS}: {report.frac_runs_iou90:.0%}")
-    typer.echo(f"catch count within +/-{CATCH_ERROR_PASS}: {report.frac_catch_within_1:.0%}")
+    typer.echo(f"run boundary IoU>={RUN_IOU_PASS}: {fmt('frac_runs_iou90', '.0%')}")
+    typer.echo(f"catch count within +/-{CATCH_ERROR_PASS}: {fmt('frac_catch_within_1', '.0%')}")
     typer.echo(
-        f"drops: precision {report.drop_precision:.2f} "
-        f"recall {report.drop_recall:.2f} "
+        f"drops: precision {fmt('drop_precision', '.2f')} "
+        f"recall {fmt('drop_recall', '.2f')} "
         f"(tp={report.drop_tp} fp={report.drop_fp} fn={report.drop_fn})"
     )
     if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(report.model_dump_json(indent=2))
 
 

@@ -66,6 +66,17 @@ unmatched labeled run is a failure. Extra predicted runs and drop TP/FP/FN are
 reported explicitly. Metrics with no applicable observations are `null` in the
 aggregate and in each clip's offline scores, not a claimed perfect score.
 
+Scoring uses four constants from `src/juggletrack/eval/metrics.py`, and
+`juggletrack eval` applies the same rules. A predicted run and a labeled run can
+match only when their temporal IoU is above `RUN_MATCH_MIN_IOU` (0.1). Runs pair
+greedily from the highest IoU down, each run at most once, and equal IoU goes to
+the earlier start time. A matched run passes the boundary check at IoU of at least
+`RUN_IOU_PASS` (0.9), and passes the catch check when its catch count is within
+`CATCH_ERROR_PASS` (1) of the label. A predicted drop matches a labeled drop
+within `DROP_TOL_S` (1.0 s). Drops pair one to one, with the most matches first
+and the smallest total time error second. Reports do not record these constants,
+so changing one changes what earlier reports mean.
+
 Realtime mode feeds every frame, including empty frames, and flushes the tail.
 It feeds the clock the detections were recorded with: a frame with detections
 uses their `t`, an empty frame between two detected frames is interpolated

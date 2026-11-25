@@ -115,7 +115,8 @@ def test_run_iou_passes_at_exactly_the_threshold(pred_end, passes):
 @pytest.mark.parametrize(("predicted", "labeled", "counts", "precision", "recall"), [
     ([6.0, 30.0], [6.3, 12.0], (1, 1, 1), 0.5, 0.5),
     ([6.0, 30.0, 40.0], [6.3], (1, 2, 0), 1 / 3, 1.0),
-], ids=["one_tp_fp_fn", "asymmetric"])
+    ([5.2, 6.1], [5.0, 5.3], (2, 0, 0), 1.0, 1.0),
+], ids=["one_tp_fp_fn", "asymmetric", "nearer_cross_pair_does_not_block"])
 def test_aggregate_drop_scores(predicted, labeled, counts, precision, recall):
     sr = session(runs=[run(1, 6, 12)], drops=predicted)
     labels = VideoLabels(video="v.mp4", runs=[LabeledRun(start_t=1, end_t=6, catches=12)],
@@ -124,6 +125,24 @@ def test_aggregate_drop_scores(predicted, labeled, counts, precision, recall):
     assert (scores["drop_tp"], scores["drop_fp"], scores["drop_fn"]) == counts
     assert scores["drop_precision"] == pytest.approx(precision)
     assert scores["drop_recall"] == pytest.approx(recall)
+
+
+def test_zero_drop_tolerance_matches_identical_times():
+    times = [1.0, 2.0, 3.0, 4.0]
+    labels = VideoLabels(video="v.mp4", runs=[], drops=times[::-1])
+    rep = evaluate_session(session(drops=times), labels, drop_tol_s=0)
+    assert (rep.drop_tp, rep.drop_fp, rep.drop_fn) == (4, 0, 0)
+
+
+def test_run_iou_tie_does_not_depend_on_label_order():
+    halves = [LabeledRun(start_t=0, end_t=5, catches=5), LabeledRun(start_t=5, end_t=10, catches=10)]
+    reports = [
+        evaluate_session(session(runs=[run(0, 10, 10)]), VideoLabels(video="v.mp4", runs=order))
+        for order in (halves, halves[::-1])
+    ]
+    matched = [r.matches[0].label_idx for r in reports]
+    assert [r.frac_catch_within_1 for r in reports] == [0.0, 0.0]
+    assert matched == [0, 1]
 
 
 def test_aggregate_scores_do_not_claim_perfect_empty_sets():

@@ -1,7 +1,9 @@
 """Spec §6 metrics: run-boundary IoU, catch-count error, drop precision/recall."""
 from __future__ import annotations
 
+import numpy as np
 from pydantic import BaseModel, Field
+from scipy.optimize import linear_sum_assignment
 
 from juggletrack.eval.labels import VideoLabels
 from juggletrack.types import SessionResult
@@ -9,6 +11,9 @@ from juggletrack.types import SessionResult
 # Spec §6 pass criteria for a matched run, shared by per-video and aggregate scores.
 RUN_IOU_PASS = 0.9
 CATCH_ERROR_PASS = 1
+# Matching gates: a run pair needs IoU above this, a drop pair a time error within this.
+RUN_MATCH_MIN_IOU = 0.1
+DROP_TOL_S = 1.0
 
 
 def temporal_iou(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
@@ -44,8 +49,8 @@ def evaluate_session(
     session: SessionResult,
     labels: VideoLabels,
     *,
-    drop_tol_s: float = 1.0,
-    min_match_iou: float = 0.1,
+    drop_tol_s: float = DROP_TOL_S,
+    min_match_iou: float = RUN_MATCH_MIN_IOU,
 ) -> EvalReport:
     pairs = sorted(
         (
@@ -53,7 +58,7 @@ def evaluate_session(
             for pi, p in enumerate(session.runs)
             for li, lab in enumerate(labels.runs)
         ),
-        key=lambda x: -x[0],
+        key=lambda x: (-x[0], session.runs[x[1]].start_t, labels.runs[x[2]].start_t),
     )
     matches: list[RunMatch] = []
     used_p: set[int] = set()
@@ -72,25 +77,14 @@ def evaluate_session(
     frac_iou = sum(1 for m in matches if m.iou >= RUN_IOU_PASS) / n_l if n_l else 1.0
     frac_catch = sum(1 for m in matches if m.catch_error <= CATCH_ERROR_PASS) / n_l if n_l else 1.0
 
-    pred_drops = sorted(d.t for d in session.drops)
-    label_drops = sorted(labels.drops)
-    drop_pairs = sorted(
-        (
-            (abs(pt - lt), pi, li)
-            for pi, pt in enumerate(pred_drops)
-            for li, lt in enumerate(label_drops)
-        ),
-        key=lambda x: x[0],
-    )
-    dp_used: set[int] = set()
-    dl_used: set[int] = set()
-    tp = 0
-    for dist, pi, li in drop_pairs:
-        if dist > drop_tol_s or pi in dp_used or li in dl_used:
-            continue
-        dp_used.add(pi)
-        dl_used.add(li)
-        tp += 1
+    # Match drops one to one: most matches within drop_tol_s first, smallest time error second.
+    pred_drops = np.array([d.t for d in session.drops])
+    label_drops = np.array(labels.drops)
+    dist = np.abs(pred_drops[:, None] - label_drops[None, :])
+    # One invalid assignment must cost more than all valid distances combined.
+    penalty = min(dist.shape) * drop_tol_s + 1.0
+    rows, cols = linear_sum_assignment(np.where(dist <= drop_tol_s, dist, penalty))
+    tp = int(np.sum(dist[rows, cols] <= drop_tol_s))
     fp = len(pred_drops) - tp
     fn = len(label_drops) - tp
 
