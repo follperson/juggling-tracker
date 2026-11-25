@@ -11,6 +11,38 @@ contain the final per-video results and corrected denominators. References below
 to `.superpowers/` describe historical local notes; use the committed findings
 for portable evidence.
 
+## Drop timing after flight seeding
+
+On 2026-11-24, three simulated slow cascades exposed two errors. The linker
+could switch balls between two fitted flights and discard the intervening
+fall as a carry. An arc truncated above the hands could also pull the
+estimated hand height upward and put the missed catch too early.
+
+Extraction now checks each intervening stretch with the same gravity and
+fit checks as a fall after the last flight. For a floor-bound candidate,
+drop timing uses the median of the lower observed endpoint heights of at
+least three other arcs in its run. A candidate must descend past that
+height by more than its vertical fit error. The original crossing time is
+kept when the two estimates differ by at most half a sampling interval.
+
+- All three simulated misses were at 17.600 s. The measured times were
+  17.599, 17.601 and 17.599 s. The runs ended at those misses in the
+  combined run-boundary and extraction changes.
+- The two checked drops on `flywheel-t2/analyze-ftv2c/af1` were recovered
+  at 17.53 and 36.00 s. On `plan2-validation/af2` a counted catch at
+  10.345 s became a drop at 10.415 s. The video shows the ball falling
+  past the open hand.
+- On nine additional real-time recordings, the offline count stayed at
+  208 catches in 17 runs. Four false drops fell to three. In the tutorial
+  replay, reported drops fell from 17 to seven. Two previously verified
+  false drops remain, at 296.89 and 297.19 s.
+- The 22 labelled clips still match 1,270 of 1,485 flights, including
+  498 of 501 on the trusted clips. The raw all-clip overcount check still
+  finds 14 duplicate or unmatched catches against the base's 10. The
+  per-flight label evidence is in `docs/benchmarking.md`.
+
+The measurements below record the preceding extraction experiment.
+
 ## Flight seeding and the catch witness margin
 
 Recorded 2026-11-23, GitHub issue #7. These rules were also measured on the
