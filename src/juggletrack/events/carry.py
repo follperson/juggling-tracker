@@ -142,7 +142,9 @@ def _trim_candidate(
         link_max_dt,
     ):
         return arc
-    return refit
+    # The ball stayed in the hand through the original endpoint. Other
+    # flights still need that height when distinguishing a catch from a miss.
+    return refit.model_copy(update={"carry_fit_endpoints_y": arc.peer_hand_heights()})
 
 
 def trim_hand_carry(

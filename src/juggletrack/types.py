@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, model_serializer
 
 from juggletrack import SCHEMA_VERSION
 
@@ -40,6 +40,20 @@ class Arc(BaseModel):
     cx: float
     n_points: int
     rmse: float
+    # Pre-separation fitted endpoint heights retain observed hand depth.
+    # Present only when a descending hand carry was separated from flight.
+    carry_fit_endpoints_y: tuple[float, float] | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_arc(self, handler: SerializerFunctionWrapHandler) -> dict:
+        """Keep the existing wire representation for an ordinary flight."""
+        data = handler(self)
+        if self.carry_fit_endpoints_y is None:
+            data.pop("carry_fit_endpoints_y", None)
+        return data
+
+    def peer_hand_heights(self) -> tuple[float, float]:
+        return self.carry_fit_endpoints_y or (self.cy, self.y_at(self.t_end))
 
     def y_at(self, t: float) -> float:
         dt = t - self.t_start

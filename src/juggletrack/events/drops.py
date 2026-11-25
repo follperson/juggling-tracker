@@ -54,7 +54,9 @@ def detect_drops(
             b for b in arcs
             if run.start_t - 1.0 <= b.t_start <= run.end_t + bounce_window + 1.0
         ]
-        fall_ends = [a.y_at(a.t_end) for a in run_arcs if a.vy_at(a.t_end) > 0]
+        peer_heights = {a.id: a.peer_hand_heights() for a in run_arcs}
+        fall_ends = [peer_heights[a.id][1] for a in run_arcs
+                     if a.carry_fit_endpoints_y is not None or a.vy_at(a.t_end) > 0]
         lowest_end = max(fall_ends, default=hand_line)
         hand_heights = [y for y in fall_ends if y <= hand_line + floor_margin
                         or y < lowest_end - floor_margin]
@@ -64,13 +66,14 @@ def detect_drops(
         # flight together. A longer sequence may repeatedly start tracking
         # each ball late in the air and end at an ordinary catch.
         if hand_heights or max(a.t_start for a in run_arcs) < min(a.t_end for a in run_arcs):
-            hand_heights.extend(a.cy for a in run_arcs if a.vy_at(a.t_start) < 0)
+            hand_heights.extend(peer_heights[a.id][0] for a in run_arcs
+                                if a.carry_fit_endpoints_y is not None or a.vy_at(a.t_start) < 0)
         deepest_hand = max(hand_heights, default=float("inf"))
         for cand in candidates:
             # A flight that is only partly tracked can have one endpoint up in
             # the air. Use its lower endpoint as the hand observation. Exclude
             # the candidate itself, whose last observation may be on the floor.
-            heights = [max(a.cy, a.y_at(a.t_end)) for a in run_arcs if a.id != cand.id]
+            heights = [max(ends) for arc_id, ends in peer_heights.items() if arc_id != cand.id]
             miss_line = min(median(heights), deepest_hand) if len(heights) >= 3 else hand_line
             # A crossing at the last observation, within the fit error, also
             # describes an ordinary catch. Confirm the descent past this line
