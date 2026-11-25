@@ -12,6 +12,8 @@ from typing import NamedTuple
 import numpy as np
 
 from juggletrack.arcs.fit import fit_arc, points_array, x_residuals, y_residuals
+from juggletrack.events.catches import derive_events
+from juggletrack.events.handline import estimate_hand_line
 from juggletrack.types import Arc, Detection
 
 _EM_TIME_MARGIN = 0.15  # arcs may claim points this far beyond their current span
@@ -485,6 +487,9 @@ def _restore_enclosed_flights(
     if not candidates:
         return arcs
 
+    # Recovery is for missed catches. A late seed that remains floor-bound
+    # needs independent descent evidence, not just an internally clean fit.
+    hand_line = estimate_hand_line(arcs)
     claimed = np.zeros(len(arr), dtype=bool)
     t = arr[:, 0]
 
@@ -512,9 +517,32 @@ def _restore_enclosed_flights(
             continue
         if not _prune([trial], g_range, resid_tol, min_points, min_duration, max_abs_bx):
             continue
+        if not derive_events([trial], hand_line)[1]:
+            continue
+        if not _preserves_catch_witnesses(restored, trial):
+            continue
         restored.append(trial)
         claim(trial)
     return restored
+
+
+def _preserves_catch_witnesses(arcs: list[Arc], candidate: Arc) -> bool:
+    """A recovered fragment must not erase independently witnessed catches.
+
+    Its endpoints may still be airborne rather than at the hands. Reject the
+    recovery if adding those endpoints to the height estimate would turn any
+    existing catch into an unwitnessed or floor-bound flight elsewhere.
+    """
+    before = estimate_hand_line(arcs)
+    after = estimate_hand_line([*arcs, candidate])
+    if before == after:
+        return True
+    if not derive_events([candidate], after)[1]:
+        return False
+    for arc in arcs:
+        if derive_events([arc], before)[1] and not derive_events([arc], after)[1]:
+            return False
+    return True
 
 
 def _keeps_falling(pts: np.ndarray, gravity: float, resid_tol: float) -> bool:

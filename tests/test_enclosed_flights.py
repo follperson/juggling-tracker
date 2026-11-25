@@ -32,7 +32,7 @@ def _cohort():
             t_end=5.6 + i,
             ay=1.0,
             by=-0.6,
-            cy=0.5,
+            cy=0.4,
             bx=0.1,
             cx=0.3,
             n_points=20,
@@ -170,7 +170,7 @@ def test_extract_arcs_recovers_planted_carry_without_changing_four_ordinary_flig
                     frame_idx=round(t * 30),
                     t=t,
                     x=0.1 + 0.1 * elapsed,
-                    y=0.5 + (elapsed - 0.3) ** 2,
+                    y=0.35 + (elapsed - 0.3) ** 2,
                 )
             )
     restored = extraction.extract_arcs(dets)
@@ -184,3 +184,60 @@ def test_extract_arcs_recovers_planted_carry_without_changing_four_ordinary_flig
     assert restored[0].t_start == pytest.approx(0.4)
     assert restored[0].t_end == pytest.approx(0.9)
     assert restored[0].ay == pytest.approx(1.0)
+
+
+def test_low_recovery_endpoints_cannot_erase_an_existing_catch():
+    from juggletrack.arcs.extract import _preserves_catch_witnesses
+    from juggletrack.events.catches import derive_events
+    from juggletrack.events.handline import estimate_hand_line
+
+    def height_arc(i, start_y, end_y):
+        return Arc(
+            id=i,
+            t_start=5 + i,
+            t_end=5.6 + i,
+            ay=1.0,
+            by=(end_y - start_y - 0.36) / 0.6,
+            cy=start_y,
+            bx=0.1,
+            cx=0.3,
+            n_points=20,
+            rmse=0.001,
+        )
+
+    existing = [
+        height_arc(0, 0.5, 0.64),
+        height_arc(1, 0.5, 0.5),
+        height_arc(2, 0.55, 0.55),
+        height_arc(3, 0.6, 0.6),
+    ]
+    candidate = height_arc(4, 0.44, 0.44)
+    before = estimate_hand_line(existing)
+    after = estimate_hand_line([*existing, candidate])
+    assert derive_events([candidate], before)[1]  # recovery itself is catch-compatible
+    assert derive_events([existing[0]], before)[1]
+    assert not derive_events([existing[0]], after)[1]
+    assert not _preserves_catch_witnesses(existing, candidate)
+
+
+def test_late_floor_bound_backup_needs_more_than_a_clean_parabola():
+    from juggletrack.events.catches import derive_events
+
+    arr = _cloud()
+    cut = _seed_pieces(arr, list(range(len(arr))), 0.02)
+    flight = cut.enclosed[0].flight
+    arr[flight, 2] = 0.3 + (arr[flight, 0] - 0.5) ** 2
+    arcs = [a.model_copy(update={"cy": 0.34}) for a in _cohort()]
+    trial = fit_arc(arr[flight])
+    assert trial.rmse < 1e-12
+    assert trial.ay == pytest.approx(1.0)
+    assert trial.y_at(trial.t_end) > 0.34 + 0.10
+    assert not derive_events([trial], 0.34)[1]
+    assert _restore(arr, arcs, [cut]) == arcs
+
+
+def test_full_apex_without_observed_landing_stays_unrecovered():
+    arr = _cloud()
+    cut = _seed_pieces(arr, list(range(len(arr))), 0.02)
+    arcs = [arc.model_copy(update={"cy": 0.5}) for arc in _cohort()]
+    assert _restore(arr, arcs, [cut]) == arcs
