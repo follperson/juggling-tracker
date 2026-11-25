@@ -8,12 +8,19 @@ from juggletrack.detect.fake import FakeDetector
 from juggletrack.sim import simulate_cascade
 
 
-def install_fake_yolo_model(monkeypatch, names):
+def install_fake_yolo_model(monkeypatch, names, cuda=False, mps=False):
     """Install a fake `ultralytics.YOLO` whose instance exposes `names` (as a
-    real model would) and records the `classes=` kwarg passed to `predict`,
-    returning a minimal boxes-less result so `YOLODetector.detect` short-circuits.
+    real model would) and records the `classes=` and `device=` kwargs passed to
+    `predict`, returning a minimal boxes-less result so `YOLODetector.detect`
+    short-circuits. Also installs a fake `torch` reporting the given CUDA and
+    MPS availability.
     """
     calls = {}
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: cuda),
+        backends=types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: mps)),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
 
     class FakeYOLO:
         def __init__(self, model_path):
@@ -22,6 +29,7 @@ def install_fake_yolo_model(monkeypatch, names):
 
         def predict(self, frame, **kwargs):
             calls["classes"] = kwargs.get("classes")
+            calls["device"] = kwargs.get("device")
             return [types.SimpleNamespace(boxes=None)]
 
     monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeYOLO))
@@ -118,3 +126,28 @@ def test_yolodetector_passes_none_when_unresolvable(monkeypatch):
     frame = np.zeros((64, 64, 3), dtype=np.uint8)
     det.detect(frame, 0, 0.0)
     assert calls["classes"] is None
+
+
+def predicted_device(monkeypatch, device=None, cuda=False, mps=False):
+    from juggletrack.detect.yolo import YOLODetector
+
+    calls = install_fake_yolo_model(monkeypatch, {0: "ball"}, cuda=cuda, mps=mps)
+    det = YOLODetector(model_path="fake.pt", device=device)
+    det.detect(np.zeros((64, 64, 3), dtype=np.uint8), 0, 0.0)
+    return calls["device"]
+
+
+def test_yolodetector_defaults_to_mps_when_only_mps_is_available(monkeypatch):
+    assert predicted_device(monkeypatch, mps=True) == "mps"
+
+
+def test_yolodetector_leaves_device_to_ultralytics_when_cuda_is_available(monkeypatch):
+    assert predicted_device(monkeypatch, cuda=True, mps=True) is None
+
+
+def test_yolodetector_leaves_device_unset_without_a_gpu(monkeypatch):
+    assert predicted_device(monkeypatch) is None
+
+
+def test_yolodetector_explicit_device_wins_over_mps(monkeypatch):
+    assert predicted_device(monkeypatch, device="cpu", mps=True) == "cpu"

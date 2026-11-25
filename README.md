@@ -42,6 +42,9 @@ Analyze a recorded video (writes `analysis.json` + debug overlay):
 uv run juggletrack analyze path/to/video.mp4 --model models/juggletrack-v3/best.pt
 ```
 
+The detector runs on CUDA when it is available, otherwise on the Apple Silicon
+GPU (MPS), otherwise on the CPU. Pass `--device cpu` to force the CPU.
+
 All commands (`--help` on each for options):
 
 | Command | Purpose |
