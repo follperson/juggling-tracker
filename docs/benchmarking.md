@@ -68,6 +68,42 @@ unmatched labeled run is a failure. Extra predicted runs and drop TP/FP/FN are
 reported explicitly. Metrics with no applicable observations are `null` in the
 aggregate and in each clip's offline scores, not a claimed perfect score.
 
+### Timing catches against visible contact
+
+A run can have the right total even when its predicted catches occur after the
+balls have settled in the hands. To measure that error, add `catch_windows` to
+the video label file for intervals you reviewed from start to finish. For each
+successful reception, bracket the first contact on the source video clock.
+Use the following frames to check that the hand retained the incoming ball.
+A ball that brushes the fingers and falls supplies a negative example.
+
+```json
+{
+  "video": "practice-01",
+  "runs": [{"start_t": 1.0, "end_t": 6.0, "catches": 12}],
+  "drops": [],
+  "catch_windows": [
+    {"start_t": 2.0, "end_t": 3.0, "catches": [
+      {"earliest_t": 2.20, "latest_t": 2.24},
+      {"earliest_t": 2.68, "latest_t": 2.72}
+    ]},
+    {"start_t": 4.0, "end_t": 4.5, "catches": []}
+  ]
+}
+```
+
+The second window records half a second of reviewed footage with zero catches.
+Leave ambiguous or unreviewed footage outside the windows. A window includes
+its start and excludes its end. Both endpoints of each contact bracket count.
+
+`benchmark` reports each offline match with its arc ID and predicted time,
+each extra prediction, and each missed bracket in `offline.catch_timing`.
+Each prediction and bracket can match at most once. Simultaneous catches can
+have overlapping brackets. The score compares timestamps directly on the source
+clock. It cannot establish ball identity or measure live display latency.
+The summary pools precision and recall over the reviewed windows. Use the
+ordinary run and drop labels for the whole-recording scores above.
+
 Scoring uses four constants from `src/juggletrack/eval/metrics.py`, and
 `juggletrack eval` applies the same rules. A predicted run and a labeled run can
 match only when their temporal IoU is above `RUN_MATCH_MIN_IOU` (0.1). Runs pair

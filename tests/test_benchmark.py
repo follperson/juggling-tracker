@@ -352,3 +352,53 @@ def test_realtime_benchmark_extends_the_recorded_clock_over_empty_frames(tmp_pat
     expected = np.arange(n_frames) / fps + np.interp(
         np.arange(n_frames), known, [offset[i] for i in known])
     assert times == pytest.approx(list(expected), abs=1e-9)
+
+
+@pytest.mark.parametrize("coverage", ["omitted", None, []])
+def test_benchmark_timing_absent_keeps_existing_report_shape(benchmark_manifest, coverage):
+    from juggletrack.eval.benchmark import run_benchmark
+
+    if coverage != "omitted":
+        _edit_labels(benchmark_manifest, lambda labels: labels.update(catch_windows=coverage))
+    result = run_benchmark(benchmark_manifest)
+    assert "catch_timing" not in result["summary"]
+    assert "catch_timing" not in result["clips"][0]["offline"]
+
+
+def test_benchmark_reviewed_negative_and_positive_pool_only_reviewed_coverage(
+    benchmark_manifest,
+):
+    from juggletrack.eval.benchmark import run_benchmark
+
+    _edit_labels(benchmark_manifest, lambda labels: labels.update(catch_windows=[
+        {"start_t": 0, "end_t": 10, "catches": []},
+        {"start_t": 20, "end_t": 21,
+         "catches": [{"earliest_t": 20.1, "latest_t": 20.2}]},
+    ]))
+    # A separate unreviewed clip must not contribute invented timing zeros.
+    root = benchmark_manifest.parent
+    (root / "other-detections.jsonl").write_text((root / "detections.jsonl").read_text())
+    (root / "other-labels.json").write_text(json.dumps({"video": "other", "runs": []}))
+    manifest = json.loads(benchmark_manifest.read_text())
+    manifest["clips"].append({**manifest["clips"][0], "video": "other",
+                              "detections": "other-detections.jsonl",
+                              "labels": "other-labels.json"})
+    benchmark_manifest.write_text(json.dumps(manifest))
+    result = run_benchmark(benchmark_manifest)
+    timing = result["clips"][0]["offline"]["catch_timing"]
+    assert timing["fp"] == result["clips"][0]["offline_catches"] > 0
+    assert timing["fn"] == 1 and timing["tp"] == 0
+    assert timing["windows"][1]["misses"][0]["earliest_t"] == 20.1
+    assert result["summary"]["catch_timing"] == {
+        "reviewed_clips": 1, **{k: v for k, v in timing.items() if k != "windows"}}
+    assert "catch_timing" not in result["clips"][1]["offline"]
+
+
+def test_benchmark_rejects_reviewed_window_outside_clip(benchmark_manifest):
+    from juggletrack.eval.benchmark import run_benchmark
+
+    _edit_labels(benchmark_manifest, lambda labels: labels.update(catch_windows=[
+        {"start_t": 29, "end_t": 31, "catches": []},
+    ]))
+    with pytest.raises(ValueError, match="window ends after"):
+        run_benchmark(benchmark_manifest)
