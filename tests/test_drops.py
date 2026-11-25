@@ -277,3 +277,23 @@ def test_several_falls_do_not_move_the_estimated_hands_to_the_floor(first_fall):
 
     assert [d.arc_id for d in drops] == list(range(first_fall, 4))
     assert [d.t for d in drops] == pytest.approx([1.1 + i * 0.2 for i in range(first_fall, 4)])
+
+
+@pytest.mark.parametrize("miss_last", [False, True])
+def test_truncated_launches_do_not_bound_hand_height(miss_last):
+    arcs = []
+    for i in range(4):
+        missed = i == 3 and miss_last
+        a = _make_floor_candidate(i, i * 0.45, duration=1.31 if missed else 1.1)
+        start = a.t_start + (0.8 if missed else 0.3)
+        arcs.append(a.model_copy(update={
+            "t_start": start, "by": a.vy_at(start), "cy": a.y_at(start),
+        }))
+    line = estimate_hand_line(arcs)
+    throws, catches = derive_events(arcs, line)
+    runs = segment_runs(arcs, throws, catches, line)
+    drops, _ = detect_drops(arcs, runs, line)
+
+    assert [d.arc_id for d in drops] == ([3] if miss_last else [])
+    if miss_last:
+        assert drops[0].t == pytest.approx(3 * 0.45 + 1.1)
