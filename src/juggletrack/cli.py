@@ -4,7 +4,9 @@ from __future__ import annotations
 import enum
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
 
 import typer
@@ -125,6 +127,15 @@ def _check_report_output(out: Path, inputs: list[Path]) -> None:
             out.exists() and source.exists() and out.samefile(source)
         ):
             raise ValueError(f"report output must not overwrite an input: {source}")
+
+
+@contextmanager
+def _atomic_report(out: Path):
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=out.parent) as tmp:
+        path = Path(tmp) / "report"
+        yield path
+        path.replace(out)
 
 
 @app.command()
@@ -660,6 +671,109 @@ def live(
         f"{final.runs_completed} runs, {final.catches_total} catches, "
         f"{final.drops_total} drops @ {fps:.0f} fps"
     )
+
+
+
+balls = typer.Typer(no_args_is_help=True, help="Review moving candidates for registered ball colors.")
+app.add_typer(balls, name="balls")
+
+
+def _pick_circle(image) -> tuple[int, int, int]:
+    import sys
+
+    import cv2
+
+    if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY")
+                                                or os.environ.get("WAYLAND_DISPLAY")):
+        raise ValueError("an interactive display is required for --pick; use --circle X Y R")
+    h, w = image.shape[:2]
+    scale = min(1.0, 1100/w, 750/h)
+    preview = cv2.resize(image, (max(1, round(w*scale)), max(1, round(h*scale))))
+    title = "Box one whole ball, then press Enter"
+    try:
+        x, y, bw, bh = cv2.selectROI(title, preview, showCrosshair=True, fromCenter=False)
+    finally:
+        cv2.destroyWindow(title)
+    if not bw or not bh:
+        raise ValueError("ball selection cancelled")
+    sx, sy = w / preview.shape[1], h / preview.shape[0]
+    return round((x+bw/2)*sx), round((y+bh/2)*sy), round(min(bw*sx, bh*sy)/2)
+
+
+@balls.command("register")
+def register_color(
+    video: Path = typer.Argument(..., exists=True, dir_okay=False),
+    frame: int = typer.Option(..., min=0, help="Zero-based frame showing the whole ball"),
+    circle: tuple[int, int, int] | None = typer.Option(
+        None, help="Center X Y and full radius in upright source pixels",
+    ),
+    pick: bool = typer.Option(False, "--pick", help="Drag a box around one ball on screen"),
+    out: Path = typer.Option(..., help="Write the reusable color profile JSON"),
+) -> None:
+    """Sample one uniformly colored ball at a known size."""
+    import cv2
+
+    from juggletrack.detect.registered import register_ball
+    from juggletrack.video.reader import VideoReader
+
+    if pick == bool(circle):
+        raise typer.BadParameter("choose exactly one of --pick and --circle X Y R")
+    try:
+        _check_report_output(out, [video])
+        with VideoReader(video) as reader:
+            image = next((img for i, _, img in reader.frames() if i == frame), None)
+        if image is None:
+            raise ValueError(f"could not decode frame {frame}")
+        profile = register_ball(image, *(_pick_circle(image) if pick else circle))
+        with _atomic_report(out) as path:
+            path.write_text(profile.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    except (OSError, ValueError, cv2.error) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"Saved ball profile to {out}")
+
+
+@balls.command("propose")
+def propose_colors(
+    video: Path = typer.Argument(..., exists=True, dir_okay=False),
+    profile: list[Path] = typer.Option(
+        ..., exists=True, dir_okay=False, help="Repeat for each ball color",
+    ),
+    out: Path = typer.Option(..., help="Write candidate detections as JSONL"),
+) -> None:
+    """Export offline candidates for visual review with analyze --detections."""
+    import cv2
+
+    from juggletrack.detect.registered import BallProfile, registered_proposals
+    from juggletrack.pipeline.offline import save_detections_jsonl
+    from juggletrack.video.reader import VideoReader
+
+    try:
+        _check_report_output(out, [video, *profile])
+        profiles = []
+        for source in profile:
+            try:
+                profiles.append(BallProfile.model_validate_json(source.read_bytes()))
+            except ValueError as exc:
+                raise ValueError(f"invalid ball profile {source}: {exc}") from exc
+        with VideoReader(video) as reader, _atomic_report(out) as path:
+            decoded = 0
+
+            def frames():
+                nonlocal decoded
+                for row in reader.frames():
+                    decoded += 1
+                    yield row
+
+            save_detections_jsonl(registered_proposals(frames(), profiles), path)
+            if not decoded:
+                raise ValueError("could not decode any frames")
+            _warn_if_short(video, decoded, reader.info.frame_count)
+            empty = path.stat().st_size == 0
+    except (OSError, ValueError, cv2.error) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if empty:
+        typer.echo("No moving candidates matched the registered profiles.")
+    typer.echo(f"Saved candidates from {decoded} frames to {out}")
 
 
 if __name__ == "__main__":

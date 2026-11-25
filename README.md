@@ -45,10 +45,36 @@ uv run juggletrack analyze path/to/video.mp4 --model models/juggletrack-v3/best.
 The detector runs on CUDA when it is available, otherwise on the Apple Silicon
 GPU (MPS), otherwise on the CPU. Pass `--device cpu` to force the CPU.
 
-All commands (`--help` on each for options):
+### Review a missed brightly colored ball
+
+When the detector misses a close-up prop, try registering its color and size.
+Choose a frame with the whole ball visible. Drag a snug box around it and press
+Enter. Use the same lighting and a similar apparent ball size in the practice
+recording. Repeat registration for each distinct color.
+
+```bash
+uv run juggletrack balls register setup.mp4 --frame 30 --pick --out green.json
+uv run juggletrack balls propose practice.mp4 --profile green.json --out candidates.jsonl
+uv run juggletrack analyze practice.mp4 --detections candidates.jsonl --dots all --out review
+```
+
+Open `review/overlay.mp4` to inspect which moving regions were picked up.
+For headless use, replace `--pick` with `--circle X Y R` in upright source
+pixels. Frame numbers start at zero. Repeat `--profile` to use several colors.
+Profiles store numeric color and size, and can be reused across recordings.
+
+This experimental workflow can miss distant, still, crossing or poorly lit
+balls and can pick up moving hands or clothing. Counts produced by replaying
+these candidates need visual review. The [registration experiment](docs/research-plan.md#ball-registration)
+records where this helped and where it lost catches.
+
+### Command reference
+
+Use `--help` on any command for its options.
 
 | Command | Purpose |
 |---|---|
+| `balls register` / `balls propose` | Sample a colored prop and export moving candidates for offline review |
 | `analyze` | Offline pipeline: detect → arcs → events → runs/drops, with debug overlay (`--dots all` shows raw detections) |
 | `live` | Realtime tracker: webcam index or video file, HUD overlay, `--detections` replays saved detections |
 | `eval` | Score an `analysis.json` against hand labels (catch error, run IoU, drop P/R) |

@@ -37,6 +37,51 @@ On the same 876 saved detections, main at `c772c28` counted four catches in one 
 4. **Label what the person did.** On raw video, independent readers mark a launch, an airborne reception, a deliberate collection, an uncontrolled miss and a pickup. Count one catch for each airborne ball visibly brought under control, including the final collection. A hand-to-hand transfer without flight contributes zero. Start a run at its first launch and bracket its last catch or first uncontrolled miss. Record individual source-frame and presentation-time brackets for contacts, including uncertain or off-camera events. Reconcile readers after both have submitted. Export established runs and drops to the existing event label format. Keep unresolved alternatives in the evidence and report them as intervals until adjudicated. [Event label contract](../src/juggletrack/eval/labels.py)
 5. **Label where the balls were.** Select frame indices or timed windows before inspecting predictions. Review the entire displayed image and record all visible centers, including held centers and ambiguous contacts. Explicitly mark reviewed empty frames. Separately label short *consecutive* windows with identities through flight, contact and release to test continuity. Record blur, cropping and interventions at the frame or session level. Fit neither model nor matching radius on the evaluation split.
 
+## Ball registration
+
+A recorded-video pilot tested whether an explicit sample of ball color and apparent
+size could recover missed flights. Two setup clips supplied one green and one red
+sample. The detector used the same profiles on separate recordings from that
+capture group. A proposed region needed local color contrast, a compatible size
+and coherent motion across three consecutive source frames. Each input stream
+went through the same event analyzer. These are development measurements with
+model-assisted review and pending human sign-off.
+
+| Recorded check | Saved detector | Registered candidates |
+|---|---:|---:|
+| Close-up, visible airborne centers matched across six reviewed frames (60 px) | 0/10 | 10/10 |
+| Same close-up, timed catches matched in five seconds | 0/14 | 10/14 |
+| Additional active window reviewed before scoring, timed catches matched in six seconds | 8/17 | 5/17 |
+| Additional dense sequence, visible airborne centers matched across 240 frames (40 px) | 225/363 | 135/363 |
+
+The close-up replay produced one extra catch in its scored window. In a separate
+one-second control the juggler walked with the balls in hand. Both inputs yielded
+zero catches and zero drops there. That control measures brief exposure to held
+props. It gives no estimate of sensitivity to genuine drops.
+
+We also simulated registration from the first two seconds of six Meschke clips.
+We scored the next ten seconds, or through the end of shorter clips, using
+one-to-one matches within 15 source pixels. Across 5,097 labeled centers the
+saved detector matched 5,027 and emitted 4,761 unmatched boxes. The registered
+stream matched 2,411 and emitted 791 unmatched boxes. It missed more centers on every
+clip, including a low-saturation ball for which enrollment failed. Keep color
+proposals available for separate visual review. Combining their detections with
+the default counter needs prospective evidence on new performers, camera
+distances, clothing motion and genuine drops.
+
+### Synthetic data for detector research
+
+In a paired test on 72 scenes, pasting a real prop texture into the same circular
+mask as a rendered sphere increased box matches at intersection-over-union of 0.3
+from 10 to 15. At 12 pixels diameter, each arm localized 17 of 18 centers but
+matched zero boxes at that threshold. Box extent and center localization answer
+different questions for a counter that fits trajectories to centers.
+
+Before investing in synthetic training, collect real center and box labels across
+ball sizes and several capture groups. Freeze a test group, then compare real-only
+training with real-plus-synthetic training at the same update budget. Score center
+localization, false positives and resulting catch times on those real recordings.
+
 ## Experiments and decisions
 
 | Order | Comparison on development data | Decision it enables |
