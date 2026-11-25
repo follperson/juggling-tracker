@@ -125,3 +125,20 @@ def test_analyze_detections_uses_hand_motion_to_distinguish_a_catch(monkeypatch,
         assert result.runs[0].catches == 3
         assert result.arcs[-1] == arcs[-1]
         assert [drop.arc_id for drop in result.drops] == [3]
+
+
+def test_late_hand_turnaround_does_not_create_a_catch():
+    # A slow hand-like rise and fall looks parabolic, then the hand changes
+    # sideways direction again. Its later turn is not evidence that the
+    # earlier fitted hand-line crossing was a ball receipt.
+    dets = []
+    pivot = 51 / 30
+    turn_y = 0.596 - 0.192 * pivot + 0.15 * pivot * pivot
+    for frame in range(61):
+        t = frame / 30
+        x = 0.542 - 0.056 * t if t <= pivot else 0.542 - 0.056 * pivot + 0.12 * (t - pivot)
+        y = 0.596 - 0.192 * t + 0.15 * t * t if t <= pivot else turn_y + 0.18 * (t - pivot)
+        dets.append(Detection(frame_idx=frame, t=t, x=x, y=y, confidence=0.9))
+    arc = fit_arc(points_array(dets), 0)
+    assert is_floor_bound(arc, 0.617)
+    assert trim_hand_carry(dets, [arc], 0.617, 0.02) == [arc]

@@ -9,7 +9,8 @@ from statistics import median
 
 from juggletrack.arcs.extract import _GRAVITY_BAND, _prune
 from juggletrack.arcs.fit import fit_arc, points_array, x_residuals
-from juggletrack.events import FLOOR_MARGIN
+from juggletrack.events import FLOOR_MARGIN, catch_witness_margin
+from juggletrack.events.catches import hand_line_crossings
 from juggletrack.events.drops import is_floor_bound
 from juggletrack.types import Arc, Detection
 
@@ -122,6 +123,15 @@ def _trim_candidate(
     if not _prune([refit], g_range, tol, min_points, min_duration, max_abs_bx=0.6):
         return arc
     if abs(refit.ay - arc.ay) > arc.ay * _GRAVITY_BAND or is_floor_bound(refit, hand):
+        return arc
+    # A turn well after the predicted landing can be an ordinary movement
+    # of a ball already held. Require the same time agreement we use when
+    # relying on the last observed point to witness a catch.
+    crossings = hand_line_crossings(refit, hand)
+    if crossings is None:
+        return arc
+    release, landing = crossings
+    if abs(samples[pivot].t - landing) > catch_witness_margin(landing - release):
         return arc
     # A sideways deflection alone is also consistent with a missed ball.
     # Catching must slow the descent relative to the incoming ballistic fit,

@@ -11,6 +11,22 @@ contain the final per-video results and corrected denominators. References below
 to `.superpowers/` describe historical local notes; use the committed findings
 for portable evidence.
 
+## Dense replay of missed receptions
+
+On a separate development recording, the corrections for flights enclosed by
+hand motion and catches carried below hand height recovered three of ten
+missed receptions. Both decisions use the original fit and event tolerances.
+A restored flight must reach the existing hand line within the catch witness
+margin and preserve the evidence for previously witnessed catches. A downward
+hand turn must be close in time to the incoming flight's projected landing.
+The tracker retains the original endpoint heights as evidence of hand depth
+for neighboring flights, including when a saved session is read back.
+
+The 22-clip reference score moved from 1,270 to 1,273 matched flights out of
+1,485. Trusted matches stayed at 498 of 501. There are still 14 duplicate or
+unmatched reports against the base ceiling of 10. The source-clock replay and
+the limits of its visual review are described in [the benchmark record](benchmarking.md#tracing-missed-catches-with-dense-ball-positions).
+
 ## Drop timing after flight seeding
 
 On 2026-11-24, three simulated slow cascades exposed two errors. The linker
