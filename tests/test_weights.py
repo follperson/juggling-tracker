@@ -16,11 +16,48 @@ def test_explicit_model_overrides_environment(monkeypatch):
     assert resolve_model("yolo11n.pt") == "yolo11n.pt"
 
 
-def test_environment_model_expands_home(monkeypatch):
+def test_environment_model_expands_home(monkeypatch, tmp_path):
     from juggletrack.detect.weights import resolve_model
 
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "weights").mkdir()
+    (tmp_path / "weights/best.pt").write_bytes(b"fixture")
     monkeypatch.setenv("JUGGLETRACK_MODEL", "~/weights/best.pt")
-    assert resolve_model() == str(Path.home() / "weights/best.pt")
+    assert resolve_model() == str(tmp_path / "weights/best.pt")
+
+
+def test_missing_explicit_weights_path_names_the_option():
+    from juggletrack.detect.weights import resolve_model
+
+    with pytest.raises(FileNotFoundError, match="--model"):
+        resolve_model("models/juggletrack-v9/best.pt")
+
+
+def test_missing_environment_weights_path_names_the_variable(monkeypatch):
+    from juggletrack.detect.weights import resolve_model
+
+    monkeypatch.setenv("JUGGLETRACK_MODEL", "/nonexistent/best.pt")
+    with pytest.raises(FileNotFoundError, match="JUGGLETRACK_MODEL"):
+        resolve_model()
+
+
+@pytest.mark.parametrize("url", [
+    "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",
+    "http://localhost:8000/ball-detector",
+])
+def test_url_model_is_passed_through(monkeypatch, url):
+    from juggletrack.detect.weights import resolve_model
+
+    assert resolve_model(url) == url
+    monkeypatch.setenv("JUGGLETRACK_MODEL", url)
+    assert resolve_model() == url
+
+
+def test_exported_package_directory_is_accepted():
+    from juggletrack.detect.weights import resolve_model
+
+    Path("export/best.mlpackage").mkdir(parents=True)
+    assert resolve_model("export/best.mlpackage") == "export/best.mlpackage"
 
 
 def write_local_champion() -> Path:

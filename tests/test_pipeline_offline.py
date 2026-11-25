@@ -76,3 +76,49 @@ def test_analyze_video_end_to_end(tmp_path, video_path, sim):
     assert load_detections_jsonl(out / "detections.jsonl") == sorted(
         sim.detections, key=lambda d: (d.frame_idx,)
     )
+
+
+def decode_only_first(monkeypatch, n):
+    frames = VideoReader.frames
+
+    def first_n(self):
+        for item in frames(self):
+            if item[0] >= n:
+                return
+            yield item
+
+    monkeypatch.setattr(VideoReader, "frames", first_n)
+
+
+def test_analyze_video_records_frames_decoded_beside_header_count(
+    video_path, sim, monkeypatch,
+):
+    full = analyze_video(video_path, FakeDetector(sim.detections))
+    assert full.meta["frames_decoded"] == full.meta["frame_count"]
+
+    decode_only_first(monkeypatch, 50)
+    cut = analyze_video(video_path, FakeDetector(sim.detections))
+    assert cut.meta["frames_decoded"] == 50
+    assert cut.meta["frame_count"] == full.meta["frame_count"]
+
+
+GOOD_ROW = '{"frame_idx": 0, "t": 0.0, "x": 0.5, "y": 0.5}\n'
+
+
+@pytest.mark.parametrize(("bad_row", "named"), [
+    ('{"frame_idx": 2, "t": 0.07, "x": 0.5, "y', "Invalid JSON"),
+    ('{"frame_idx": 2, "t": 0.07, "x": 0.5}', "y: Field required"),
+    ('{"frame_idx": 2, "t": 0.07, "x": NaN, "y": 0.5}', "x is not finite"),
+    ('{"frame_idx": 2, "t": Infinity, "x": 0.5, "y": 0.5}', "t is not finite"),
+    ('{"frame_idx": 2, "t": 0.07, "x": 0.5, "y": 0.5, "w": -Infinity}', "w is not finite"),
+    ('{"frame_idx": 2, "t": 0.07, "x": 0.5, "y": 0.5, "confidence": NaN}',
+     "confidence is not finite"),
+])
+def test_load_detections_names_the_file_line_and_field(tmp_path, bad_row, named):
+    path = tmp_path / "dets.jsonl"
+    path.write_text(GOOD_ROW + "\n" + GOOD_ROW + bad_row + "\n")
+    with pytest.raises(ValueError) as caught:
+        load_detections_jsonl(path)
+    message = str(caught.value)
+    assert message.startswith(f"{path}:4: "), message
+    assert named in message

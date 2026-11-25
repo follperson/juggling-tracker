@@ -67,7 +67,8 @@ def render_overlay(
             raise RuntimeError(f"cv2.VideoWriter failed to open: {out_path}")
 
         for idx, t, frame in reader.frames():
-            draw_hand_line(frame, session.hand_line_y)
+            if session.arcs:
+                draw_hand_line(frame, session.hand_line_y)
             draw_detections(frame, dets_by_frame.get(idx, []))
             draw_arc_tails(frame, session.arcs, t, tail_s=tail_s)
 

@@ -46,6 +46,10 @@ def _hud_lines(state: RealtimeState, run_history: list[int], fps: float) -> list
     return lines
 
 
+class SourceOpenError(ValueError):
+    """The capture could not open the source."""
+
+
 def run_live(
     source: int | str,
     detector: BallDetector,
@@ -68,7 +72,7 @@ def run_live(
     """
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
-        raise ValueError(f"could not open source: {source!r}")
+        raise SourceOpenError(f"could not open source: {source!r}")
     fps_meta = cap.get(cv2.CAP_PROP_FPS) or 30.0
     is_file = isinstance(source, str)
     # A file source's own frame count, known up front -- lets the loop tell

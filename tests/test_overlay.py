@@ -97,3 +97,17 @@ def test_overlay_dots_invalid_choice_raises(tmp_path, setup):
     out = tmp_path / "bad.mp4"
     with pytest.raises(ValueError):
         render_overlay(video, session, out, dots="bogus")
+
+
+def test_overlay_draws_no_hand_line_without_arcs(tmp_path):
+    from juggletrack.types import SessionResult
+
+    video = tmp_path / "in.mp4"
+    write_test_video(video, n_frames=10, fps=30.0)
+    session = SessionResult()
+    assert session.hand_line_y == 0.0 and not session.arcs
+    out = tmp_path / "overlay.mp4"
+    render_overlay(video, session, out)
+    with VideoReader(out) as reader:
+        top_rows = [frame[:2].max() for _, _, frame in reader.frames()]
+    assert max(top_rows) < 100, top_rows

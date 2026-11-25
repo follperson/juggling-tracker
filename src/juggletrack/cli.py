@@ -3,11 +3,34 @@ from __future__ import annotations
 
 import enum
 import json
+import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 
+if TYPE_CHECKING:
+    from juggletrack.types import Detection
+
 app = typer.Typer(add_completion=False, no_args_is_help=True)
+
+
+def _print_version(value: bool) -> None:
+    if value:
+        from importlib.metadata import version
+
+        typer.echo(f"juggletrack {version('juggletrack')}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    _version: bool = typer.Option(
+        False, "--version", callback=_print_version, is_eager=True,
+        help="Print the installed version and exit",
+    ),
+) -> None:
+    pass
 
 
 class DetectorBackend(str, enum.Enum):
@@ -27,8 +50,71 @@ def _resolve_model(model: str | None) -> str:
     try:
         return resolve_model(model)
     except FileNotFoundError as exc:
-        # Only the default can be missing: explicit names go to Ultralytics.
         raise typer.BadParameter(str(exc)) from exc
+
+
+def _is_local_path(source: str) -> bool:
+    """False for what OpenCV opens without a file of that name: a URL or an image-sequence pattern."""
+    return "://" not in source and "%" not in source
+
+
+def _load_replay(detections: Path, video: Path | str | None) -> list[Detection]:
+    """Load saved detections. With a local video, also check they fit inside it."""
+    from juggletrack.pipeline.offline import check_frames_in_video, load_detections_jsonl
+    from juggletrack.video.reader import VideoReader
+
+    frame_count = None
+    if video is not None:
+        with VideoReader(video) as reader:
+            frame_count = reader.info.frame_count
+    try:
+        dets = load_detections_jsonl(detections)
+        if frame_count is not None:
+            check_frames_in_video(dets, frame_count)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--detections") from exc
+    return dets
+
+
+def _warn_if_short(video: Path, decoded: int, frame_count: int) -> None:
+    if decoded < 0.9 * frame_count:
+        typer.echo(
+            f"warning: decoded {decoded} of the {frame_count} frames the header of {video} "
+            "reports; the file may be cut short or its header may be stale",
+            err=True,
+        )
+
+
+def _detect(video: Path, detector, stride: int) -> tuple[list[Detection], int]:
+    """Return the detections and the number of frames decoded, warning on a short read."""
+    from juggletrack.pipeline.offline import detect_frames
+    from juggletrack.video.reader import VideoReader
+
+    with VideoReader(video) as reader:
+        dets, decoded = detect_frames(reader, detector, stride)
+        frame_count = reader.info.frame_count
+    _warn_if_short(video, decoded, frame_count)
+    return dets, decoded
+
+
+def _yolo_detector(model, conf, imgsz, device):
+    from juggletrack.detect.yolo import YOLODetector
+
+    return YOLODetector(model_path=_resolve_model(model), conf=conf, imgsz=imgsz, device=device)
+
+
+def _check_out_dir(out: Path) -> Path:
+    """Fail unless --out is, or could be created as, a writable directory. Create nothing."""
+    # lexists and isdir never raise: a dangling link is there as far as mkdir
+    # is concerned, and a parent that may not be searched is not writable.
+    existing = next(p for p in (out, *out.parents) if os.path.lexists(p))
+    if not os.path.isdir(existing):
+        raise typer.BadParameter(f"cannot write {out}: {existing} is not a directory",
+                                 param_hint="--out")
+    if not os.access(existing, os.W_OK | os.X_OK):
+        raise typer.BadParameter(f"cannot write {out}: {existing} is not writable",
+                                 param_hint="--out")
+    return out
 
 
 def _check_report_output(out: Path, inputs: list[Path]) -> None:
@@ -44,7 +130,7 @@ def _check_report_output(out: Path, inputs: list[Path]) -> None:
 @app.command()
 def analyze(
     video: Path = typer.Argument(..., exists=True, dir_okay=False),
-    out: Path | None = typer.Option(None, help="Output dir (default outputs/<stem>)"),
+    out: Path | None = typer.Option(None, help="Output directory (default outputs/<stem>)"),
     overlay: bool = typer.Option(True, help="Render debug overlay video"),
     save_intermediates: bool = typer.Option(False, help="Save detections.jsonl"),
     detections: Path | None = typer.Option(
@@ -52,8 +138,8 @@ def analyze(
         help="Replay saved detections.jsonl instead of running the detector",
     ),
     model: str | None = typer.Option(None, help="Weights (default: env or local v3 model)"),
-    conf: float = typer.Option(0.05, help="Detector confidence threshold"),
-    imgsz: int = typer.Option(640, help="Detector input size"),
+    conf: float = typer.Option(0.05, min=0, max=1, help="Detector confidence threshold"),
+    imgsz: int = typer.Option(640, min=32, help="Detector input size"),
     stride: int = typer.Option(1, min=1, help="Detect every Nth frame"),
     device: str | None = typer.Option(None, help="Torch device (mps/cpu/cuda)"),
     link_max_dist: float = typer.Option(
@@ -65,50 +151,50 @@ def analyze(
         "detections only), 'all' (every raw detection), or 'none'",
     ),
 ) -> None:
+    """Find juggling runs, catches and drops in a video; write analysis.json and an overlay."""
     from pydantic import ValidationError
 
     from juggletrack.analyze import AnalyzeConfig
-    from juggletrack.pipeline.offline import analyze_video, load_detections_jsonl
+    from juggletrack.pipeline.offline import run_offline
 
     try:
         config = AnalyzeConfig(link_max_dist=link_max_dist)
     except ValidationError as exc:
         raise typer.BadParameter(exc.errors()[0]["msg"], param_hint="--link-max-dist") from exc
-    out_dir = out or Path("outputs") / video.stem
+    out_dir = _check_out_dir(out or Path("outputs") / video.stem)
     if detections is not None:
-        from juggletrack.detect.fake import FakeDetector
-
-        detector = FakeDetector(load_detections_jsonl(detections))
+        source = _load_replay(detections, video)
     else:
         from juggletrack.detect.yolo import YOLODetector
 
-        detector = YOLODetector(
+        source = YOLODetector(
             model_path=_resolve_model(model), conf=conf, imgsz=imgsz, device=device
         )
 
-    session = analyze_video(
-        video, detector,
+    session, analysed, info = run_offline(
+        video, source,
         out_dir=out_dir, save_intermediates=save_intermediates, stride=stride,
         config=config,
     )
+    if "frames_decoded" in session.meta:
+        _warn_if_short(video, session.meta["frames_decoded"], info.frame_count)
 
     if overlay:
         from juggletrack.pipeline.overlay import render_overlay
 
-        dets_for_overlay = None
-        jsonl = out_dir / "detections.jsonl"
-        if detections is not None:
-            dets_for_overlay = load_detections_jsonl(detections)
-        elif jsonl.exists():
-            dets_for_overlay = load_detections_jsonl(jsonl)
         render_overlay(video, session, out_dir / "overlay.mp4",
-                       detections=dets_for_overlay, dots=dots.value)
+                       detections=analysed, dots=dots.value)
 
     for i, run in enumerate(session.runs):
-        typer.echo(
-            f"run {i + 1}: {run.start_t:.2f}-{run.end_t:.2f}s  "
-            f"catches {run.catches}  end={run.end_reason}"
-        )
+        # A negative start_t is a throw extrapolated to before the first frame.
+        span = f"{max(run.start_t, 0.0):.2f}s to {run.end_t:.2f}s"
+        if run.start_t < 0:
+            span += " (began before the clip)"
+        typer.echo(f"run {i + 1}: {span}  catches {run.catches}  end={run.end_reason}")
+    typer.echo(
+        f"total: {sum(r.catches for r in session.runs)} catches, "
+        f"{sum(r.throws for r in session.runs)} throws"
+    )
     typer.echo(
         f"{len(session.runs)} run(s), {len(session.drops)} drop(s); "
         f"results in {out_dir}"
@@ -203,22 +289,17 @@ def benchmark(
 
 
 def _get_detections(video, detections, model, conf, imgsz, stride, device):
-    from juggletrack.pipeline.offline import detect_video, load_detections_jsonl
-    from juggletrack.video.reader import VideoReader
-
     if detections is not None:
-        return load_detections_jsonl(detections)
-    from juggletrack.detect.yolo import YOLODetector
-
-    det = YOLODetector(model_path=_resolve_model(model), conf=conf, imgsz=imgsz, device=device)
-    with VideoReader(video) as reader:
-        return detect_video(reader, det, stride=stride)
+        return _load_replay(detections, video)
+    return _detect(video, _yolo_detector(model, conf, imgsz, device), stride)[0]
 
 
 @app.command()
 def label(
     video: Path = typer.Argument(..., exists=True, dir_okay=False),
-    out: Path | None = typer.Option(None, help="Output dir (default outputs/labels/<stem>)"),
+    out: Path | None = typer.Option(
+        None, help="Output directory (default outputs/labels/<stem>)",
+    ),
     detections: Path | None = typer.Option(
         None, exists=True, dir_okay=False,
         help="Replay saved detections.jsonl instead of running the detector",
@@ -233,8 +314,8 @@ def label(
         "underestimate ball size and vary with speed.",
     ),
     model: str | None = typer.Option(None, help="Weights (default: env or local v3 model)"),
-    conf: float = typer.Option(0.05),
-    imgsz: int = typer.Option(640),
+    conf: float = typer.Option(0.05, min=0, max=1),
+    imgsz: int = typer.Option(640, min=32),
     stride: int = typer.Option(1, min=1),
     device: str | None = typer.Option(None),
     link_max_dist: float = typer.Option(
@@ -263,7 +344,7 @@ def label(
         select_autolabels,
     )
 
-    out_dir = out or Path("outputs") / "labels" / video.stem
+    out_dir = _check_out_dir(out or Path("outputs") / "labels" / video.stem)
     if detector == DetectorBackend.motion:
         if stride > 1:
             typer.echo(
@@ -272,16 +353,11 @@ def label(
                 "--stride 1"
             )
         if detections is not None:
-            from juggletrack.pipeline.offline import load_detections_jsonl
-
-            dets = load_detections_jsonl(detections)
+            dets = _load_replay(detections, video)
         else:
             from juggletrack.detect.motion import MotionDetector
-            from juggletrack.pipeline.offline import detect_video
-            from juggletrack.video.reader import VideoReader
 
-            with VideoReader(video) as reader:
-                dets = detect_video(reader, MotionDetector(), stride=stride)
+            dets = _detect(video, MotionDetector(), stride)[0]
     else:
         dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
     arcs = extract_arcs(dets, link_max_dist=link_max_dist)
@@ -320,8 +396,8 @@ def coverage(
         help="Score saved detections.jsonl (pass the SAME --stride it was made with)",
     ),
     model: str | None = typer.Option(None, help="Weights (default: env or local v3 model)"),
-    conf: float = typer.Option(0.05),
-    imgsz: int = typer.Option(640),
+    conf: float = typer.Option(0.05, min=0, max=1),
+    imgsz: int = typer.Option(640, min=32),
     stride: int = typer.Option(1, min=1),
     device: str | None = typer.Option(None),
 ) -> None:
@@ -332,9 +408,20 @@ def coverage(
 
     from juggletrack.video.reader import VideoReader
 
-    dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
-    with VideoReader(video) as reader:
-        n_sampled = math.ceil(reader.info.frame_count / stride)
+    if detections is not None:
+        dets = _load_replay(detections, video)
+        with VideoReader(video) as reader:
+            n_frames = reader.info.frame_count
+    else:
+        dets, n_frames = _detect(video, _yolo_detector(model, conf, imgsz, device), stride)
+    off_grid = next((d.frame_idx for d in dets if d.frame_idx % stride), None)
+    if off_grid is not None:
+        raise typer.BadParameter(
+            f"detection at frame {off_grid} is not on the --stride {stride} grid; "
+            "pass the stride the detections were made with",
+            param_hint="--stride",
+        )
+    n_sampled = math.ceil(n_frames / stride)
     per_frame = Counter(d.frame_idx for d in dets)
     cov = {
         k: sum(1 for v in per_frame.values() if v >= k) / n_sampled if n_sampled else 0.0
@@ -449,15 +536,15 @@ def live(
         None, exists=True, dir_okay=False,
         help="Replay saved detections.jsonl (file sources only; no detector run)",
     ),
-    conf: float = typer.Option(0.05),
-    imgsz: int = typer.Option(640),
+    conf: float = typer.Option(0.05, min=0, max=1),
+    imgsz: int = typer.Option(640, min=32),
     device: str | None = typer.Option(None),
     display: bool = typer.Option(True, "--display/--no-display"),
-    max_frames: int | None = typer.Option(None),
-    out: Path | None = typer.Option(None, help="Write live_session.json here"),
+    max_frames: int | None = typer.Option(None, min=1),
+    out: Path | None = typer.Option(None, help="Directory to write live_session.json into"),
 ) -> None:
     """Live juggling tracker: webcam or file, realtime HUD."""
-    from juggletrack.pipeline.live import run_live
+    from juggletrack.pipeline.live import SourceOpenError, run_live
     from juggletrack.pipeline.realtime import RealtimeConfig
 
     # S4: str.isdigit() is true for various non-ASCII digit characters
@@ -473,11 +560,15 @@ def live(
     # index has no frames to replay against.
     if detections is not None and isinstance(src, int):
         raise typer.BadParameter("--detections requires a file source")
+    local = isinstance(src, str) and _is_local_path(src)
+    if detections is not None and local and not Path(src).exists():
+        raise typer.BadParameter(f"file {src} does not exist", param_hint="source")
+    if out is not None:
+        _check_out_dir(out)
     if detections is not None:
         from juggletrack.detect.fake import FakeDetector
-        from juggletrack.pipeline.offline import load_detections_jsonl
 
-        detector = FakeDetector(load_detections_jsonl(detections))
+        detector = FakeDetector(_load_replay(detections, src if local else None))
     else:
         from juggletrack.detect.yolo import YOLODetector
 
@@ -485,10 +576,19 @@ def live(
             model_path=_resolve_model(model), conf=conf, imgsz=imgsz, device=device,
         )
 
-    final, fps = run_live(
-        src, detector, config=RealtimeConfig(),
-        display=display, max_frames=max_frames,
-    )
+    try:
+        final, fps = run_live(
+            src, detector, config=RealtimeConfig(),
+            display=display, max_frames=max_frames,
+        )
+    except SourceOpenError as exc:
+        if isinstance(src, int):
+            message = f"{exc}; check the camera index and that this terminal may use the camera"
+        elif local and not Path(src).exists():
+            message = f"could not open source {src}: the file does not exist"
+        else:
+            message = f"could not open source {src}"
+        raise typer.BadParameter(message, param_hint="source") from exc
     if out is not None:
         out.mkdir(parents=True, exist_ok=True)
         (out / "live_session.json").write_text(final.model_dump_json(indent=2))
