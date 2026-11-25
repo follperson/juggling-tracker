@@ -82,6 +82,41 @@ ball sizes and several capture groups. Freeze a test group, then compare real-on
 training with real-plus-synthetic training at the same update budget. Score center
 localization, false positives and resulting catch times on those real recordings.
 
+### Small-ball localization on real recordings
+
+Six Meschke recordings were replayed with the same event core and source clock.
+Changing only the widths and heights of saved detections gave identical session
+outputs on all six. On one trusted 21-flight reference, the shipped counter
+matched 14 catches. Moving existing matched centers to their annotated positions
+raised that to 20. Adding annotated centers with no prediction within 15 source
+pixels raised it to 16. These substitutions use reference information to
+diagnose the loss. A deployed detector would have to infer the positions from
+the video.
+
+Box size can affect which detections survive the detector's overlap filter.
+A separate experiment halved the extents *only during suppression* and exported
+the original coordinates and sizes. On the 21-flight reference, matches rose
+from 14 to 16. On another clip, all eight sampled predictions covered at least
+twice the visible ball area. Halving suppression extents raised 5-pixel center
+matches from 6,034 to 6,373 there, while reported catches still matched 42
+reference flights. This second reference is sensitive to the thresholds used
+to derive its flight times.
+
+Two additional natural-speed recordings tested transfer. On 15 gym frames with
+43 reviewed centers, lowering the confidence threshold raised 5-pixel matches
+from 33 to 42 and unmatched predictions from 50 to 608. The default counter
+reported three catches in the four-second window and the lower threshold
+reported none. Contacts in these recordings await human adjudication.
+
+A small learned center corrector trained on eleven separate recordings also
+lost 26 matched catches in aggregate on nine evaluation recordings with the
+shipped event core. The recordings share a dataset and some sources were
+previously used to build the detector. This is a development comparison.
+The detector settings and checkpoint stay at the existing defaults. Use
+[reviewed centers and visible extents](benchmarking.md#reviewed-frames-from-practice-recordings)
+to measure the next candidate, then check the resulting timed catches on each
+recording. Prioritize the gaps along real flights and the final hand contact.
+
 ## Experiments and decisions
 
 | Order | Comparison on development data | Decision it enables |

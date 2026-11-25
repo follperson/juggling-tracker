@@ -129,3 +129,67 @@ def test_pixel_distances_use_both_image_dimensions():
     reviewed = labels((0, [center(.5)] )).model_copy(update={"height": 1000})
     result = score([pred(.5, y=.52)], reviewed)
     assert (result["tp"], result["fp"], result["fn"]) == (0, 1, 1)
+
+
+def bounded_center(x, *, y=.5, state="airborne", half=.04):
+    return {**center(x, state, y), "visible_box": {
+        "left": x-half, "right": x+half, "top": y-half, "bottom": y+half,
+    }}
+
+
+def test_box_report_distinguishes_a_missing_center_from_an_oversized_prediction():
+    review = labels((0, [bounded_center(.25), bounded_center(.5), bounded_center(.75)]))
+    result = score([pred(.25, w=.32, h=.32), pred(.5, w=.08, h=.08)], review)
+    box = result["box_localization"]
+    assert (result["tp"], result["fn"]) == (2, 1)
+    assert (box["reviewed"], box["center_matched"], box["with_predicted_extent"]) == (3, 2, 2)
+    assert (box["iou_at_least_0_3"], box["at_least_double_area"]) == (1, 1)
+    large, exact, missing = box["targets"]
+    assert (large["area_ratio"], large["iou"], large["center_error_px"]) == pytest.approx((16, 1/16, 0))
+    assert (exact["area_ratio"], exact["iou"]) == pytest.approx((1, 1))
+    assert missing["center_error_px"] is missing["iou"] is missing["area_ratio"] is None
+
+
+def test_box_review_uses_same_assignment_and_clips_to_visible_image():
+    left = center(.02)
+    left["visible_box"] = {"left": 0, "top": .45, "right": .04, "bottom": .55}
+    review = labels((0, [left, bounded_center(.5), bounded_center(.8, state="ambiguous")]))
+    result = score([pred(.02, w=.12, h=.1), pred(.5), pred(.8, w=.08, h=.08)], review)
+    box = result["box_localization"]
+    assert (box["reviewed"], box["center_matched"], box["with_predicted_extent"]) == (2, 2, 1)
+    assert (box["targets"][0]["iou"], box["targets"][0]["area_ratio"]) == pytest.approx((.5, 2))
+    assert box["targets"][1]["center_error_px"] == 0 and box["targets"][1]["iou"] is None
+    assert result["n_ignored_predictions"] == 1
+
+
+def test_box_measurements_leave_center_only_reviews_compatible():
+    assert "box_localization" not in score([pred(.5)], labels((0, [center(.5)])))
+    assert "box_localization" not in score([], labels((0, [bounded_center(.5, state="ambiguous")])))
+
+
+@pytest.mark.parametrize("update", [
+    {"left": .6}, {"bottom": .2}, {"left": -.01}, {"right": .49}, {"bottom": float("nan")},
+])
+def test_invalid_reviewed_box_is_rejected(update):
+    reviewed = bounded_center(.5)
+    reviewed["visible_box"].update(update)
+    with pytest.raises(ValidationError):
+        labels((0, [reviewed]))
+
+
+@pytest.mark.parametrize("width", [-.1, float("nan"), float("inf")])
+def test_invalid_predicted_extent_is_rejected_even_on_unscored_rows(width):
+    with pytest.raises(ValueError, match="box dimensions"):
+        score([pred(.5, frame=2, w=width, h=.1, confidence=0)],
+              labels((0, [bounded_center(.5)])), min_conf=.9)
+
+
+
+def test_visible_ball_with_uncertain_phase_counts_as_a_definite_center():
+    report = score([pred(.5, w=.08, h=.08)], labels((0, [
+        bounded_center(.5, state="visible"), center(.51, state="ambiguous")
+    ])))
+    assert report["tp"] == 1 and report["n_ignored_predictions"] == 0
+    assert report["states"]["visible"] == {"n": 1, "matched": 1, "recall": 1}
+    assert report["states"]["airborne"]["n"] == report["states"]["held"]["n"] == 0
+    assert report["box_localization"]["targets"][0]["state"] == "visible"

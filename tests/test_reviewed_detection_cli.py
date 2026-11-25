@@ -74,3 +74,22 @@ def test_source_and_clock_checked_before_output(review_inputs, tmp_path, invalid
     assert result.exit_code == 2, result.output
     assert [p.read_bytes() for p in review_inputs] == before
     assert out.exists() == (invalid == "output_alias")
+
+
+def test_reports_oversized_box_at_correct_center_through_cli(review_inputs, tmp_path):
+    _, detections, labels = review_inputs
+    doc = json.loads(labels.read_bytes())
+    ball = doc["frames"][0]["centers"][0]
+    x, y = ball["x"], ball["y"]
+    ball.update(state="visible", visible_box={
+        "left": x - .025, "top": y - .025, "right": x + .025, "bottom": y + .025,
+    })
+    labels.write_text(json.dumps(doc))
+    save_detections_jsonl([Detection(frame_idx=0, t=0, x=x, y=y, w=.20, h=.20)], detections)
+    out = tmp_path/"report.json"
+    result = run(review_inputs, out)
+    assert result.exit_code == 0, result.output
+    assert "Definite centers matched 1/2" in result.output
+    assert "labeled area 1/1" in result.output
+    report = json.loads(out.read_bytes())
+    assert report["box_localization"]["targets"][0]["area_ratio"] == pytest.approx(16)
