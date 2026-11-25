@@ -1,5 +1,8 @@
+import warnings
+
 import numpy as np
 import pytest
+from numpy.exceptions import RankWarning
 
 from juggletrack.arcs.fit import fit_arc, points_array, y_residuals
 from juggletrack.sim import CascadeParams, simulate_cascade
@@ -109,3 +112,37 @@ def test_rmse_downweights_outlier_consistently_with_fit():
     outlier[3] = 0.01
     arc = fit_arc(np.vstack([arr, outlier]))
     assert arc.rmse < 1e-3
+
+
+def _two_timestamp_points() -> np.ndarray:
+    """Duplicate boxes on two frames: a parabola through two instants is
+    rank deficient, so np.polyfit's default call raises RankWarning."""
+    t = 5.0 + np.array([0.0, 0.0, 0.0, 1 / 30, 1 / 30])
+    return np.column_stack([
+        t,
+        [0.40, 0.41, 0.39, 0.41, 0.42],
+        [0.60, 0.61, 0.59, 0.57, 0.58],
+        [0.9, 0.3, 0.5, 0.8, 0.2],
+    ])
+
+
+def test_rank_deficient_fit_does_not_warn():
+    """label --detector motion printed one RankWarning per rank-deficient fit
+    (142 on one session), none of which reaches a final arc."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fit_arc(_two_timestamp_points())
+    assert [str(w.message) for w in caught] == []
+
+
+@pytest.mark.parametrize("arr", [flight_points(noise=0.005, seed=2), _two_timestamp_points()],
+                         ids=["well-conditioned", "rank-deficient"])
+def test_fit_coefficients_match_plain_polyfit(arr):
+    dt = arr[:, 0] - arr[0, 0]
+    w = arr[:, 3]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RankWarning)
+        ay, by, cy = np.polyfit(dt, arr[:, 2], 2, w=w)
+        bx, cx = np.polyfit(dt, arr[:, 1], 1, w=w)
+    arc = fit_arc(arr)
+    assert (arc.ay, arc.by, arc.cy, arc.bx, arc.cx) == (ay, by, cy, bx, cx)

@@ -34,8 +34,10 @@ def fit_arc(arr: np.ndarray, arc_id: int = -1) -> Arc:
             f"points all at t={t0!r}"
         )
     w = arr[:, 3]
-    ay, by, cy = np.polyfit(dt, arr[:, 2], 2, w=w)
-    bx, cx = np.polyfit(dt, arr[:, 1], 1, w=w)
+    # full=True returns the same least-squares coefficients without the
+    # RankWarning that duplicate boxes on two frames would raise.
+    ay, by, cy = np.polyfit(dt, arr[:, 2], 2, w=w, full=True)[0]
+    bx, cx = np.polyfit(dt, arr[:, 1], 1, w=w, full=True)[0]
     resid = (ay * dt * dt + by * dt + cy) - arr[:, 2]
     # polyfit minimizes sum((w*resid)^2), so the consistent diagnostic
     # averages resid^2 with weights w^2 (uniform-confidence data unaffected).

@@ -111,7 +111,6 @@ def test_absorption_is_deterministic_across_input_orderings():
         )
 
 
-@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 def test_duplicate_injection_does_not_inflate_catches():
     """Duplicate-box storms mint parallel arcs and inflate catches (measured:
     ss3_id_086 oracle 24 -> 57 pre-fix). Injecting 2-3 jittered clones of every
@@ -137,14 +136,7 @@ def test_duplicate_injection_does_not_inflate_catches():
     docs/parameter-tuning.md for the full combo-sweep rationale).
     Verified directly on this exact fixture at the FINAL shipped default
     (merge_dist=0.012 + arc dedup): clean=12, dirty=12 -- exact match,
-    passing with margin rather than at the ±1 band edge.
-
-    Final review: the randomly-jittered clone cloud legitimately poorly-
-    conditions np.polyfit on some draws (expected for this fixture's dense,
-    near-degenerate point clusters, same rationale as test_extract.py's
-    test_dense_same_timestamp_clusters_do_not_crash) -- RankWarning
-    suppressed at the source via a marker, not globally, so one elsewhere
-    in the suite still surfaces normally."""
+    passing with margin rather than at the ±1 band edge."""
     import numpy as np
     from juggletrack.analyze import AnalyzeConfig, analyze_detections
     from juggletrack.sim import simulate_cascade

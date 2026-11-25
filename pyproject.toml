@@ -32,6 +32,7 @@ packages = ["src/juggletrack"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-m 'not detector'"
+filterwarnings = ["error::numpy.exceptions.RankWarning"]
 markers = [
     "detector: needs YOLO weights (network download on first run); run with -m detector",
 ]

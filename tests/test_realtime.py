@@ -819,7 +819,6 @@ def test_finalize_clears_run_active_and_catches_current_run():
     assert final.catches_current_run == 0
 
 
-@pytest.mark.filterwarnings("ignore::numpy.exceptions.RankWarning")
 def test_duplicate_injection_inherits_clustering_via_analyze_detections():
     """Plan 5 task 2: RealtimeAnalyzer has no clustering logic of its own --
     it inherits per-frame duplicate-box clustering entirely through the
@@ -842,12 +841,7 @@ def test_duplicate_injection_inherits_clustering_via_analyze_detections():
     box clustering alongside arc dedup (see docs/parameter-tuning.md).
     Verified directly at the FINAL shipped default (merge_dist=0.012 + arc
     dedup): clean=12, dirty=12 -- exact match, matching the offline
-    measurement in test_cluster.py.
-
-    Final review: same RankWarning-suppression rationale as test_cluster.py's
-    twin of this fixture -- the jittered clone cloud legitimately poorly-
-    conditions np.polyfit on some draws; suppressed at the source, not
-    globally."""
+    measurement in test_cluster.py."""
     import numpy as np
     r = simulate_cascade(n_throws=12, fps=30.0, seed=3)
     rng = np.random.default_rng(7)
