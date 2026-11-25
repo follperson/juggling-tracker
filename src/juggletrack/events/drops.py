@@ -81,6 +81,13 @@ def detect_drops(
 
             crossings = hand_line_crossings(cand, miss_line)
             miss_t = crossings[1] if crossings else cand.t_end
+            shared = hand_line_crossings(cand, hand_line)
+            # Keep the shared event clock when the two estimated crossings
+            # differ by at most half an observed sampling interval.
+            if shared and cand.n_points > 1:
+                sample_s = cand.duration() / (cand.n_points - 1)
+                if abs(shared[1] - miss_t) <= sample_s / 2:
+                    miss_t = shared[1]
             # "Continued" here means a *new* throw was made after the miss —
             # i.e. the juggler kept the pattern going. Arcs already in flight
             # from before the miss (thrown pre-drop, landing shortly after
