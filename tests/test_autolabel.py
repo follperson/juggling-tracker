@@ -33,6 +33,44 @@ def test_select_autolabels_filters_unverified(sim_with_junk):
     assert 10 in review and 40 in review
 
 
+def test_select_autolabels_keeps_one_label_per_arc_per_frame():
+    # A detector that fires a weaker echo box 0.006 beside the ball on every
+    # frame: both boxes sit on the one arc, but only one ball is there.
+    fps, g = 30.0, 1.2
+    dets = []
+    for i in range(30):
+        t = i / fps
+        x, y = 0.3 + 0.2 * t, 0.8 - 1.0 * t + 0.5 * g * t * t
+        dets.append(Detection(frame_idx=i, t=t, x=x, y=y, w=0.03, h=0.03, confidence=0.9))
+        dets.append(Detection(frame_idx=i, t=t, x=x + 0.006, y=y, w=0.03, h=0.03,
+                              confidence=0.4))
+    arcs = extract_arcs(dets)
+    labels, _ = select_autolabels(dets, arcs)
+    per_frame = [sum(lb.frame_idx == f for lb in labels) for f in range(30)]
+    assert max(per_frame) == 1
+    assert sum(per_frame) >= 25
+
+
+
+def test_select_autolabels_keeps_the_detection_closest_to_its_arc():
+    # Each frame has a stray box 0.015 below the ball, listed first. Both fit
+    # the arc, and the label must be the box that lies on it.
+    fps, g = 30.0, 1.2
+    on_arc, dets = [], []
+    for i in range(30):
+        t = i / fps
+        x, y = 0.3 + 0.2 * t, 0.8 - 1.0 * t + 0.5 * g * t * t
+        ball = Detection(frame_idx=i, t=t, x=x, y=y, w=0.03, h=0.03, confidence=0.5)
+        on_arc.append(ball)
+        dets += [ball.model_copy(update={"y": y + 0.015}), ball]
+    arcs = extract_arcs(on_arc)
+    assert len(arcs) == 1
+
+    labels, _ = select_autolabels(dets, arcs)
+
+    assert len(labels) == 30
+    assert {(lb.frame_idx, lb.y) for lb in labels} == {(d.frame_idx, d.y) for d in on_arc}
+
 def test_export_writes_coco_and_frames(tmp_path, sim_with_junk):
     r, dets = sim_with_junk
     arcs = extract_arcs(dets)
@@ -73,6 +111,68 @@ def test_export_bbox_matches_normalized_center(tmp_path):
     export_video_labels(video, [lb], out)
     coco = json.loads((out / "annotations.json").read_text())
     assert coco["annotations"][0]["bbox"] == pytest.approx([144.0, 96.0, 32.0, 48.0])
+
+
+def test_export_clips_boxes_at_every_frame_edge(tmp_path):
+    # 32x48 px boxes centred 4 px inside each edge of a 320x240 frame: each
+    # keeps only the part inside the frame, the same way on all four sides.
+    w, h = 320, 240
+    labels = [
+        Detection(frame_idx=0, t=0.0, x=4 / w, y=0.5, w=0.1, h=0.2),
+        Detection(frame_idx=0, t=0.0, x=316 / w, y=0.5, w=0.1, h=0.2),
+        Detection(frame_idx=0, t=0.0, x=0.5, y=4 / h, w=0.1, h=0.2),
+        Detection(frame_idx=0, t=0.0, x=0.5, y=236 / h, w=0.1, h=0.2),
+    ]
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=1, fps=30.0, size=(w, h))
+    out = tmp_path / "edges"
+    export_video_labels(video, labels, out)
+    boxes = [a["bbox"] for a in json.loads((out / "annotations.json").read_text())["annotations"]]
+    assert boxes[0] == pytest.approx([0.0, 96.0, 20.0, 48.0])
+    assert boxes[1] == pytest.approx([300.0, 96.0, 20.0, 48.0])
+    assert boxes[2] == pytest.approx([144.0, 0.0, 32.0, 28.0])
+    assert boxes[3] == pytest.approx([144.0, 212.0, 32.0, 28.0])
+
+
+
+def test_export_skips_boxes_that_lie_wholly_outside_the_frame(tmp_path):
+    # A hand-written detections file can put a centre past an edge. Such a
+    # box has nothing left after clipping and must not be exported, and a
+    # frame left with no box is not exported either.
+    w, h = 320, 240
+    inside = Detection(frame_idx=0, t=0.0, x=0.5, y=0.5, w=0.1, h=0.2)
+    outside = [
+        Detection(frame_idx=f, t=0.0, x=x, y=y, w=0.1, h=0.2)
+        for f in (0, 1) for x, y in ((1.1, 0.5), (-0.1, 0.5), (0.5, -0.2), (0.5, 1.2))
+    ]
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=2, fps=30.0, size=(w, h))
+    out = tmp_path / "out"
+    stats = export_video_labels(video, [inside, *outside], out)
+    coco = json.loads((out / "annotations.json").read_text())
+    assert [im["file_name"] for im in coco["images"]] == ["frame_000000.jpg"]
+    assert [a["bbox"] for a in coco["annotations"]] == [pytest.approx([144.0, 96.0, 32.0, 48.0])]
+    assert stats["n_images"] == 1 and stats["n_boxes"] == 1
+
+
+def test_export_skips_boxes_that_touch_the_frame_edge_without_overlapping_it(tmp_path):
+    # A box whose own edge lies exactly on a frame edge clips to zero width or
+    # height. It is not exported, and a frame holding only such boxes is not
+    # exported either.
+    w, h = 320, 240
+    inside = Detection(frame_idx=0, t=0.0, x=0.5, y=0.5, w=0.125, h=0.25)
+    touching = [
+        Detection(frame_idx=f, t=0.0, x=x, y=y, w=0.125, h=0.25)
+        for f in (0, 1) for x, y in ((1.0625, 0.5), (-0.0625, 0.5), (0.5, 1.125), (0.5, -0.125))
+    ]
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=2, fps=30.0, size=(w, h))
+    out = tmp_path / "out"
+    stats = export_video_labels(video, [inside, *touching], out)
+    coco = json.loads((out / "annotations.json").read_text())
+    assert [im["file_name"] for im in coco["images"]] == ["frame_000000.jpg"]
+    assert [a["bbox"] for a in coco["annotations"]] == [pytest.approx([140.0, 90.0, 40.0, 60.0])]
+    assert stats["n_images"] == 1 and stats["n_boxes"] == 1
 
 
 def _hand_crafted_arc(arc_id: int = 0, t_start: float = 0.0, n_points: int = 16) -> Arc:
@@ -697,3 +797,27 @@ def test_export_hard_negatives_still_mines_genuinely_idle_tail(tmp_path):
     coco = json.loads((out / "annotations.json").read_text())
     exported_frames = {int(im["file_name"][6:12]) for im in coco["images"]}
     assert tail_frames <= exported_frames
+
+
+def test_export_hard_negatives_skips_frames_labelled_in_this_run(tmp_path):
+    # `label` verifies balls on clustered detections, so it can label a frame
+    # that this function's raw detections and arcs call idle junk. Such a
+    # frame must not also become a zero-box negative; every other frame is
+    # exported exactly as without the labels.
+    r, dets, arcs, n_frames, fps, tail_start = _persistent_junk_cascade_with_held()
+    video = tmp_path / "v.mp4"
+    write_test_video(video, n_frames=n_frames, fps=fps)
+    plain = export_hard_negatives(video, dets, arcs, tmp_path / "plain", max_frames=10**6)
+    plain_frames = {int(im["file_name"][6:12])
+                    for im in json.loads((tmp_path / "plain" / "annotations.json").read_text())["images"]}
+    labelled = set(sorted(plain_frames)[::3])
+    assert labelled
+
+    stats = export_hard_negatives(
+        video, dets, arcs, tmp_path / "neg", max_frames=10**6, labelled_frames=labelled,
+    )
+
+    coco = json.loads((tmp_path / "neg" / "annotations.json").read_text())
+    exported = {int(im["file_name"][6:12]) for im in coco["images"]}
+    assert exported == plain_frames - labelled
+    assert stats["n_skipped_active"] == plain["n_skipped_active"] + len(labelled)

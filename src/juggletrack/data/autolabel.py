@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import statistics
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 import cv2
@@ -27,17 +28,31 @@ def select_autolabels(
     resid_tol: float = 0.02,
     default_box: float = 0.04,
 ) -> tuple[list[Detection], list[int]]:
+    """Arc-verified labels, at most one per (arc, frame), plus review frames.
+
+    One arc is one ball, so when several detections on a frame fit the same
+    arc only the one closest to it becomes a label.
+    """
     assignment = assign_detections(dets, arcs, resid_tol=resid_tol)
-    labels: list[Detection] = []
+    arc_by_id = {a.id: a for a in arcs}
+    best: dict[tuple[int, int], tuple[float, Detection]] = {}
     review_frames: set[int] = set()
     for d, arc_id in zip(dets, assignment):
         if arc_id == -1:
             review_frames.add(d.frame_idx)
             continue
-        labels.append(d.model_copy(update={
+        arc = arc_by_id[arc_id]
+        resid = max(abs(arc.y_at(d.t) - d.y), abs(arc.x_at(d.t) - d.x))
+        key = (arc_id, d.frame_idx)
+        if key not in best or resid < best[key][0]:
+            best[key] = (resid, d)
+    labels = [
+        d.model_copy(update={
             "w": d.w if d.w > 0 else default_box,
             "h": d.h if d.h > 0 else default_box,
-        }))
+        })
+        for _, d in best.values()
+    ]
     return labels, sorted(review_frames)
 
 
@@ -117,8 +132,17 @@ def export_video_labels(
     with VideoReader(video_path) as reader:
         w_px, h_px = reader.info.width, reader.info.height
         for idx, _t, frame in reader.frames():
-            frame_labels = by_frame.get(idx)
-            if not frame_labels:
+            boxes = []
+            for lb in by_frame.get(idx, []):
+                bw, bh = lb.w * w_px, lb.h * h_px
+                x_min = max(lb.x * w_px - bw / 2, 0.0)
+                y_min = max(lb.y * h_px - bh / 2, 0.0)
+                bw = min(lb.x * w_px + bw / 2, w_px) - x_min
+                bh = min(lb.y * h_px + bh / 2, h_px) - y_min
+                if bw <= 0 or bh <= 0:
+                    continue
+                boxes.append((x_min, y_min, bw, bh))
+            if not boxes:
                 continue
             file_name = f"frame_{idx:06d}.jpg"
             cv2.imwrite(
@@ -128,12 +152,7 @@ def export_video_labels(
             image_id = len(images) + 1
             images.append({"id": image_id, "file_name": file_name,
                            "width": w_px, "height": h_px})
-            for lb in frame_labels:
-                bw, bh = lb.w * w_px, lb.h * h_px
-                x_min = min(max(lb.x * w_px - bw / 2, 0.0), w_px - 1.0)
-                y_min = min(max(lb.y * h_px - bh / 2, 0.0), h_px - 1.0)
-                bw = min(bw, w_px - x_min)
-                bh = min(bh, h_px - y_min)
+            for x_min, y_min, bw, bh in boxes:
                 annotations.append({
                     "id": len(annotations) + 1, "image_id": image_id,
                     "category_id": BALL_CATEGORY["id"],
@@ -298,6 +317,7 @@ def export_hard_negatives(
     person_boxes: dict[int, list[tuple[float, float, float, float]]] | None = None,
     person_model: str | None = None,
     person_dilate_frames: int = 5,
+    labelled_frames: AbstractSet[int] = frozenset(),
 ) -> dict:
     """Mine arc-rejected detections into zero-box negative training images.
 
@@ -325,7 +345,10 @@ def export_hard_negatives(
     2. Frame time within `pad` s of any arc's [t_start, t_end] ->
        `n_skipped_active`. HELD balls are arc-unassigned by design (no
        parabola in a hand) and exist around flights, so near-activity
-       frames can't be trusted at all.
+       frames can't be trusted at all. A frame in `labelled_frames` (it
+       got a ball label in this run) counts here too; it is checked only
+       once a frame has passed gates 3-4 and `min_junk`, so the other
+       frames come out exactly as they would without it.
     3. Any detection outside every trusted static cluster ->
        `n_skipped_transient`. Rejects MOVING unassigned objects: real
        flights the linker failed to stitch (turn-4: a ball crossing the
@@ -422,8 +445,12 @@ def export_hard_negatives(
             if any(d.y > floor_band_y for d in frame_dets):
                 n_skipped_floor += 1
                 continue
-            if len(frame_dets) >= min_junk:
-                candidates[frame_idx] = frame_dets
+            if len(frame_dets) < min_junk:
+                continue
+            if frame_idx in labelled_frames:
+                n_skipped_active += 1
+                continue
+            candidates[frame_idx] = frame_dets
 
         dilate = range(-person_dilate_frames, person_dilate_frames + 1)
         if person_model is not None and person_boxes is None:

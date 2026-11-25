@@ -194,3 +194,10 @@ def test_deterministic_output(tmp_path):
         img_a = cv2.imread(str(out_a / "images" / im["file_name"]))
         img_b = cv2.imread(str(out_b / "images" / im["file_name"]))
         assert np.array_equal(img_a, img_b)
+
+
+def test_unreadable_image_raises_value_error_naming_it(tmp_path):
+    src = make_source(tmp_path, "vid", [(64, 48, [(10.0, 10.0, 8.0, 8.0)])])
+    (src / "images" / "frame_000000.jpg").write_bytes(b"not a jpeg")
+    with pytest.raises(ValueError, match="frame_000000.jpg"):
+        crop_coco_source(src, tmp_path / "out")

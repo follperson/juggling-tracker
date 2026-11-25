@@ -113,9 +113,15 @@ rerun both test tiers.
 
 Dataset assembly requires an empty output directory and unique source names.
 Use a new versioned directory for each build. Split by independent recording;
-different crops/exports of the same recording must stay together. Single-source
-assembly exists only for smoke tests: its validation path reuses training
-images and must not be used to report accuracy.
+different crops/exports of the same recording must stay together. Pass
+`assemble_dataset(..., recordings={"labels-x": "x", "neg-x": "x", "crop-x": "x"})`
+to name each source's recording; a source left out counts as its own
+recording, and a key that names no source is an error. Validation recordings
+are chosen by a seeded hash of the recording id, so reordering sources moves
+none and adding one moves at most one. One recording, however many sources it
+has, gives no held-out split: its validation path reuses training images, so
+such a build exists only for smoke tests and must not be used to report
+accuracy.
 
 [Benchmarking and detector experiments](docs/benchmarking.md) describe the
 measurement workflow, and [the tuning record](docs/parameter-tuning.md) explains

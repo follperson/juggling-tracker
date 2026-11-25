@@ -132,3 +132,75 @@ def test_high_validation_fraction_keeps_a_training_source(tmp_path):
 def test_empty_sources_rejected(tmp_path):
     with pytest.raises(ValueError, match="at least one"):
         assemble_dataset([], tmp_path / "ds")
+
+
+def _split_of(stats: dict) -> dict[str, str]:
+    return {**{s: "train" for s in stats["train_sources"]},
+            **{s: "val" for s in stats["val_sources"]}}
+
+
+def test_one_recordings_sources_share_a_split(tmp_path):
+    sources, recordings = [], {}
+    for r in range(5):
+        for kind, n_boxes in (("labels", 1), ("neg", 0)):
+            src = make_coco_source(tmp_path, f"{kind}-rec{r}", 1, boxes_per_image=n_boxes)
+            sources.append(src)
+            recordings[src.name] = f"rec{r}"
+    for seed in range(20):
+        split = _split_of(assemble_dataset(
+            sources, tmp_path / f"ds{seed}", seed=seed, recordings=recordings,
+        ))
+        assert all(split[f"labels-rec{r}"] == split[f"neg-rec{r}"] for r in range(5))
+        assert {split[f"labels-rec{r}"] for r in range(5)} == {"train", "val"}
+
+
+def test_reordering_sources_moves_none_across_the_split(tmp_path):
+    sources = [make_coco_source(tmp_path, f"s{i:02d}", 1) for i in range(20)]
+    a = _split_of(assemble_dataset(sources, tmp_path / "a", seed=0))
+    b = _split_of(assemble_dataset(list(reversed(sources)), tmp_path / "b", seed=0))
+    assert a == b
+
+
+def test_adding_a_source_moves_at_most_one_other(tmp_path):
+    # Validation membership is a ranking of per-recording hashes, so a new
+    # recording can only displace the one at the edge of the validation set.
+    sources = [make_coco_source(tmp_path, f"s{i:02d}", 1) for i in range(20)]
+    a = _split_of(assemble_dataset(sources, tmp_path / "a", seed=0))
+    for extra in range(20, 26):
+        more = sources + [make_coco_source(tmp_path, f"s{extra:02d}", 1)]
+        b = _split_of(assemble_dataset(more, tmp_path / f"b{extra}", seed=0))
+        assert sum(a[k] != b[k] for k in a) <= 1
+
+
+def test_seed_chooses_the_validation_recordings(tmp_path):
+    sources = [make_coco_source(tmp_path, f"s{i:02d}", 1) for i in range(10)]
+    val_sets = {
+        tuple(assemble_dataset(sources, tmp_path / f"ds{seed}", seed=seed)["val_sources"])
+        for seed in range(6)
+    }
+    assert len(val_sets) > 1
+
+
+def test_recordings_key_naming_no_source_rejected_before_writing(tmp_path):
+    # A misspelt key would leave its source as a recording of its own, free
+    # to land on the other side of the split from the rest of its recording.
+    sources = [make_coco_source(tmp_path, n, 1) for n in ("labels-a", "neg-a", "labels-b")]
+    out = tmp_path / "ds"
+    with pytest.raises(ValueError) as err:
+        assemble_dataset(sources, out, recordings={
+            "labels-a": "a", "negs-a": "a", "labels-b": "b", "crop-b": "b",
+        })
+    assert "negs-a" in str(err.value) and "crop-b" in str(err.value)
+    assert "labels-a" not in str(err.value)
+    assert not out.exists()
+
+
+def test_recordings_key_that_is_not_a_string_is_rejected_with_the_keys(tmp_path):
+    # The sources are Path objects, so keying the mapping by Path is an easy
+    # mistake. It names no source directory and fails the same way as a typo.
+    sources = [make_coco_source(tmp_path, n, 1) for n in ("a", "b")]
+    out = tmp_path / "ds"
+    with pytest.raises(ValueError) as err:
+        assemble_dataset(sources, out, recordings={sources[0]: "r", sources[1]: "r"})
+    assert str(sources[0]) in str(err.value) and str(sources[1]) in str(err.value)
+    assert not out.exists()

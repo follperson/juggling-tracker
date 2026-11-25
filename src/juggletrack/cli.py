@@ -324,7 +324,8 @@ def label(
     negatives: Path | None = typer.Option(
         None,
         help="Also mine arc-rejected junk detections into zero-box hard-negative "
-        "images (COCO, same dets/arcs, no extra detection pass) at this dir",
+        "images (COCO, same detections, no extra detection pass) at this dir; "
+        "a frame that got a label is never a negative",
     ),
     neg_person_model: str = typer.Option(
         "yolo11n.pt",
@@ -336,13 +337,15 @@ def label(
     ),
 ) -> None:
     """Auto-label a video: arc-verified detections become COCO 'ball' boxes."""
-    from juggletrack.arcs.extract import extract_arcs
+    from juggletrack.analyze import AnalyzeConfig
+    from juggletrack.arcs.extract import dedup_parallel_arcs, extract_arcs
     from juggletrack.data.autolabel import (
         calibrate_label_boxes,
         export_hard_negatives,
         export_video_labels,
         select_autolabels,
     )
+    from juggletrack.detect.cluster import cluster_detections
 
     out_dir = _check_out_dir(out or Path("outputs") / "labels" / video.stem)
     if detector == DetectorBackend.motion:
@@ -360,10 +363,15 @@ def label(
             dets = _detect(video, MotionDetector(), stride)[0]
     else:
         dets = _get_detections(video, detections, model, conf, imgsz, stride, device)
-    arcs = extract_arcs(dets, link_max_dist=link_max_dist)
-    labels, review = select_autolabels(dets, arcs)
+    cfg = AnalyzeConfig()
+    label_dets = cluster_detections(dets, merge_dist=cfg.cluster_merge_dist)
+    label_arcs = dedup_parallel_arcs(
+        extract_arcs(label_dets, link_max_dist=link_max_dist),
+        overlap_frac=cfg.arc_dedup_overlap_frac, traj_tol=cfg.arc_dedup_traj_tol,
+    )
+    labels, review = select_autolabels(label_dets, label_arcs)
     if detector == DetectorBackend.motion:
-        labels = calibrate_label_boxes(labels, arcs)
+        labels = calibrate_label_boxes(labels, label_arcs)
     stats = export_video_labels(video, labels, out_dir, review_frames=review)
     typer.echo(
         f"{stats['n_images']} images, {stats['n_boxes']} boxes, "
@@ -371,8 +379,9 @@ def label(
     )
     if negatives is not None:
         neg_stats = export_hard_negatives(
-            video, dets, arcs, negatives,
+            video, dets, extract_arcs(dets, link_max_dist=link_max_dist), negatives,
             person_model=None if neg_person_model.lower() == "none" else neg_person_model,
+            labelled_frames={lb.frame_idx for lb in labels},
         )
         typer.echo(
             f"negatives: {neg_stats['n_images']} images "
@@ -501,8 +510,12 @@ def train(
     epochs: int = typer.Option(40, min=1),
     imgsz: int = typer.Option(640),
     device: str | None = typer.Option(None),
-    project: Path = typer.Option(Path("runs/finetune")),
-    name: str = typer.Option("juggletrack"),
+    project: Path = typer.Option(
+        Path("runs/finetune"), help="Run directory parent, relative to the current directory",
+    ),
+    name: str = typer.Option(
+        "juggletrack", help="Run name; an existing run gets a numbered suffix, never overwritten",
+    ),
 ) -> None:
     """Fine-tune the ball detector on an assembled dataset."""
     from juggletrack.train.finetune import train_detector
