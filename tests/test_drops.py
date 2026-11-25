@@ -226,3 +226,26 @@ def test_dead_band_arc_is_drop_candidate():
     assert "floor_descent" in d.signals
     assert "periodicity_collapse" in d.signals
     assert runs[0].end_reason == "drop"
+
+
+@pytest.mark.parametrize("past_hand, expected", [(0.004, []), (0.20, [3])])
+def test_drop_needs_observed_descent_past_peer_hand_height(past_hand, expected):
+    # Tracking the peers late biases the shared hand line upward. Their
+    # landings still locate the hand at 0.65. A last flight that ends there
+    # within the fit error looks like an ordinary catch, even on a dead run.
+    peers = []
+    for i in range(3):
+        flight = _make_floor_candidate(i, float(i), duration=1.1)
+        start = flight.t_start + 0.3
+        peers.append(flight.model_copy(update={
+            "t_start": start, "by": flight.vy_at(start), "cy": flight.y_at(start),
+        }))
+    candidate = _make_floor_candidate(3, 3.0, duration=1.1 + past_hand)
+    arcs = [*peers, candidate]
+    run = Run(start_t=0, end_t=candidate.t_end, catches=3, throws=4,
+              arc_ids=[a.id for a in arcs], period_s=1.0)
+    drops, _ = detect_drops(arcs, [run], hand_line=0.53)
+
+    assert [d.arc_id for d in drops] == expected
+    if drops:
+        assert drops[0].t == pytest.approx(4.1)

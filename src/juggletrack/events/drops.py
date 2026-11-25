@@ -1,6 +1,8 @@
 """Three-signal drop detection (spec §4 — no prior art; first-principles design)."""
 from __future__ import annotations
 
+from statistics import median
+
 from juggletrack.events import FLOOR_MARGIN
 from juggletrack.events.catches import hand_line_crossings
 from juggletrack.types import Arc, DropEvent, Run
@@ -53,6 +55,16 @@ def detect_drops(
             if not is_floor_bound(cand, hand_line, floor_margin=floor_margin):
                 continue  # ended near the hands: caught, not dropped
 
+            # A flight that is only partly tracked can have one endpoint up in
+            # the air. Use its lower endpoint as the hand observation. Exclude
+            # the candidate itself, whose last observation may be on the floor.
+            heights = [max(a.cy, a.y_at(a.t_end)) for a in run_arcs if a.id != cand.id]
+            miss_line = median(heights) if len(heights) >= 3 else hand_line
+            # A crossing at the last observation, within the fit error, also
+            # describes an ordinary catch. Confirm the descent past this line
+            # in the observed arc before putting a missed catch on the clock.
+            if cand.y_at(cand.t_end) - miss_line <= cand.rmse:
+                continue
             signals = []
             if cand.vy_at(cand.t_end) > 0:
                 signals.append("floor_descent")
@@ -67,7 +79,7 @@ def detect_drops(
                     signals.append("bounce")
                     break
 
-            crossings = hand_line_crossings(cand, hand_line)
+            crossings = hand_line_crossings(cand, miss_line)
             miss_t = crossings[1] if crossings else cand.t_end
             # "Continued" here means a *new* throw was made after the miss —
             # i.e. the juggler kept the pattern going. Arcs already in flight

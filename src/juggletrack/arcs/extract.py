@@ -162,12 +162,12 @@ def extract_arcs(
     held: list[tuple[int, int]] = []
     for k, cut in enumerate(cuts):
         seeds.extend((flight, k, True) for flight in cut.flights)
-        if _keeps_falling(arr[cut.after], gravity, resid_tol):
-            seeds.append((cut.after, k, False))
-        else:
-            held.extend((i, k) for i in cut.after)
+        for stretch in [cut.after, *cut.in_hand]:
+            if _keeps_falling(arr[stretch], gravity, resid_tol):
+                seeds.append((stretch, k, False))
+            else:
+                held.extend((i, k) for i in stretch)
         seeds.extend((piece, k, False) for piece in cut.pieces)
-        held.extend((i, k) for i in cut.in_hand)
 
     arcs: list[Arc] = []
     flights: list[tuple[Arc, int]] = []
@@ -347,7 +347,7 @@ class _Cut(NamedTuple):
 
     flights: list[list[int]]  # flights grown from their apexes, as seeds
     pieces: list[list[int]]  # `_split_ballistic` pieces, as seeds
-    in_hand: list[int]  # points between two flights where the track does not top out
+    in_hand: list[list[int]]  # separate stretches between flights with no detected apex
     after: list[int]  # points after the last flight, down to `_sink_end`
     gravities: list[float]  # ay of every flight grown here, seeds or not
 
@@ -378,8 +378,8 @@ def _seed_pieces(arr: np.ndarray, idxs: list[int], resid_tol: float) -> _Cut:
     curvature at its top. That stretch holds a flight, so `_split_ballistic`
     seeds it as before. Two more kinds are no carry, and `extract_arcs`
     tells them apart because it needs every fragment's flights to do so: a
-    ball that falls on after its last flight (`_keeps_falling`), and a point
-    the linker took from another ball (`_in_hand`).
+    ball that keeps falling between or after grown flights (`_keeps_falling`),
+    and a point the linker took from another ball (`_in_hand`).
     """
     rows = arr[idxs].tolist()
     ys = [row[2] for row in rows]
@@ -424,12 +424,12 @@ def _seed_pieces(arr: np.ndarray, idxs: list[int], resid_tol: float) -> _Cut:
         pieces.extend(_split_ballistic(arr, idxs[:head], resid_tol))
     if len(idxs) - tail >= 4:
         pieces.extend(_split_ballistic(arr, idxs[tail:], resid_tol))
-    in_hand: list[int] = []
+    in_hand: list[list[int]] = []
     for (_, hi), (lo, _) in zip(flights, flights[1:]):
         if any(hi < apex < lo for apex in failed):
             pieces.extend(_split_ballistic(arr, idxs[hi + 1 : lo], resid_tol))
         else:
-            in_hand.extend(idxs[hi + 1 : lo])
+            in_hand.append(idxs[hi + 1 : lo])
     return _Cut(
         flights=[idxs[lo : hi + 1] for lo, hi in flights],
         pieces=pieces,
@@ -440,7 +440,7 @@ def _seed_pieces(arr: np.ndarray, idxs: list[int], resid_tol: float) -> _Cut:
 
 
 def _keeps_falling(pts: np.ndarray, gravity: float, resid_tol: float) -> bool:
-    """Whether ``pts``, a fragment's points after its last flight, are the ball
+    """Whether ``pts``, a contiguous stretch set aside as a carry, are the ball
     still in flight rather than sinking with a hand.
 
     A hand that touches a ball without holding it leaves it falling to the
