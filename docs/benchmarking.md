@@ -262,6 +262,33 @@ Limits:
 - The check scores offline analysis only. It needs per-ball labels, which only
   the Meschke clips have.
 
+### Tracing missed catches with dense ball positions
+
+A separate normal-speed development recording had 17 visually reviewed receptions
+in a six-second window. The position review covered all 240 consecutive frames
+in that window and its one-second buffers. A second review marked the reception
+times from the video. Both reviews were model-assisted and used the source frame
+timestamps. The event comparison matched each prediction to at most one contact
+bracket, extended by two source frames on each side.
+
+The previous extractor matched seven receptions using the saved detections.
+Four missed flights had only two to five usable ball positions, one well-observed
+flight disappeared during extraction, three descents continued into hand motion,
+and two fitted arcs ended before the landing was witnessed. Replaying only the
+reviewed airborne positions recovered 15 timed matches. This diagnostic gives
+the tracker information it would have to infer in ordinary use.
+
+Two changes recovered three receptions on the original detections. The extractor
+can restore an observed apex after the other fits converge when its points are
+unclaimed and its curvature agrees with the other flights. A floor-bound track
+can end at the hand when consecutive observations show a lateral reversal and
+slower descent than the incoming flight predicts. The revised pipeline matched
+ten of the 17 receptions, with zero unmatched reports in the window, and removed
+one false drop. Sparse coverage and ambiguous contact still limit this recording.
+The private video and its labels are development material. The public regression
+tests use generated trajectories in `tests/test_enclosed_flights.py` and
+`tests/test_hand_carry.py`.
+
 ## Detector center benchmark
 
 For Meschke footage with saved detections, run:

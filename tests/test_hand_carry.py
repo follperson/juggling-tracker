@@ -1,0 +1,87 @@
+"""Physical controls for separating a descending hand carry from a flight."""
+
+from juggletrack.arcs.fit import fit_arc, points_array
+from juggletrack.events.carry import trim_hand_carry
+from juggletrack.events.drops import is_floor_bound
+from juggletrack.types import Detection
+
+
+def fixture(turn=True, slowed=True):
+    dets = []
+    for i in range(47):
+        t = i * 0.025
+        x = 0.2 + 0.2 * t if not turn or t <= 0.9 else 0.38 - 0.3 * (t - 0.9)
+        y = 0.4 - t + t * t if not slowed or t <= 0.9 else 0.31 + 0.6 * (t - 0.9)
+        dets.append(Detection(frame_idx=i, t=t, x=x, y=y, confidence=0.9))
+    return dets, fit_arc(points_array(dets), 7)
+
+
+def test_turn_while_continuing_downward_is_trimmed():
+    dets, arc = fixture()
+    assert is_floor_bound(arc, 0.35)
+    [trimmed] = trim_hand_carry(dets, [arc], 0.35, 0.02)
+    assert trimmed.id == arc.id
+    assert trimmed.t_end < arc.t_end
+    assert not is_floor_bound(trimmed, 0.35)
+    assert dets[-1].y > dets[-4].y  # Hand and ball keep descending.
+
+
+def test_actual_drop_with_no_turn_is_untouched():
+    dets, arc = fixture(False, False)
+    assert trim_hand_carry(dets, [arc], 0.35, 0.02) == [arc]
+
+
+def test_separated_crossing_hypotheses_cannot_witness_a_carry():
+    dets, arc = fixture()
+    for point in list(dets[35:]):
+        dets.extend(
+            [
+                point.model_copy(update={"x": point.x - 0.035}),
+                point.model_copy(update={"x": point.x + 0.035}),
+            ]
+        )
+    dets.sort(key=lambda d: d.t)
+    assert trim_hand_carry(dets, [arc], 0.35, 0.02) == [arc]
+
+
+def test_gap_at_the_turn_cannot_jump_to_another_ball():
+    dets, arc = fixture()
+    dets = [d for d in dets if d.frame_idx != 38]
+    assert trim_hand_carry(dets, [arc], 0.35, 0.02) == [arc]
+
+
+def test_bounce_is_not_a_descending_hand_carry():
+    dets, arc = fixture()
+    dets = [d.model_copy(update={"y": d.y - 0.12}) if d.frame_idx == 40 else d for d in dets]
+    assert trim_hand_carry(dets, [arc], 0.35, 0.02) == [arc]
+
+
+def test_ordinary_nonfloor_arc_is_identical():
+    dets, _ = fixture()
+    arc = fit_arc(points_array(dets[:17]), 7)
+    assert trim_hand_carry(dets, [arc], 0.35, 0.02)[0] is arc
+
+
+def test_competing_flight_at_turn_vetoes_a_false_catch():
+    dets, arc = fixture()
+    other = arc.model_copy(update={"id": 8, "bx": -0.2, "cx": 0.56})
+    result = trim_hand_carry(dets, [arc, other], 0.35, 0.02)
+    assert result[0] == arc
+
+
+def test_genuine_miss_near_another_ball_keeps_its_floor_descent():
+    dets, dropped = fixture(False, False)
+    # A neighboring trajectory turns back near the falling ball. Its boxes
+    # cannot witness a catch on the genuine miss.
+    neighbor, _ = fixture()
+    for d in neighbor:
+        if d.t >= 0.85:
+            dets.append(d.model_copy(update={"confidence": 1.0}))
+    dets.sort(key=lambda d: d.t)
+    assert trim_hand_carry(dets, [dropped], 0.35, 0.02) == [dropped]
+
+
+def test_deflected_miss_continuing_ballistic_descent_is_not_a_catch():
+    dets, arc = fixture(turn=True, slowed=False)
+    assert is_floor_bound(arc, 0.35)
+    assert trim_hand_carry(dets, [arc], 0.35, 0.02) == [arc]

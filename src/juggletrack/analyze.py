@@ -12,6 +12,7 @@ from juggletrack.arcs.extract import (
 from juggletrack.detect.cluster import cluster_detections
 from juggletrack.events import CATCH_EXTRAPOLATION_MARGIN, catch_witness_margin
 from juggletrack.events.catches import derive_events, hand_line_crossings
+from juggletrack.events.carry import trim_hand_carry
 from juggletrack.events.drops import detect_drops
 from juggletrack.events.handline import estimate_hand_line
 from juggletrack.events.runs import segment_runs
@@ -193,7 +194,12 @@ def analyze_detections(
         arcs, overlap_frac=cfg.arc_dedup_overlap_frac, traj_tol=cfg.arc_dedup_traj_tol,
     )
     t_last = max(d.t for d in dets)
-    result = _events_from_arcs(arcs, t_last, cfg)
+    hand_line = estimate_hand_line(arcs)
+    arcs = trim_hand_carry(
+        dets, arcs, hand_line, cfg.resid_tol, link_max_dt=cfg.link_max_dt,
+        g_range=cfg.g_range, min_points=cfg.min_points, min_duration=cfg.min_duration,
+    )
+    result = _events_from_arcs(arcs, t_last, cfg, hand_line_override=hand_line)
     # n_detections is the RAW input count (pre-clustering), matching
     # oracle_events' meaning of the same key (meschke_import.py) so the two
     # are comparable; n_detections_clustered is the post-clustering count,
