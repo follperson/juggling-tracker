@@ -523,7 +523,7 @@ def reviewed_detection_eval(
     out: Path = typer.Option(..., help="Write the reviewed-frame report here"),
     conf: float = typer.Option(0.0, min=0, max=1, help="Filter saved predictions by confidence"),
 ) -> None:
-    """Score saved ball centers on explicitly reviewed frames of a recording."""
+    """Score ball centers and optional visible box extents on reviewed frames."""
     from juggletrack.eval.benchmark import _implementation_sha256, _sha256
     from juggletrack.eval.reviewed_centers import (
         ReviewedCenters,
@@ -560,6 +560,12 @@ def reviewed_detection_eval(
         out.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     except (OSError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
+    if "visible" in report["states"] or "box_localization" in report:
+        typer.echo(f"Definite centers matched {report['tp']}/{report['tp'] + report['fn']}")
+    if "box_localization" in report:
+        boxes = report["box_localization"]
+        typer.echo(f"Measured boxes with at least twice the labeled area "
+                   f"{boxes['at_least_double_area']}/{boxes['with_predicted_extent']}")
     airborne = report["states"]["airborne"]
     typer.echo(f"Airborne centers matched {airborne['matched']}/{airborne['n']} "
                f"on {report['n_reviewed_frames']} reviewed frames -> {out}")

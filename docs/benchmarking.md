@@ -293,7 +293,7 @@ the first comparison on existing development footage.
 
 ## Reviewed frames from practice recordings
 
-Use `reviewed-detection-eval` with a local source video, saved `Detection` rows in JSONL, and a sparse frame review. It works without model weights. Preselect the frames and match radius, then review the raw video with detection overlays hidden. Use the image as displayed after rotation. Coordinates run from zero to one across its width and height. Use zero-based decode indices and seconds on the source frame clock relative to the first frame. Record each visible ball in the frame. Mark uncertain contact or an unresolvable candidate as `ambiguous`. Omit a frame if a full review of that frame is impossible.
+Use `reviewed-detection-eval` with a local source video, saved `Detection` rows in JSONL, and a sparse frame review. It works without model weights. Preselect the frames and match radius, then review the raw video with detection overlays hidden. Use the image as displayed after rotation. Coordinates run from zero to one across its width and height. Use zero-based decode indices and seconds on the source frame clock relative to the first frame. Record each visible ball in the frame. Use `visible` for a definite ball whose airborne or held state is unclear. Use `ambiguous` when even its identity as a ball is uncertain. Omit a frame if a full review of that frame is impossible.
 
 ```json
 {
@@ -304,13 +304,18 @@ Use `reviewed-detection-eval` with a local source video, saved `Detection` rows 
   "height": 1920,
   "frames": [
     {"frame_idx": 0, "t": 0.0, "centers": [
-      {"x": 0.40, "y": 0.30, "state": "airborne"},
+      {"x": 0.40, "y": 0.30, "state": "airborne",
+       "visible_box": {"left": 0.39, "top": 0.29, "right": 0.41, "bottom": 0.31}},
       {"x": 0.61, "y": 0.66, "state": "held"}
     ]},
     {"frame_idx": 8, "t": 0.267, "centers": []}
   ]
 }
 ```
+
+The optional `visible_box` records the visible outline in normalized source coordinates. Omit it where blur, cropping or a hand makes the boundary unreliable. A definite ball can still contribute a center in that case.
+
+With measured extents the JSON report includes `box_localization`. Each annotated target carries its visible width and height in source pixels. The scorer reuses the one-to-one center assignment and compares the matched prediction's visible rectangle, clipped to the displayed image, against the reviewed box. `center_error_px` is null for a missed center. `iou` and `area_ratio` are also null when a matched prediction supplies only a point. `reviewed`, `center_matched` and `with_predicted_extent` give the three denominators. `at_least_double_area` counts predicted boxes covering at least twice the reference area. `iou_at_least_0_3` counts center-assigned pairs meeting that overlap. These counts let you trace a poorly sized box separately from a missing ball. A catch comparison requires replaying the detections through the event core.
 
 Replace the dimensions, indices, timestamps and centers with your observations. Set `review_method` to `human` for human-reviewed positions, `model_assisted` for model-assisted visual judgments, or `synthetic` for a constructed fixture. The report preserves this declaration. Keep reviewer notes, contact brackets and unresolved alternatives alongside the input. Compute the source digest with `shasum -a 256 practice.mp4` or `sha256sum practice.mp4`.
 

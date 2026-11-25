@@ -82,7 +82,7 @@ Use `--help` on any command for its options.
 | `label` | Arc-verified auto-labeling → COCO dataset (`--detector motion` for cold-start; `--negatives` mines hard negatives) |
 | `coverage` | Per-frame detection-count stats for a video (detector health check) |
 | `detection-eval` | Compare saved detections with Meschke ball centers: precision, recall, duplicate candidates, and localization error |
-| `reviewed-detection-eval` | Score airborne and held ball centers on selected, visually reviewed frames from a practice recording |
+| `reviewed-detection-eval` | Compare ball centers and optional visible box extents on reviewed source frames |
 | `train` | Fine-tune YOLO on an assembled dataset |
 | `export` | Export weights to CoreML (blocked by torch/coremltools version skew as of 2026-08; see bench findings) |
 
