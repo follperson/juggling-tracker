@@ -111,8 +111,21 @@ uv run --no-sync python scripts/event_core_parity.py snapshot after.json \
 uv run --no-sync python scripts/event_core_parity.py compare before.json after.json
 ```
 
+`--realtime-frames 900` stops each replay after its first 900 frames, about
+30 seconds of video, and finalizes the analyzer there. Over the sessions this
+command selects, that replays about a quarter of the recorded frames, and the
+`final` counts it records are the state at the cap, not the session totals. A
+change that only shows up later in a session passes the capped check. Before
+merging a change to `RealtimeAnalyzer`, take one pair of snapshots with
+`--realtime-frames 0`, which replays every frame. `snapshot` exits with an
+error and writes no file when it analyses no session, or when a `--realtime`
+value ends up replaying no session, whether because it matches nothing under
+`--root` or because `--max-detections` skipped every match or every match was
+empty. It checks the match before the run starts, so a typo fails at once.
+
 `compare` prints `PARITY OK` and the speed ratio, or names each session whose
-digest or input changed and exits nonzero. Each snapshot records the source
+digest or input changed and exits nonzero. When the two snapshots share no
+session it compares nothing, says so and exits 2. Each snapshot records the source
 hash of the package it imported and the git commit of the checkout that holds
 it, so a baseline can come from an older checkout on `PYTHONPATH`. When both
 snapshots record the same source hash, `compare` says so: matching digests then

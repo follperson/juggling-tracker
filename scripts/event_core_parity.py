@@ -148,6 +148,12 @@ def snapshot(args: argparse.Namespace) -> int:
     if not paths:
         print(f"no detections.jsonl under {root}", file=sys.stderr)
         return 2
+    rels = [p.relative_to(root).as_posix() for p in paths]
+    unmatched = [s for s in args.realtime if not any(s in rel for rel in rels)]
+    for s in unmatched:
+        print(f"--realtime {s} matched no session under {root}", file=sys.stderr)
+    if unmatched:
+        return 2
 
     # Stamp the code identity before analysing: the run can take minutes, and
     # the checkout may move on while it does.
@@ -185,6 +191,16 @@ def snapshot(args: argparse.Namespace) -> int:
                     f"final runs/catches/drops={rt['final']}",
                     flush=True,
                 )
+
+    if not offline:
+        print(f"no session analysed under {root}", file=sys.stderr)
+        return 2
+    unreplayed = [s for s in args.realtime if not any(s in rel for rel in realtime)]
+    for s in unreplayed:
+        print(f"--realtime {s} replayed no session: every match was skipped or empty",
+              file=sys.stderr)
+    if unreplayed:
+        return 2
 
     Path(args.out).write_text(json.dumps(
         {"meta": meta, "offline": offline, "realtime": realtime}, indent=1,
@@ -231,6 +247,9 @@ def compare(args: argparse.Namespace) -> int:
         if base["meta"][key] != new["meta"][key]:
             print(f"warning: {key} differs ({base['meta'][key]} vs {new['meta'][key]}); "
                   "digests are only comparable on one machine and environment")
+    if not set(base["offline"]) & set(new["offline"]):
+        print("the snapshots share no session, so nothing was compared", file=sys.stderr)
+        return 2
     failures = _compare_section("offline", base["offline"], new["offline"], "seconds")
     if base["realtime"] or new["realtime"]:
         failures += _compare_section("realtime", base["realtime"], new["realtime"], "feed_seconds")

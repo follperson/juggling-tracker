@@ -78,12 +78,57 @@ def test_snapshot_writes_a_fresh_path_and_leaves_inputs_alone(tmp_path):
     assert snap["meta"]["git_head"] == (package_head or "unknown")
 
 
-def _snapshot_file(path, implementation):
+@pytest.mark.parametrize("root_suffix, realtime", [
+    ("", "nomatch/"),
+    # Narrowing --root drops the directory the substring names.
+    ("val", "val/"),
+])
+def test_snapshot_fails_when_a_realtime_selection_matches_nothing(root_suffix, realtime, tmp_path):
+    root = tmp_path / "outputs"
+    _save_session(root / "val" / "a" / "detections.jsonl", 1)
+    out = tmp_path / "snap.json"
+
+    proc = _parity("snapshot", out, "--root", root / root_suffix, "--realtime", "a/",
+                   "--realtime", realtime)
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"--realtime {realtime} matched no session" in proc.stderr
+    assert "--realtime a/" not in proc.stderr
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("args, message", [
+    # Every session the value selects is over --max-detections.
+    (["--max-detections", "1", "--realtime", "a/"], "--realtime a/ replayed no session"),
+    # The value selects only an empty detections file.
+    (["--realtime", "empty/"], "--realtime empty/ replayed no session"),
+    (["--only", "outputs/a/", "--max-detections", "1"], "no session analysed"),
+], ids=["skipped", "empty", "no-offline"])
+def test_snapshot_fails_when_filters_leave_nothing_to_compare(args, message, tmp_path):
+    root = tmp_path / "outputs"
+    _save_session(root / "a" / "detections.jsonl", 1)
+    (root / "empty").mkdir()
+    (root / "empty" / "detections.jsonl").write_text("")
+    out = tmp_path / "snap.json"
+
+    proc = _parity("snapshot", out, "--root", root, *args)
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert message in proc.stderr
+    assert not out.exists()
+
+
+_OFFLINE_ROW = {"input_sha256": "i", "digest": "d", "seconds": 1.0, "arcs": 1, "runs": 1,
+                "catches": 1, "drops": 0}
+_REALTIME_ROW = {"digest": "r", "feed_seconds": 1.0, "analysis_ms_p50": 1.0,
+                 "analysis_ms_p95": 1.0, "final": [1, 14, 0]}
+
+
+def _snapshot_file(path, implementation, offline=None, realtime=None):
     meta = {"implementation_sha256": implementation, "python": "3", "numpy": "2",
             "platform": "p"}
-    row = {"input_sha256": "i", "digest": "d", "seconds": 1.0, "arcs": 1, "runs": 1,
-           "catches": 1, "drops": 0}
-    path.write_text(json.dumps({"meta": meta, "offline": {"s": row}, "realtime": {}}))
+    offline = {"s": _OFFLINE_ROW} if offline is None else offline
+    path.write_text(json.dumps({"meta": meta, "offline": offline, "realtime": realtime or {}}))
     return path
 
 
@@ -97,6 +142,42 @@ def test_compare_says_when_both_snapshots_ran_the_same_implementation(same, tmp_
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PARITY OK" in proc.stdout
     assert ("same implementation" in proc.stdout) == same
+
+
+@pytest.mark.parametrize("offline, realtime, line", [
+    ({"s": {**_OFFLINE_ROW, "digest": "e", "catches": 2}}, None,
+     "offline: MISMATCH s {'catches': (1, 2)}"),
+    ({"s": {**_OFFLINE_ROW, "input_sha256": "j"}}, None, "offline: INPUT CHANGED s"),
+    ({"s": _OFFLINE_ROW, "t": _OFFLINE_ROW}, None,
+     "offline: present in only one snapshot: t"),
+    (None, {"s": {**_REALTIME_ROW, "digest": "q", "final": [1, 21, 0]}},
+     "realtime: MISMATCH s {'final': ([1, 14, 0], [1, 21, 0])}"),
+], ids=["digest", "input", "missing-session", "realtime-only"])
+def test_compare_fails_on_any_difference(offline, realtime, line, tmp_path):
+    base = _snapshot_file(tmp_path / "base.json", "a" * 64, realtime={"s": _REALTIME_ROW})
+    new = _snapshot_file(tmp_path / "new.json", "b" * 64, offline=offline,
+                         realtime=realtime or {"s": _REALTIME_ROW})
+
+    proc = _parity("compare", base, new)
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert line in proc.stdout.splitlines()
+    assert "PARITY FAILED (1)" in proc.stdout
+
+
+@pytest.mark.parametrize("base_offline, new_offline", [
+    ({}, {}),
+    ({"s": _OFFLINE_ROW}, {"t": _OFFLINE_ROW}),
+], ids=["both-empty", "disjoint"])
+def test_compare_fails_when_the_snapshots_share_no_session(base_offline, new_offline, tmp_path):
+    base = _snapshot_file(tmp_path / "base.json", "a" * 64, offline=base_offline)
+    new = _snapshot_file(tmp_path / "new.json", "b" * 64, offline=new_offline)
+
+    proc = _parity("compare", base, new)
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "PARITY OK" not in proc.stdout
+    assert "nothing was compared" in proc.stderr
 
 
 def _load_script():
