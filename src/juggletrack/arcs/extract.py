@@ -182,6 +182,7 @@ def extract_arcs(
         if grown:
             flights.append((arc, k))
 
+    linked_points = arr
     if held:
         arr = np.delete(arr, _in_hand(arr, held, flights, resid_tol), axis=0)
     for _ in range(em_iters):
@@ -189,6 +190,11 @@ def extract_arcs(
         arcs = _merge_pass(arr, arcs, resid_tol)
         arcs = _prune(arcs, g_range, resid_tol, min_points, min_duration, max_abs_bx)
         arcs = _gravity_prune(arcs)
+
+    arcs = _restore_enclosed_flights(
+        linked_points, arcs, cuts, g_range=g_range, resid_tol=resid_tol,
+        min_points=min_points, min_duration=min_duration, max_abs_bx=max_abs_bx,
+    )
 
     # Real, distinct ids are required before the split-stitch pass: every
     # arc up to this point still carries fit_arc's default id=-1, which
@@ -341,6 +347,14 @@ class _Moments:
         return math.sqrt(float(ry @ ry) / self.s[0]), bx * dt + cx - pts[:, 1]
 
 
+class _EnclosedFlight(NamedTuple):
+    """An apex seed wholly inside a residual-based segment, indexed into ``arr``."""
+
+    piece: list[int]
+    flight: list[int]
+    ay: float
+
+
 class _Cut(NamedTuple):
     """One fragment as `_seed_pieces` divides it. Every list holds indices
     into the points array."""
@@ -350,6 +364,7 @@ class _Cut(NamedTuple):
     in_hand: list[list[int]]  # separate stretches between flights with no detected apex
     after: list[int]  # points after the last flight, down to `_sink_end`
     gravities: list[float]  # ay of every flight grown here, seeds or not
+    enclosed: tuple[_EnclosedFlight, ...] = ()
 
 
 def _seed_pieces(arr: np.ndarray, idxs: list[int], resid_tol: float) -> _Cut:
@@ -404,18 +419,25 @@ def _seed_pieces(arr: np.ndarray, idxs: list[int], resid_tol: float) -> _Cut:
     # inside a flight: a long fragment fails at its first hand, and the rest
     # of its shipped pieces would be thrown away.
     shipped: list[list[int]] = []
+    enclosed: list[_EnclosedFlight] = []
     held = 0  # flights[:held] sit whole inside one shipped piece
     start = 0
     for piece in _ballistic_pieces(arr, idxs, resid_tol):
         end = start + len(piece) - 1
         while held < len(flights) and start <= flights[held][0] and flights[held][1] <= end:
+            lo, hi = flights[held]
+            if start < lo or hi < end:
+                enclosed.append(_EnclosedFlight(piece, idxs[lo : hi + 1], gravities[held]))
             held += 1
         if held < len(flights) and flights[held][0] <= end:
             break
         shipped.append(piece)
         start = end + 1
     else:
-        return _Cut([], [piece for piece in shipped if len(piece) >= 4], [], [], gravities)
+        return _Cut(
+            [], [piece for piece in shipped if len(piece) >= 4], [], [],
+            gravities, tuple(enclosed),
+        )
 
     head, last = flights[0][0], flights[-1][1]
     tail = _sink_end(ys, last, swing) + 1
@@ -437,6 +459,62 @@ def _seed_pieces(arr: np.ndarray, idxs: list[int], resid_tol: float) -> _Cut:
         after=idxs[last + 1 : tail],
         gravities=gravities,
     )
+
+
+def _restore_enclosed_flights(
+    arr: np.ndarray, arcs: list[Arc], cuts: list[_Cut], *,
+    g_range: tuple[float, float], resid_tol: float,
+    min_points: int, min_duration: float, max_abs_bx: float,
+) -> list[Arc]:
+    """Recover unused apex seeds whose enclosing fit lost the cohort's gravity.
+
+    A carry plus a whole flight can pass the splitter's residual gate while
+    flattening the enclosing parabola. Wait until the original fits have converged.
+    Only after extraction establishes a gravity cohort can an enclosed flight
+    be restored, with the ordinary quality gates and no points claimed by any
+    surviving flight. Claim each accepted recovery immediately so two backups
+    cannot recover the same physical evidence.
+    """
+    if len(arcs) < 4 or not any(cut.enclosed for cut in cuts):
+        return arcs
+    gravity = float(np.median([a.ay for a in arcs]))
+    candidates = [
+        enclosed for cut in cuts for enclosed in cut.enclosed
+        if abs(enclosed.ay - gravity) <= _GRAVITY_BAND * gravity
+    ]
+    if not candidates:
+        return arcs
+
+    claimed = np.zeros(len(arr), dtype=bool)
+    t = arr[:, 0]
+
+    def claim(arc: Arc) -> None:
+        lo = np.searchsorted(t, arc.t_start - _EM_TIME_MARGIN, side="left")
+        hi = np.searchsorted(t, arc.t_end + _EM_TIME_MARGIN, side="right")
+        window = arr[lo:hi]
+        residual = np.maximum(y_residuals(arc, window), x_residuals(arc, window))
+        claimed[lo:hi] |= residual <= 2 * resid_tol
+
+    for arc in arcs:
+        claim(arc)
+    restored = list(arcs)
+    for enclosed in candidates:
+        if np.any(claimed[enclosed.flight]):
+            continue
+        try:
+            enclosing = fit_arc(arr[enclosed.piece])
+            trial = fit_arc(arr[enclosed.flight])
+        except ValueError:
+            continue
+        if enclosing.ay >= (1 - _GRAVITY_BAND) * gravity:
+            continue
+        if abs(trial.ay - gravity) > _GRAVITY_BAND * gravity:
+            continue
+        if not _prune([trial], g_range, resid_tol, min_points, min_duration, max_abs_bx):
+            continue
+        restored.append(trial)
+        claim(trial)
+    return restored
 
 
 def _keeps_falling(pts: np.ndarray, gravity: float, resid_tol: float) -> bool:
