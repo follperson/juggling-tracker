@@ -226,3 +226,74 @@ def test_dead_band_arc_is_drop_candidate():
     assert "floor_descent" in d.signals
     assert "periodicity_collapse" in d.signals
     assert runs[0].end_reason == "drop"
+
+
+@pytest.mark.parametrize("past_hand, expected", [(0.004, []), (0.20, [3])])
+def test_drop_needs_observed_descent_past_peer_hand_height(past_hand, expected):
+    # Tracking the peers late biases the shared hand line upward. Their
+    # landings still locate the hand at 0.65. A last flight that ends there
+    # within the fit error looks like an ordinary catch, even on a dead run.
+    peers = []
+    for i in range(3):
+        flight = _make_floor_candidate(i, float(i), duration=1.1)
+        start = flight.t_start + 0.3
+        peers.append(flight.model_copy(update={
+            "t_start": start, "by": flight.vy_at(start), "cy": flight.y_at(start),
+        }))
+    candidate = _make_floor_candidate(3, 3.0, duration=1.1 + past_hand)
+    arcs = [*peers, candidate]
+    run = Run(start_t=0, end_t=candidate.t_end, catches=3, throws=4,
+              arc_ids=[a.id for a in arcs], period_s=1.0)
+    drops, _ = detect_drops(arcs, [run], hand_line=0.53)
+
+    assert [d.arc_id for d in drops] == expected
+    if drops:
+        assert drops[0].t == pytest.approx(4.1)
+
+
+def test_contemporaneous_throw_is_insufficient_evidence_of_a_stop():
+    # The fall and the next launch cannot be ordered within half a sample.
+    candidate = _make_floor_candidate(0, 0.0)
+    candidate = candidate.model_copy(update={"n_points": 40})
+    _, miss = hand_line_crossings(candidate, 0.65)
+    following = _make_floor_candidate(1, miss - 0.004, duration=1.1)
+    run = Run(start_t=0, end_t=following.t_end, catches=1, throws=2,
+              arc_ids=[0, 1], period_s=0.45)
+
+    drops, _ = detect_drops([candidate, following], [run], hand_line=0.65)
+    assert drops == []
+
+
+@pytest.mark.parametrize("first_fall", [0, 1])
+def test_several_falls_do_not_move_the_estimated_hands_to_the_floor(first_fall):
+    arcs = [
+        _make_floor_candidate(i, i * 0.2, duration=1.31 if i >= first_fall else 1.1)
+        for i in range(4)
+    ]
+    hand_line = estimate_hand_line(arcs)
+    throws, catches = derive_events(arcs, hand_line)
+    runs = segment_runs(arcs, throws, catches, hand_line)
+    drops, _ = detect_drops(arcs, runs, hand_line)
+
+    assert [d.arc_id for d in drops] == list(range(first_fall, 4))
+    assert [d.t for d in drops] == pytest.approx([1.1 + i * 0.2 for i in range(first_fall, 4)])
+
+
+@pytest.mark.parametrize("miss_last", [False, True])
+def test_truncated_launches_do_not_bound_hand_height(miss_last):
+    arcs = []
+    for i in range(4):
+        missed = i == 3 and miss_last
+        a = _make_floor_candidate(i, i * 0.45, duration=1.31 if missed else 1.1)
+        start = a.t_start + (0.8 if missed else 0.3)
+        arcs.append(a.model_copy(update={
+            "t_start": start, "by": a.vy_at(start), "cy": a.y_at(start),
+        }))
+    line = estimate_hand_line(arcs)
+    throws, catches = derive_events(arcs, line)
+    runs = segment_runs(arcs, throws, catches, line)
+    drops, _ = detect_drops(arcs, runs, line)
+
+    assert [d.arc_id for d in drops] == ([3] if miss_last else [])
+    if miss_last:
+        assert drops[0].t == pytest.approx(3 * 0.45 + 1.1)

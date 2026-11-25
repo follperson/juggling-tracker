@@ -4,10 +4,14 @@ import pytest
 from juggletrack.arcs import extract
 from juggletrack.arcs.extract import (
     _EM_TIME_MARGIN,
+    _apexes,
     _em_assign_refit,
+    _grow_flight,
     _link_fragments,
     _merge_pass,
     _Moments,
+    _seed_pieces,
+    _sink_end,
     _split_ballistic,
     dedup_parallel_arcs,
     extract_arcs,
@@ -112,6 +116,281 @@ def test_linker_survives_three_frame_gaps():
 
     recovered = extract_arcs(gapped)  # shipped default
     assert len(recovered) >= 11, f"only recovered {len(recovered)}/12 arcs"
+
+
+def _carried_ball(n_flights=8, fps=30.0, flight_s=0.6, carry_s=0.3, ay=2.0, sink=False,
+                  fall=False, fall_share=1.0, hand_y=0.7, sides=(0.35, 0.65), t0=0.0):
+    """One ball as a detector that never loses it reports it: a flight from
+    one hand to the other, then a carry in which the hand dips with the ball
+    before it throws it back. With ``sink`` the last carry is replaced by
+    the ball sinking with the hand at half the speed it landed at, until the
+    track ends. With ``fall`` the hand touches the ball instead: it keeps
+    falling under gravity at a quarter of its landing speed, as a dropped ball
+    does, until the track ends. ``fall_share`` scales that gravity: below 1
+    the hand still holds the ball and lowers it. The track starts at ``t0``.
+    Returns the detections and each flight's (throw, catch) times."""
+    dip = 0.05
+    cycle = flight_s + carry_s
+    dets = []
+    for f in range(round(n_flights * cycle * fps)):
+        t = f / fps
+        k, phase = int(t // cycle), t % cycle
+        x0, x1 = sides[k % 2], sides[(k + 1) % 2]
+        if phase <= flight_s:
+            x = x0 + (x1 - x0) * phase / flight_s
+            y = hand_y - ay * flight_s * phase + ay * phase * phase
+        elif sink and k == n_flights - 1:
+            x = x1
+            y = hand_y + 0.5 * ay * flight_s * (phase - flight_s)
+        elif fall and k == n_flights - 1:
+            p = phase - flight_s
+            x = x1
+            y = hand_y + 0.25 * ay * flight_s * p + fall_share * ay * p * p
+        else:
+            x = x1
+            y = hand_y + dip * np.sin(np.pi * (phase - flight_s) / carry_s)
+        dets.append(Detection(frame_idx=f + round(t0 * fps), t=t0 + t, x=x, y=y))
+    return dets, [(t0 + k * cycle, t0 + k * cycle + flight_s) for k in range(n_flights)]
+
+
+def test_a_ball_tracked_through_its_carries_yields_one_arc_per_flight():
+    """GitHub issue #7. When the detector never loses a ball, the linker
+    joins flight, carry, flight into one fragment, and splitting it left to
+    right cuts inside the flights. Those pieces join half a flight to part
+    of a carry, fit a gravity far below the flight's and are pruned. Each
+    flight must still come out as one arc, from its throw to its catch, with
+    the flight's own gravity."""
+    dets, flights = _carried_ball()
+    assert len(_link_fragments(_sorted_points(dets), 0.18, 0.08)) == 1
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights)
+    for (t_throw, t_catch), arc in zip(flights, arcs):
+        assert arc.t_start == pytest.approx(t_throw, abs=0.05)
+        assert arc.t_end == pytest.approx(t_catch, abs=0.1)
+        assert arc.ay == pytest.approx(2.0, rel=0.05)
+
+
+def test_a_flight_stops_growing_where_the_ball_leaves_its_x_line():
+    """A flight grows only onto points that lie on its parabola in y and
+    within 2 * resid_tol of its x line. After this flight the track stays on
+    the parabola in y but moves 0.05 to 0.07 off the x line, as a hand that
+    pulls the ball sideways or another ball would. Growth must stop at the
+    catch and keep the flight. A flight that took those points in would fail
+    the check that every x lies near one line, and be lost."""
+    rows = [[f / 30, 0.35 + 0.5 * f / 30, 0.7 - 1.2 * f / 30 + 2.0 * (f / 30) ** 2, 1.0] for f in range(19)]
+    for f, dx in zip(range(19, 22), (0.05, 0.06, 0.07)):
+        t = f / 30
+        rows.append([t, 0.35 + 0.5 * t - dx, 0.7 - 1.2 * t + 2.0 * t * t, 1.0])
+    grown = _grow_flight(rows, apex=9, free=0, swing=0.04, resid_tol=0.02)
+    assert grown is not None
+    lo, hi, ay = grown
+    assert (lo, hi) == (0, 18)
+    assert ay == pytest.approx(2.0)
+
+
+def test_a_top_seen_on_fewer_than_four_points_does_not_grow():
+    """A flight starts from the points within 2 * resid_tol of its apex
+    height, and needs at least four of them to show its curvature above the
+    noise. A ball at rest whose track jumps up for three frames, 0.035, 0.05
+    and 0.035 above where it rests, tops out on three such points and is
+    no flight."""
+    lift = {10: 0.035, 11: 0.05, 12: 0.035}
+    rows = [[f / 30, 0.5, 0.6 - lift.get(f, 0.0), 1.0] for f in range(24)]
+    assert _grow_flight(rows, apex=11, free=0, swing=0.04, resid_tol=0.02) is None
+
+
+def test_a_dip_smaller_than_the_swing_on_the_way_up_is_no_top():
+    """A track tops out where it climbed 2 * resid_tol and then fell as far.
+    A hand lifts the ball 0.06, lets it sink back 0.03, then lifts it on and
+    throws it to 0.55. The 0.03 dip is wobble, so the throw's top is the
+    only apex."""
+    ys = [0.7] * 5 + [0.67, 0.64, 0.655, 0.67, 0.62, 0.58, 0.55, 0.58, 0.63, 0.7]
+    assert _apexes(ys, 0.04) == [11]
+
+
+def test_the_ball_stays_in_the_hand_down_to_its_lowest_point_after_the_catch():
+    """After a catch the ball sinks with the hand to its lowest point before
+    the hand lifts it, and those points are in the hand. Here the hand holds
+    the ball near the catch height for three frames, none below the catch
+    point, then lifts it 0.05. The three frames are still the ball in the
+    hand: the sink runs to the lowest of them."""
+    ys = [0.55, 0.58, 0.63, 0.7, 0.695, 0.698, 0.69, 0.65]
+    assert _sink_end(ys, 3, 0.04) == 5
+
+
+def test_the_sink_ends_where_the_hand_lifts_the_ball_by_the_swing():
+    """The sink ends at its lowest point once the track climbs 2 * resid_tol
+    above it: the hand has started the next throw. Here the hand sinks to
+    0.75 and lifts the ball 0.05, and the ball then falls past 0.78, as a
+    low throw that is not caught does. Those later points are the throw's,
+    not the hand's, so the sink still ends at 0.75."""
+    ys = [0.55, 0.58, 0.63, 0.7, 0.73, 0.75, 0.72, 0.7, 0.74, 0.78]
+    assert _sink_end(ys, 3, 0.04) == 5
+
+
+def test_a_ball_let_go_on_the_way_down_does_not_grow_into_a_flight():
+    """A flight is seen over its top: its fit climbs to the apex and falls
+    from it inside the run. A hand lifts the ball 0.1 and lets it go while
+    moving down, so it falls from its first free point on a parabola whose
+    vertex lies 0.5 s before that point (slow motion, ay 0.2). The track tops
+    out there, and the fall bends enough to clear 2 * resid_tol, but the run
+    never climbs, so it is no flight."""
+    rows = [[f / 30, 0.5, 0.7, 1.0] for f in range(10)]
+    rows += [[10 / 30, 0.5, 0.645, 1.0]]
+    for f in range(11, 42):
+        p = (f - 11) / 30
+        rows.append([f / 30, 0.5, 0.6 + 0.2 * p + 0.2 * p * p, 1.0])
+    assert _grow_flight(rows, apex=11, free=0, swing=0.04, resid_tol=0.02) is None
+
+
+def test_a_fragment_the_shipped_split_cuts_at_the_hands_keeps_that_split():
+    """Apex seeding replaces the left-to-right split only in a fragment where
+    one of its pieces ends inside a flight. Here the ball turns at each hand
+    with no carry, and crosses fast enough that the split cuts right at each
+    turn, so every piece is one whole flight. The fragment must keep exactly
+    the shipped pieces. With three pieces, each piece's place in the
+    fragment has to be counted on from the end of the one before."""
+    dets, flights = _carried_ball(n_flights=3, carry_s=0.0, ay=1.0, sides=(0.2, 0.8))
+    arr = _sorted_points(dets)
+    (frag,) = _link_fragments(arr, 0.18, 0.08)
+    cut = _seed_pieces(arr, frag, 0.02)
+    assert cut.flights == []
+    assert cut.pieces == _split_ballistic(arr, frag, 0.02)
+    assert len(cut.pieces) == len(flights)
+
+
+def test_a_flight_whose_top_noise_hides_still_yields_an_arc():
+    """Detector noise can hide the curvature at a flight's top, and then the
+    flight does not grow from its apex. With noise of 0.008 and this seed,
+    that happens to the fourth flight (measured). The track still tops out
+    between the third and fifth flights, so the ball there is in the air,
+    not in a hand, and that flight must come out as an arc like the others.
+    Deleting such a stretch as a ball in a hand cut the catches matched on
+    simulated real-time 3-ball footage at this noise from 464 to 390 of 480.
+    The carries between the other flights are still a ball in a hand, so no
+    arc bends into them and each keeps the flights' gravity."""
+    dets, flights = _carried_ball()
+    rng = np.random.default_rng(14)
+    dets = [
+        Detection(frame_idx=d.frame_idx, t=d.t, x=d.x + rng.normal(0, 0.008), y=d.y + rng.normal(0, 0.008))
+        for d in dets
+    ]
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights)
+    for (t_throw, t_catch), arc in zip(flights, arcs):
+        assert arc.t_start == pytest.approx(t_throw, abs=0.1)
+        assert arc.t_end == pytest.approx(t_catch, abs=0.1)
+        assert arc.ay == pytest.approx(2.0, rel=0.15)
+
+
+def test_no_arc_takes_in_the_ball_sinking_with_the_hand_after_the_last_flight():
+    """After its last catch the ball sinks with the hand, slower than it
+    fell, and the track ends there. An arc fitted to that stretch alone has
+    its apex out of view and counts the catch a second time (measured on
+    ss423_id_017), and a flight arc that takes it in bends toward the hand
+    and ends after the catch. The last flight's arc must end at its catch,
+    with the flight's own gravity."""
+    dets, flights = _carried_ball(sink=True)
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights)
+    assert arcs[-1].t_end == pytest.approx(flights[-1][1], abs=1 / 30)
+    assert arcs[-1].ay == pytest.approx(2.0, rel=0.02)
+
+
+def test_a_short_noisy_sink_in_slow_motion_stays_in_the_hand():
+    """In slow motion gravity bends a 0.3 s stretch by less than the noise,
+    so a ball that sinks with the hand for that long after its last catch
+    can fit the flights' gravity by chance (measured with this seed: ay
+    within the band). It is still a ball in a hand: the last flight's arc
+    must end at its catch and keep its gravity, not bend on into the sink.
+    Without the stretch-length check, turn3/analyze-ftv1/ss441_id_013 lost
+    a catch this way."""
+    dets, flights = _carried_ball(n_flights=5, flight_s=3.0, carry_s=0.3, ay=0.08, sink=True)
+    rng = np.random.default_rng(48)
+    dets = [
+        Detection(frame_idx=d.frame_idx, t=d.t, x=d.x + rng.normal(0, 0.005), y=d.y + rng.normal(0, 0.005))
+        for d in dets
+    ]
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights)
+    assert arcs[-1].t_end == pytest.approx(flights[-1][1], abs=0.1)
+    assert arcs[-1].ay == pytest.approx(0.08, rel=0.02)
+
+
+def test_a_ball_that_falls_on_after_the_last_flight_keeps_its_fall_as_an_arc():
+    """A hand that touches the ball without catching it leaves it falling to
+    the floor. That fall is no carry: it moves on a parabola with the
+    flights' gravity, and the drop detector needs its arc to see the ball end
+    below the hands (measured on flywheel-t2/analyze-ftv2c/af1 at 35.9 s)."""
+    dets, flights = _carried_ball(fall=True)
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights) + 1
+    landing, end = flights[-1][1], max(d.t for d in dets)
+    flight, fall = arcs[-2], arcs[-1]
+    assert flight.t_end == pytest.approx(landing, abs=1 / 30)
+    assert flight.ay == pytest.approx(2.0, rel=0.02)
+    assert landing - 1e-6 <= fall.t_start <= landing + 1 / 30 + 1e-6
+    assert fall.t_end == pytest.approx(end, abs=1e-6)
+    assert fall.ay == pytest.approx(2.0, rel=0.02)
+
+
+def test_a_ball_the_hand_lowers_after_the_last_flight_stays_in_the_hand():
+    """A fall moves with the flights' gravity. A ball that speeds up at half
+    of it after its last catch is still held: the hand lowers it. That
+    stretch is no fall, so no arc may be fitted to it, and the last flight's
+    arc must end at its catch with the flights' gravity rather than bend on
+    into the hand."""
+    dets, flights = _carried_ball(fall=True, fall_share=0.5)
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights)
+    assert arcs[-1].ay == pytest.approx(2.0, rel=0.02)
+    assert arcs[-1].t_end == pytest.approx(flights[-1][1], abs=0.5 / 30)
+
+
+def test_a_throw_after_the_last_whole_flight_still_yields_an_arc():
+    """The points after a fragment's last flight and its sink go to the
+    left-to-right split, so a throw there still gets an arc when it has no
+    apex to grow from. Here the hand hides the ball for 0.1 s in the last
+    carry, and the track ends 0.1 s after the last throw tops out, so that
+    throw falls less than 2 * resid_tol in view. Its arc still takes in the
+    end of the carry (measured: it starts 0.07 s before the throw, at ay
+    1.5), a limit of that split, but the throw must not be lost."""
+    dets, flights = _carried_ball()
+    (_, catch), (throw, _) = flights[-2], flights[-1]
+    hidden, end = (catch + throw) / 2, throw + 0.4
+    dets = [d for d in dets if d.t <= end + 1e-9 and abs(d.t - hidden) >= 0.05]
+    arcs = extract_arcs(dets)
+    assert len(arcs) == len(flights)
+    for (t_throw, t_catch), arc in zip(flights[:-1], arcs):
+        assert arc.t_start == pytest.approx(t_throw, abs=0.05)
+        assert arc.t_end == pytest.approx(t_catch, abs=0.05)
+    assert arcs[-1].t_start < throw + 0.1
+    assert arcs[-1].t_end == pytest.approx(end)
+
+
+@pytest.mark.parametrize("x_off", [0.0, 0.03])
+def test_a_point_the_linker_gives_to_another_ball_stays_with_its_own_flight(x_off):
+    """Ball B lands and leaves the view. Ball A is thrown 0.1 s later near
+    where B's track was heading, so the linker hands A's first detection to
+    B's fragment, where it follows B's last flight like the ball in a hand.
+    A is missed once more, and the rest of its track is a fragment of its
+    own. That first detection lies on A's flight and must stay on A's arc
+    (measured on plan2-validation/af2 at 22.997 s, where losing it shortened
+    the arc until dedup_parallel_arcs took it for a duplicate). It stays
+    when the box sits off A's x line by more than resid_tol but within
+    EM's 2 * resid_tol: on af2 it sat 0.026 off."""
+    ball_b, _ = _carried_ball(n_flights=3)
+    ball_b = [d for d in ball_b if d.t <= 2.4 + 1e-9]
+    ball_a, flights_a = _carried_ball(n_flights=3, hand_y=0.76, sides=(0.68, 0.38), t0=2.5)
+    ball_a = [d for d in ball_a if abs(d.t - (2.5 + 1 / 30)) > 1e-9]
+    ball_a = [d.model_copy(update={"x": d.x + x_off}) if abs(d.t - 2.5) < 1e-9 else d for d in ball_a]
+    pts = _sorted_points(ball_a + ball_b)
+    owner = {i: k for k, frag in enumerate(_link_fragments(pts, 0.18, 0.08)) for i in frag}
+    at = {round(float(t), 4): i for i, t in enumerate(pts[:, 0])}
+    assert owner[at[2.5]] == owner[at[2.4]] != owner[at[2.5667]]
+    arcs = extract_arcs(ball_a + ball_b)
+    first_a = min((a for a in arcs if a.t_start > 2.45), key=lambda a: a.t_start)
+    assert first_a.t_start == pytest.approx(flights_a[0][0], abs=1e-6)
 
 
 def test_false_positives_do_not_create_arcs():

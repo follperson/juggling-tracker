@@ -10,8 +10,9 @@ from juggletrack.arcs.extract import (
     extract_arcs,
 )
 from juggletrack.detect.cluster import cluster_detections
-from juggletrack.events import CATCH_EXTRAPOLATION_MARGIN
-from juggletrack.events.catches import derive_events
+from juggletrack.events import CATCH_EXTRAPOLATION_MARGIN, catch_witness_margin
+from juggletrack.events.catches import derive_events, hand_line_crossings
+from juggletrack.events.carry import trim_hand_carry
 from juggletrack.events.drops import detect_drops
 from juggletrack.events.handline import estimate_hand_line
 from juggletrack.events.runs import segment_runs
@@ -50,8 +51,9 @@ class AnalyzeConfig(BaseModel):
     static_cell: float = Field(0.03, gt=0)
     static_max_span_s: float = 1.5
     # Seconds of overshoot tolerance before an unconfirmed "stop" is
-    # reclassified "video_end". Matches events.catches's
-    # CATCH_EXTRAPOLATION_MARGIN so the two checks agree on what counts as
+    # reclassified "video_end". It is the floor of the catch witness margin
+    # (events.catch_witness_margin) and grows with the flight that ends the
+    # run in the same way, so the two checks agree on what counts as
     # "confirmed by real data": a run's end_t comes from the same falling
     # hand-line crossing a catch would need to be witnessed at.
     video_end_margin: float = CATCH_EXTRAPOLATION_MARGIN
@@ -83,6 +85,18 @@ class AnalyzeConfig(BaseModel):
                 f"arc_dedup_traj_tol must be >= 0 (got {self.arc_dedup_traj_tol})"
             )
         return self
+
+
+def _ending_flight_s(run: Run, arcs: list[Arc], hand_line: float) -> float:
+    """Hand line to hand line time of the arc whose falling crossing is the
+    run's end_t, or 0.0 when no arc's is (segment_runs then took an arc's
+    t_end)."""
+    by_id = {arc.id: arc for arc in arcs}
+    for arc_id in run.arc_ids:
+        crossings = hand_line_crossings(by_id[arc_id], hand_line) if arc_id in by_id else None
+        if crossings is not None and crossings[1] == run.end_t:
+            return crossings[1] - crossings[0]
+    return 0.0
 
 
 def _events_from_arcs(
@@ -148,8 +162,11 @@ def _events_from_arcs(
         # reaches the hand line, end_t is extrapolated from the fitted
         # parabola well past t_last — that overshoot (not a small gap toward
         # t_last) is the signal that the ending is unconfirmed.
-        if run.end_reason == "stop" and run.end_t - dets_t_last > cfg.video_end_margin:
-            run = run.model_copy(update={"end_reason": "video_end"})
+        overshoot = run.end_t - dets_t_last
+        if run.end_reason == "stop" and overshoot > cfg.video_end_margin:
+            flight_s = _ending_flight_s(run, arcs, hand_line)
+            if overshoot > catch_witness_margin(flight_s, cfg.video_end_margin):
+                run = run.model_copy(update={"end_reason": "video_end"})
         final.append(run)
 
     return SessionResult(
@@ -179,7 +196,12 @@ def analyze_detections(
         arcs, overlap_frac=cfg.arc_dedup_overlap_frac, traj_tol=cfg.arc_dedup_traj_tol,
     )
     t_last = max(d.t for d in dets)
-    result = _events_from_arcs(arcs, t_last, cfg)
+    hand_line = estimate_hand_line(arcs)
+    arcs = trim_hand_carry(
+        dets, arcs, hand_line, cfg.resid_tol, link_max_dt=cfg.link_max_dt,
+        g_range=cfg.g_range, min_points=cfg.min_points, min_duration=cfg.min_duration,
+    )
+    result = _events_from_arcs(arcs, t_last, cfg, hand_line_override=hand_line)
     # n_detections is the RAW input count (pre-clustering), matching
     # oracle_events' meaning of the same key (meschke_import.py) so the two
     # are comparable; n_detections_clustered is the post-clustering count,

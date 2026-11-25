@@ -108,20 +108,26 @@ without the detector.
 
 ## Accuracy envelope (measured)
 
-- The recorded 22-video offline comparison at shipped defaults scores 9/26
-  reference runs (34.6%) within one catch, including unmatched runs as failures.
-  Those videos were used for parameter tuning, and the trajectory-derived
-  reference events have known boundary errors. This is a diagnostic result,
-  not a verified holdout accuracy claim.
+- On the 22 labelled Meschke clips, offline analysis at shipped defaults
+  matches 1,270 of 1,485 reference flights read off the ball labels, and 498
+  of 501 on the six clips where that count is stable
+  (`scripts/flight_score.py`, see `docs/benchmarking.md`). The thresholds
+  were chosen on these same clips, so this is a diagnostic result, not a
+  verified holdout accuracy claim. An earlier recorded comparison (9/26
+  reference runs within one catch) used a reference built with the arc
+  extractor and predates the current extractor.
 - Realtime throughput was previously measured at 32–47 fps on Apple Silicon
-  (MPS). Accuracy on long sessions remains unresolved: a direct live replay of
-  saved `ss3_id_016` detections (`juggletrack live --detections`) counts 208
-  catches and 8 drops versus offline's 41 catches and 0 drops. Both report 9
-  runs; the generated reference reports 5 runs and 52 catches. That reference
-  is built with the arc extractor. Read off the ball labels with no arc fit,
-  `ss3_id_016` holds 177 whole flights in one run, against offline's 41
-  catches (`scripts/flight_score.py`, see `docs/benchmarking.md`). Offline
-  parity alone is not sufficient.
+  (MPS). On the long clip `ss3_id_016` the labels hold 177 whole flights in
+  one run. Offline reports 178 catches in 1 run and matches all 177. A direct
+  live replay of the saved detections (`juggletrack live --detections`)
+  counts 181 catches and 0 drops in 1 run, so live mode still counts a few
+  flights twice.
+- Drops are the least reliable output. Across the saved sessions of the two
+  real-time videos with human-checked drops and the one labelled clip with
+  drops, offline analysis reports 5 of 17 known real drops, and it reports
+  three false ones on a tutorial video. A ball that is carried or bobbed in a
+  session with no juggling can be counted as caught. Both are recorded in
+  `docs/parameter-tuning.md`.
 - Scope: 3-ball patterns. The detector is trained on juggling balls — other
   thrown objects won't detect reliably.
 

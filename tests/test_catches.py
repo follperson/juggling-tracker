@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from juggletrack.arcs.extract import extract_arcs
 from juggletrack.events.catches import derive_events
@@ -72,6 +73,50 @@ def test_truncated_arc_yields_no_phantom_catch():
     throws, catches = derive_events([arc], hand_line)
     assert len(throws) == 1
     assert catches == []
+
+
+def test_slow_motion_catch_counts_when_the_arc_ends_above_the_hand_line():
+    """The witness margin is relative to the flight.
+
+    A slow-motion flight lasts 2.5 s here. Its arc ends 0.3 s before it
+    reaches the hand line, at y 0.60 against a hand line at 0.70: more than
+    0.15 s, but less than 0.15 of the flight. That catch is witnessed. The
+    same geometry at real-time speed, a 0.6 s flight seen until 0.2 s before
+    the crossing, stays unwitnessed: 0.15 of its flight is under 0.15 s.
+    """
+    hand_line = 0.7
+    slow = Arc(
+        id=1, t_start=10.0, t_end=12.2,
+        ay=0.15, by=-0.375, cy=hand_line, bx=0.1, cx=0.4,
+        n_points=66, rmse=0.005,
+    )
+    throws, catches = derive_events([slow], hand_line)
+    assert len(throws) == 1
+    assert [c.t for c in catches] == [pytest.approx(12.5)]
+
+    fast = Arc(
+        id=2, t_start=10.0, t_end=10.4,
+        ay=2.0, by=-1.2, cy=hand_line, bx=0.4, cx=0.4,
+        n_points=12, rmse=0.005,
+    )
+    throws, catches = derive_events([fast], hand_line)
+    assert len(throws) == 1
+    assert catches == []
+
+
+def test_real_time_catch_counts_when_seen_until_0_15_s_before_the_hand_line():
+    """The witness margin never falls below 0.15 s. A real-time flight of
+    0.6 s seen until 0.12 s before it reaches the hand line is witnessed,
+    although 0.12 s is more than 0.15 of the flight."""
+    hand_line = 0.7
+    arc = Arc(
+        id=1, t_start=10.0, t_end=10.48,
+        ay=2.0, by=-1.2, cy=hand_line, bx=0.4, cx=0.4,
+        n_points=15, rmse=0.005,
+    )
+    throws, catches = derive_events([arc], hand_line)
+    assert len(throws) == 1
+    assert [c.t for c in catches] == [pytest.approx(10.6)]
 
 
 def test_truncated_rising_arc_yields_throw():

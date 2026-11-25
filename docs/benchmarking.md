@@ -268,6 +268,33 @@ clips, with 1,016 flights matched. Six clips were trusted, with 501 flights
 and 344 matched. On `ss3_id_016` the labels show 177 flights, the extractor
 explains 53 of them, and the pipeline counts 41 catches.
 
+On 2026-11-23 the extractor seeds each flight from its apex and the catch
+witness margin grows with the flight (GitHub issue #7, see
+`docs/parameter-tuning.md`). The same root then gives 1,301 catches with
+1,270 flights matched, 1 duplicate and 13 unmatched catches, against 2 and 8
+before. The trusted clips match 498 of 501 flights with 1 unmatched catch, as
+before. On `ss3_id_016` the extractor explains all 177 flights and the
+pipeline counts 178 catches in one run, matching all 177 flights. The other
+catch falls on a flight the labels do not show whole. A catch on
+`ss8040_id_070` at 37.03 s is the same catch as before, moved 0.03 s, and now
+scores as unmatched instead of duplicate. Five unmatched catches are new, all
+on flagged clips, and the labelled tracks show that each is a real catch the
+reference cannot match:
+
+- `ss531_id_988` at 44.48 s and `ss531_id_989` at 43.67 s and 44.87 s: the
+  ball comes to rest in the hand at the end of the clip just above the
+  reference hand level, so the reference finds no landing.
+- `ss531_id_989` at 9.23 s: the ball is caught high, near y 0.57, and carried
+  down. The reference puts the landing 0.5 s later, where the carried ball
+  passes hand level.
+- `ss531_id_989` at 42.85 s: a real catch counted 0.49 s late, outside the
+  0.37 s tolerance, because EM extends the arc over the ball resting in the
+  hand.
+
+The change also costs one matched flight on the flagged `ss531_id_014` (26 to
+25). The same day's parity run over every saved session is summarised in
+`docs/parameter-tuning.md`.
+
 Limits:
 
 - The check counts flights, not human-reviewed catches. Release-grade accuracy
@@ -294,6 +321,33 @@ Limits:
   use. The script stops when they are not.
 - The check scores offline analysis only. It needs per-ball labels, which only
   the Meschke clips have.
+
+### Tracing missed catches with dense ball positions
+
+A separate normal-speed development recording had 17 visually reviewed receptions
+in a six-second window. The position review covered all 240 consecutive frames
+in that window and its one-second buffers. A second review marked the reception
+times from the video. Both reviews were model-assisted and used the source frame
+timestamps. The event comparison matched each prediction to at most one contact
+bracket, extended by two source frames on each side.
+
+The previous extractor matched seven receptions using the saved detections.
+Four missed flights had only two to five usable ball positions, one well-observed
+flight disappeared during extraction, three descents continued into hand motion,
+and two fitted arcs ended before the landing was witnessed. Replaying only the
+reviewed airborne positions recovered 15 timed matches. This diagnostic gives
+the tracker information it would have to infer in ordinary use.
+
+Two changes recovered three receptions on the original detections. The extractor
+can restore an observed apex after the other fits converge when its points are
+unclaimed and its curvature agrees with the other flights. A floor-bound track
+can end at the hand when consecutive observations show a lateral reversal and
+slower descent than the incoming flight predicts. The revised pipeline matched
+ten of the 17 receptions, with zero unmatched reports in the window, and removed
+one false drop. Sparse coverage and ambiguous contact still limit this recording.
+The private video and its labels are development material. The public regression
+tests use generated trajectories in `tests/test_enclosed_flights.py` and
+`tests/test_hand_carry.py`.
 
 ## Detector center benchmark
 

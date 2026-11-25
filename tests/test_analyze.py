@@ -8,7 +8,7 @@ from juggletrack.analyze import AnalyzeConfig, _events_from_arcs, analyze_detect
 from juggletrack.arcs.extract import extract_arcs
 from juggletrack.events.handline import estimate_hand_line
 from juggletrack.sim import CascadeParams, simulate_cascade
-from juggletrack.types import Detection, SessionResult
+from juggletrack.types import Arc, Detection, SessionResult
 
 
 def test_end_to_end_clean_run():
@@ -89,6 +89,78 @@ def test_video_end_run():
     truncated = [d for d in r.detections if d.t <= cutoff]
     sr = analyze_detections(truncated)
     assert sr.runs and sr.runs[-1].end_reason == "video_end"
+
+
+def _slow_run(last_seen: float) -> list[Arc]:
+    """Four slow-motion flights of 2.5 s on a hand line at y 0.7, thrown
+    1.2 s apart from alternating hands. Each is seen from its throw to its
+    catch, except the last, which is seen for ``last_seen`` seconds."""
+    arcs = []
+    for k in range(4):
+        t0 = 10.0 + 1.2 * k
+        x0, vx = (0.35, 0.12) if k % 2 == 0 else (0.65, -0.12)
+        seen = last_seen if k == 3 else 2.5
+        arcs.append(Arc(
+            id=k, t_start=t0, t_end=t0 + seen, ay=0.15, by=-0.375, cy=0.7,
+            bx=vx, cx=x0, n_points=int(seen * 30), rmse=0.005,
+        ))
+    return arcs
+
+
+@pytest.mark.xfail(strict=True, reason="known gap: every top of a held ball moved up and down "
+                   "grows into a flight, and no rule found separates it from a thrown ball "
+                   "(docs/parameter-tuning.md)")
+def test_a_held_ball_moved_up_and_down_counts_no_catch():
+    """A ball held in one hand and lifted and lowered by 5% of the frame
+    once a second, for 20 s, is never thrown, so no catch may count. Before
+    apex seeding this counted 0. Seeding counts 19."""
+    rng = np.random.default_rng(0)
+    dets = [
+        Detection(
+            frame_idx=f, t=f / 30.0, x=0.5 + rng.normal(0, 0.005),
+            y=0.6 + 0.05 * np.sin(2 * np.pi * f / 30.0) + rng.normal(0, 0.005),
+        )
+        for f in range(601)
+    ]
+    sr = analyze_detections(dets)
+    assert sum(run.catches for run in sr.runs) == 0
+
+
+def test_video_end_margin_follows_the_catch_witness_margin():
+    """A run's end_t is the falling hand-line crossing of its last flight,
+    the same time the catch on that flight must be witnessed at. When the
+    witness margin, which grows with the flight, counts that catch, the end
+    of the run was seen: the run stops, it does not hit the video end. When
+    the crossing lies beyond the margin, the catch is not counted and the
+    run hits the video end."""
+    caught = _slow_run(last_seen=2.2)  # crossing 0.3 s after the last detection
+    sr = _events_from_arcs(caught, caught[-1].t_end, AnalyzeConfig(), hand_line_override=0.7)
+    assert [(run.catches, run.end_reason) for run in sr.runs] == [(4, "stop")]
+
+    cut = _slow_run(last_seen=1.9)  # crossing 0.6 s after the last detection
+    sr = _events_from_arcs(cut, cut[-1].t_end, AnalyzeConfig(), hand_line_override=0.7)
+    assert [(run.catches, run.end_reason) for run in sr.runs] == [(3, "video_end")]
+
+
+def test_video_end_margin_follows_the_flight_that_ends_the_run():
+    """The video-end check reads the margin of the flight whose crossing is
+    the run's end_t, not of any other flight in the run. A real-time run
+    opens with a high throw of 1.5 s, whose margin is 0.225 s, and goes on
+    with throws of 0.6 s every 0.3 s. Its last flight is seen until 0.2 s
+    before its crossing: more than that flight's margin of 0.15 s, so its
+    catch is not counted and the run hits the video end."""
+    arcs = []
+    for k in range(10):
+        t0 = 10.0 + 0.3 * k
+        flight_s = 1.5 if k == 0 else 0.6
+        seen = flight_s - 0.2 if k == 9 else flight_s
+        x0, vx = (0.35, 0.3 / flight_s) if k % 2 == 0 else (0.65, -0.3 / flight_s)
+        arcs.append(Arc(
+            id=k, t_start=t0, t_end=t0 + seen, ay=1.0, by=-flight_s, cy=0.7,
+            bx=vx, cx=x0, n_points=round(seen * 30), rmse=0.005,
+        ))
+    sr = _events_from_arcs(arcs, arcs[-1].t_end, AnalyzeConfig(), hand_line_override=0.7)
+    assert [(run.catches, run.end_reason) for run in sr.runs] == [(9, "video_end")]
 
 
 def test_shuffle_invariance_end_to_end():
@@ -276,8 +348,10 @@ def test_events_from_arcs_hand_line_override():
     assert same.hand_line_y == natural
     assert [run.catches for run in same.runs] == [run.catches for run in default.runs]
 
-    shifted = _events_from_arcs(arcs, t_last, AnalyzeConfig(), hand_line_override=natural + 0.2)
-    assert shifted.hand_line_y == pytest.approx(natural + 0.2)
+    # Above the hands: every arc then ends below the line, which no witness
+    # margin can excuse.
+    shifted = _events_from_arcs(arcs, t_last, AnalyzeConfig(), hand_line_override=natural - 0.2)
+    assert shifted.hand_line_y == pytest.approx(natural - 0.2)
     assert [run.catches for run in shifted.runs] != [run.catches for run in default.runs], (
         "a meaningfully different override must change the derivation"
     )

@@ -6,13 +6,20 @@ switches upstream cannot corrupt results (spec section 4).
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
+from typing import NamedTuple
 
 import numpy as np
 
 from juggletrack.arcs.fit import fit_arc, points_array, x_residuals, y_residuals
+from juggletrack.events.catches import derive_events
+from juggletrack.events.handline import estimate_hand_line
 from juggletrack.types import Arc, Detection
 
 _EM_TIME_MARGIN = 0.15  # arcs may claim points this far beyond their current span
+# Real flights share one gravity: an arc whose ay is further than this share
+# from the cohort's is not a flight (see _gravity_prune).
+_GRAVITY_BAND = 0.3
 
 # A bin's detections only chain into one "occupancy run" while consecutive
 # timestamps are within this many seconds of each other (see
@@ -145,24 +152,51 @@ def extract_arcs(
     arr = arr[order]
 
     fragments = _link_fragments(arr, link_max_dt, link_max_dist)
-    seeds: list[list[int]] = []
-    for frag in fragments:
-        seeds.extend(_split_ballistic(arr, frag, resid_tol))
+    cuts = [_seed_pieces(arr, frag, resid_tol) for frag in fragments]
+    # One fragment's flights are too few and too noisy to say what gravity
+    # is, so the fall test reads the median over every grown flight.
+    gravities = [g for cut in cuts for g in cut.gravities]
+    gravity = float(np.median(gravities)) if gravities else 0.0
+
+    # (points, fragment, grown flight) per seed, and (point, fragment) per
+    # point that may be a ball in a hand
+    seeds: list[tuple[list[int], int, bool]] = []
+    held: list[tuple[int, int]] = []
+    for k, cut in enumerate(cuts):
+        seeds.extend((flight, k, True) for flight in cut.flights)
+        for stretch in [cut.after, *cut.in_hand]:
+            if _keeps_falling(arr[stretch], gravity, resid_tol):
+                seeds.append((stretch, k, False))
+            else:
+                held.extend((i, k) for i in stretch)
+        seeds.extend((piece, k, False) for piece in cut.pieces)
 
     arcs: list[Arc] = []
-    for idxs in seeds:
+    flights: list[tuple[Arc, int]] = []
+    for idxs, k, grown in seeds:
         if len(idxs) < 4:
             continue
         try:
-            arcs.append(fit_arc(arr[idxs]))
+            arc = fit_arc(arr[idxs])
         except ValueError:
             continue  # degenerate seed (e.g. all-same-timestamp cluster)
+        arcs.append(arc)
+        if grown:
+            flights.append((arc, k))
 
+    linked_points = arr
+    if held:
+        arr = np.delete(arr, _in_hand(arr, held, flights, resid_tol), axis=0)
     for _ in range(em_iters):
         arcs = _em_assign_refit(arr, arcs, resid_tol)
         arcs = _merge_pass(arr, arcs, resid_tol)
         arcs = _prune(arcs, g_range, resid_tol, min_points, min_duration, max_abs_bx)
         arcs = _gravity_prune(arcs)
+
+    arcs = _restore_enclosed_flights(
+        linked_points, arcs, cuts, g_range=g_range, resid_tol=resid_tol,
+        min_points=min_points, min_duration=min_duration, max_abs_bx=max_abs_bx,
+    )
 
     # Real, distinct ids are required before the split-stitch pass: every
     # arc up to this point still carries fit_arc's default id=-1, which
@@ -279,10 +313,9 @@ class _Moments:
         s[3] += p
         s[4] += p * dt
 
-    def fit_residuals(self, pts: np.ndarray) -> tuple[float, np.ndarray] | None:
-        """Least-squares parabola y(dt) and line x(dt) from the sums, evaluated
-        on ``pts`` (the summed points): the weighted y-rmse as fit_arc defines
-        it and the signed x residuals, or None when the system is too
+    def solve(self) -> tuple[float, float, float, float, float] | None:
+        """Coefficients (ay, by, cy, bx, cx) of the least-squares parabola
+        y(dt) and line x(dt) from the sums, or None when the system is too
         ill-conditioned. The x system is the y system's leading 2x2 block, so
         by Fischer's inequality passing the y check also clears the x one."""
         s0, s1, s2, s3, s4 = self.s
@@ -301,10 +334,374 @@ class _Moments:
         cy = (c13 * r2 + c23 * r1 + c33 * r0) / det
         bx = (s0 * self.sx[1] - s1 * self.sx[0]) / c11
         cx = (s2 * self.sx[0] - s1 * self.sx[1]) / c11
+        return ay, by, cy, bx, cx
 
+    def fit_residuals(self, pts: np.ndarray) -> tuple[float, np.ndarray] | None:
+        """The fit of ``solve`` evaluated on ``pts`` (the summed points): the
+        weighted y-rmse as fit_arc defines it and the signed x residuals, or
+        None when ``solve`` gives no fit."""
+        fit = self.solve()
+        if fit is None:
+            return None
+        ay, by, cy, bx, cx = fit
         dt = pts[:, 0] - self.t0
         ry = ((ay * dt + by) * dt + cy - pts[:, 2]) * pts[:, 3]
-        return math.sqrt(float(ry @ ry) / s0), bx * dt + cx - pts[:, 1]
+        return math.sqrt(float(ry @ ry) / self.s[0]), bx * dt + cx - pts[:, 1]
+
+
+class _EnclosedFlight(NamedTuple):
+    """An apex seed wholly inside a residual-based segment, indexed into ``arr``."""
+
+    piece: list[int]
+    flight: list[int]
+    ay: float
+
+
+class _Cut(NamedTuple):
+    """One fragment as `_seed_pieces` divides it. Every list holds indices
+    into the points array."""
+
+    flights: list[list[int]]  # flights grown from their apexes, as seeds
+    pieces: list[list[int]]  # `_split_ballistic` pieces, as seeds
+    in_hand: list[list[int]]  # separate stretches between flights with no detected apex
+    after: list[int]  # points after the last flight, down to `_sink_end`
+    gravities: list[float]  # ay of every flight grown here, seeds or not
+    enclosed: tuple[_EnclosedFlight, ...] = ()
+
+
+def _seed_pieces(arr: np.ndarray, idxs: list[int], resid_tol: float) -> _Cut:
+    """Cut one fragment into seed pieces, and name the points in it that may
+    be a ball in a hand.
+
+    A detector that never loses a ball links it into one fragment for many
+    throws: flight, hand carry, flight. `_split_ballistic` scans left to
+    right, so after the first hand each of its pieces starts inside a carry
+    and runs on into half of the next flight. Those pieces fit a gravity far
+    below the real one and are pruned, and nothing rebuilds the flight. Every
+    flight has an apex, and the apex is the point farthest from both hands,
+    so `_grow_flight` builds each flight outward from its apex and stops at
+    the hands.
+
+    The flights replace the shipped pieces only in a fragment where the
+    shipped splitter fails, which is where one of its pieces ends inside a
+    flight. Every other fragment is split exactly as before.
+
+    The points between two flights of one fragment are the ball in a hand,
+    and so are the points after the last flight while the ball sinks with
+    the hand (`_sink_end`). No arc may be fitted to them: an arc that takes
+    them in bends toward the hand, fits a gravity that is too low, and
+    crosses the hand line late. Between two flights the track can still top
+    out where a flight did not grow, because detector noise hid the
+    curvature at its top. That stretch holds a flight, so `_split_ballistic`
+    seeds it as before. Two more kinds are no carry, and `extract_arcs`
+    tells them apart because it needs every fragment's flights to do so: a
+    ball that keeps falling between or after grown flights (`_keeps_falling`),
+    and a point the linker took from another ball (`_in_hand`).
+    """
+    rows = arr[idxs].tolist()
+    ys = [row[2] for row in rows]
+    swing = 2 * resid_tol
+    flights: list[tuple[int, int]] = []
+    gravities: list[float] = []
+    failed: list[int] = []  # tops that did not grow into a flight
+    free = 0  # first position no flight has claimed yet
+    for apex in _apexes(ys, swing):
+        if apex < free:
+            continue
+        grown = _grow_flight(rows, apex, free, swing, resid_tol)
+        if grown is not None:
+            lo, hi, ay = grown
+            flights.append((lo, hi))
+            gravities.append(ay)
+            free = hi + 1
+        else:
+            failed.append(apex)
+
+    # Take the shipped pieces one at a time, and stop at the first that ends
+    # inside a flight: a long fragment fails at its first hand, and the rest
+    # of its shipped pieces would be thrown away.
+    shipped: list[list[int]] = []
+    enclosed: list[_EnclosedFlight] = []
+    held = 0  # flights[:held] sit whole inside one shipped piece
+    start = 0
+    for piece in _ballistic_pieces(arr, idxs, resid_tol):
+        end = start + len(piece) - 1
+        while held < len(flights) and start <= flights[held][0] and flights[held][1] <= end:
+            lo, hi = flights[held]
+            if start < lo or hi < end:
+                enclosed.append(_EnclosedFlight(piece, idxs[lo : hi + 1], gravities[held]))
+            held += 1
+        if held < len(flights) and flights[held][0] <= end:
+            break
+        shipped.append(piece)
+        start = end + 1
+    else:
+        return _Cut(
+            [], [piece for piece in shipped if len(piece) >= 4], [], [],
+            gravities, tuple(enclosed),
+        )
+
+    head, last = flights[0][0], flights[-1][1]
+    tail = _sink_end(ys, last, swing) + 1
+    pieces: list[list[int]] = []
+    if head >= 4:
+        pieces.extend(_split_ballistic(arr, idxs[:head], resid_tol))
+    if len(idxs) - tail >= 4:
+        pieces.extend(_split_ballistic(arr, idxs[tail:], resid_tol))
+    in_hand: list[list[int]] = []
+    for (_, hi), (lo, _) in zip(flights, flights[1:]):
+        if any(hi < apex < lo for apex in failed):
+            pieces.extend(_split_ballistic(arr, idxs[hi + 1 : lo], resid_tol))
+        else:
+            in_hand.append(idxs[hi + 1 : lo])
+    return _Cut(
+        flights=[idxs[lo : hi + 1] for lo, hi in flights],
+        pieces=pieces,
+        in_hand=in_hand,
+        after=idxs[last + 1 : tail],
+        gravities=gravities,
+    )
+
+
+def _restore_enclosed_flights(
+    arr: np.ndarray, arcs: list[Arc], cuts: list[_Cut], *,
+    g_range: tuple[float, float], resid_tol: float,
+    min_points: int, min_duration: float, max_abs_bx: float,
+) -> list[Arc]:
+    """Recover unused apex seeds whose enclosing fit lost the cohort's gravity.
+
+    A carry plus a whole flight can pass the splitter's residual gate while
+    flattening the enclosing parabola. Wait until the original fits have converged.
+    Only after extraction establishes a gravity cohort can an enclosed flight
+    be restored, with the ordinary quality gates and no points claimed by any
+    surviving flight. Claim each accepted recovery immediately so two backups
+    cannot recover the same physical evidence.
+    """
+    if len(arcs) < 4 or not any(cut.enclosed for cut in cuts):
+        return arcs
+    gravity = float(np.median([a.ay for a in arcs]))
+    candidates = [
+        enclosed for cut in cuts for enclosed in cut.enclosed
+        if abs(enclosed.ay - gravity) <= _GRAVITY_BAND * gravity
+    ]
+    if not candidates:
+        return arcs
+
+    # Recovery is for missed catches. A late seed that remains floor-bound
+    # needs independent descent evidence, not just an internally clean fit.
+    hand_line = estimate_hand_line(arcs)
+    claimed = np.zeros(len(arr), dtype=bool)
+    t = arr[:, 0]
+
+    def claim(arc: Arc) -> None:
+        lo = np.searchsorted(t, arc.t_start - _EM_TIME_MARGIN, side="left")
+        hi = np.searchsorted(t, arc.t_end + _EM_TIME_MARGIN, side="right")
+        window = arr[lo:hi]
+        residual = np.maximum(y_residuals(arc, window), x_residuals(arc, window))
+        claimed[lo:hi] |= residual <= 2 * resid_tol
+
+    for arc in arcs:
+        claim(arc)
+    restored = list(arcs)
+    for enclosed in candidates:
+        if np.any(claimed[enclosed.flight]):
+            continue
+        try:
+            enclosing = fit_arc(arr[enclosed.piece])
+            trial = fit_arc(arr[enclosed.flight])
+        except ValueError:
+            continue
+        if enclosing.ay >= (1 - _GRAVITY_BAND) * gravity:
+            continue
+        if abs(trial.ay - gravity) > _GRAVITY_BAND * gravity:
+            continue
+        if not _prune([trial], g_range, resid_tol, min_points, min_duration, max_abs_bx):
+            continue
+        if not derive_events([trial], hand_line)[1]:
+            continue
+        if not _preserves_catch_witnesses(restored, trial):
+            continue
+        restored.append(trial)
+        claim(trial)
+    return restored
+
+
+def _preserves_catch_witnesses(arcs: list[Arc], candidate: Arc) -> bool:
+    """A recovered fragment must not erase independently witnessed catches.
+
+    Its endpoints may still be airborne rather than at the hands. Reject the
+    recovery if adding those endpoints to the height estimate would turn any
+    existing catch into an unwitnessed or floor-bound flight elsewhere.
+    """
+    before = estimate_hand_line(arcs)
+    after = estimate_hand_line([*arcs, candidate])
+    if before == after:
+        return True
+    if not derive_events([candidate], after)[1]:
+        return False
+    for arc in arcs:
+        if derive_events([arc], before)[1] and not derive_events([arc], after)[1]:
+            return False
+    return True
+
+
+def _keeps_falling(pts: np.ndarray, gravity: float, resid_tol: float) -> bool:
+    """Whether ``pts``, a contiguous stretch set aside as a carry, are the ball
+    still in flight rather than sinking with a hand.
+
+    A hand that touches a ball without holding it leaves it falling to the
+    floor, and when the linker jumps to another ball the points are that
+    ball's flight. Either way they lie on one parabola, as `_split_ballistic`
+    holds a piece to, and fall with the flights' ``gravity`` within
+    `_GRAVITY_BAND`. A hand slows the ball it holds, so a sink fits a far
+    lower gravity, mostly below zero. The stretch must also last long enough
+    for that gravity to bend a straight line by ``resid_tol``, or noise
+    decides its fitted gravity: a 0.3 s sink in slow motion, where gravity
+    is 0.19, bends by 0.004."""
+    if len(pts) < 4 or gravity * ((pts[-1, 0] - pts[0, 0]) / 2) ** 2 < resid_tol:
+        return False
+    mom = _Moments.of(pts)
+    fit, res = mom.solve(), mom.fit_residuals(pts)
+    if fit is None or res is None:
+        return False
+    y_rmse, x_res = res
+    return (
+        abs(fit[0] - gravity) <= _GRAVITY_BAND * gravity
+        and y_rmse <= resid_tol
+        and float(np.abs(x_res).max()) <= 2 * resid_tol
+    )
+
+
+def _in_hand(
+    arr: np.ndarray, held: list[tuple[int, int]], flights: list[tuple[Arc, int]],
+    resid_tol: float,
+) -> list[int]:
+    """The points of ``held`` that stay out of EM as a ball in a hand.
+
+    ``held`` pairs each point that may be in a hand with its fragment, and
+    ``flights`` pairs each grown flight's arc with its own. The linker
+    sometimes hands a ball's detection to another ball's fragment, where it
+    sits after a flight like a point in a hand. A flight grown in another
+    fragment that explains the point by EM's own test (within
+    ``2 * resid_tol``, up to `_EM_TIME_MARGIN` past its ends) shows whose
+    point it is, and EM may give it to that flight's arc. Only a grown
+    flight counts: a `_split_ballistic` piece can be a duplicate box's track
+    of the same ball through the same carry."""
+    held = sorted(held)
+    idx = np.array([i for i, _ in held])
+    frag = np.array([k for _, k in held])
+    pts = arr[idx]
+    other = np.zeros(len(idx), dtype=bool)
+    for arc, k in flights:
+        lo = np.searchsorted(pts[:, 0], arc.t_start - _EM_TIME_MARGIN, side="left")
+        hi = np.searchsorted(pts[:, 0], arc.t_end + _EM_TIME_MARGIN, side="right")
+        if lo < hi:
+            win = pts[lo:hi]
+            fits = np.maximum(y_residuals(arc, win), x_residuals(arc, win)) < 2 * resid_tol
+            other[lo:hi] |= fits & (frag[lo:hi] != k)
+    return idx[~other].tolist()
+
+
+def _sink_end(ys: list[float], landing: int, swing: float) -> int:
+    """The position where a ball caught at ``landing`` stops sinking with the
+    hand: the lowest point (largest y) after it, before the track climbs
+    ``swing`` above that point again. ``landing`` itself when nothing follows.
+
+    A piece fitted to the sinking stretch alone looks like the falling end of
+    a flight whose apex is out of view, and counts the catch a second time."""
+    low = landing
+    for i in range(landing + 1, len(ys)):
+        if i == landing + 1 or ys[i] > ys[low]:
+            low = i
+        elif ys[low] - ys[i] >= swing:
+            break
+    return low
+
+
+def _apexes(ys: list[float], swing: float) -> list[int]:
+    """Positions where a track tops out: it climbed at least ``swing`` to get
+    there and fell at least ``swing`` afterwards. y grows downward, so an apex
+    is a minimum of y. Wobble smaller than ``swing`` leaves none."""
+    apexes: list[int] = []
+    top = low = 0  # highest and lowest point since the last turn
+    climbing: bool | None = None
+    for i in range(1, len(ys)):
+        y = ys[i]
+        if y < ys[top]:
+            top = i
+        if y > ys[low]:
+            low = i
+        if climbing is not False and y - ys[top] >= swing:
+            if climbing:
+                apexes.append(top)
+            climbing, low = False, i
+        elif climbing is not True and ys[low] - y >= swing:
+            climbing, top = True, i
+    return apexes
+
+
+def _grow_flight(
+    rows: list[list[float]], apex: int, free: int, swing: float, resid_tol: float,
+) -> tuple[int, int, float] | None:
+    """The run of ``rows`` around ``apex`` that one flight explains, as
+    inclusive positions, with the ay of its fit, or None when the top of the
+    track is not a flight.
+
+    The fit starts from the points within ``swing`` of the apex height, which
+    is deep enough to show the curvature above the noise. It then takes the
+    next point on either side while that point lies on the current fit, and
+    refits. The hands end the run: a ball that touches a hand leaves its
+    parabola within a few frames. Positions before ``free`` are taken.
+
+    The run must be a flight seen over its top: the fit climbs ``swing`` to
+    its apex and falls ``swing`` after it, inside the run. A wobble in noise
+    passes the apex test on raw heights and fails this one. Every x in the
+    run must also lie within ``2 * resid_tol`` of the final x line, as
+    `_split_ballistic` requires of a piece. Growth tests each point against
+    the fit as it stood when that point joined, so two balls that cross on
+    one y parabola can grow into one run. This check returns them to the
+    split.
+    """
+    ceiling = rows[apex][2] + swing
+    lo = hi = apex
+    while lo > free and rows[lo - 1][2] <= ceiling:
+        lo -= 1
+    last = len(rows) - 1
+    while hi < last and rows[hi + 1][2] <= ceiling:
+        hi += 1
+    if hi - lo < 3:
+        return None
+    mom = _Moments(rows[lo][0])
+    for row in rows[lo : hi + 1]:
+        mom.add(*row)
+    fit = mom.solve()
+    grew = fit is not None
+    while grew:
+        grew = False
+        for nxt in (hi + 1, lo - 1):
+            if not free <= nxt <= last:
+                continue
+            t, x, y, _ = rows[nxt]
+            ay, by, cy, bx, cx = fit
+            dt = t - mom.t0
+            if abs((ay * dt + by) * dt + cy - y) > resid_tol or abs(bx * dt + cx - x) > 2 * resid_tol:
+                continue
+            mom.add(*rows[nxt])
+            refit = mom.solve()
+            if refit is None:
+                return None
+            fit, grew = refit, True
+            lo, hi = min(lo, nxt), max(hi, nxt)
+    if fit is None or fit[0] <= 0:
+        return None
+    apex_dt = -fit[1] / (2 * fit[0])
+    reach = min(apex_dt - (rows[lo][0] - mom.t0), rows[hi][0] - mom.t0 - apex_dt)
+    if reach <= 0 or fit[0] * reach * reach < swing:
+        return None
+    bx, cx = fit[3], fit[4]
+    if any(abs(bx * (t - mom.t0) + cx - x) > 2 * resid_tol for t, x, _, _ in rows[lo : hi + 1]):
+        return None
+    return lo, hi, fit[0]
 
 
 def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list[list[int]]:
@@ -334,7 +731,14 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
     the y-rmse, since no parabola beats the least-squares minimum; the x side
     relies on the well-conditioned 2x2 solve plus the margin.
     """
-    pieces: list[list[int]] = []
+    return [piece for piece in _ballistic_pieces(arr, idxs, resid_tol) if len(piece) >= 4]
+
+
+def _ballistic_pieces(
+    arr: np.ndarray, idxs: list[int], resid_tol: float,
+) -> Iterator[list[int]]:
+    """`_split_ballistic`'s pieces in order, each as soon as it is cut. Every
+    point of ``idxs`` is in exactly one, so some are shorter than four."""
     cur: list[int] = []
     rows = arr[idxs]
     margin = _exact_margin(rows)
@@ -355,13 +759,12 @@ def _split_ballistic(arr: np.ndarray, idxs: list[int], resid_tol: float) -> list
             # Known gap: some crossing-ball fusions are invisible to both curvature
             # and the incremental x-line check here; next locus would be _link_fragments.
             if arc.rmse > resid_tol or x_bad:
-                pieces.append(cur[:-1])
+                yield cur[:-1]
                 cur = [i]
                 mom = _Moments(row[0])
                 mom.add(*row)
-    if len(cur) >= 4:
-        pieces.append(cur)
-    return [p for p in pieces if len(p) >= 4]
+    if cur:
+        yield cur
 
 
 def _em_assign_refit(arr: np.ndarray, arcs: list[Arc], resid_tol: float) -> list[Arc]:
@@ -521,7 +924,7 @@ def _prune(
     ]
 
 
-def _gravity_prune(arcs: list[Arc], band: float = 0.3) -> list[Arc]:
+def _gravity_prune(arcs: list[Arc], band: float = _GRAVITY_BAND) -> list[Arc]:
     """Self-consistency: all real arcs share one gravity, so curvature outliers
     (cross-ball chimeras fit ay far above the cohort) are spurious. Needs a
     quorum of >=4 arcs so the median is trustworthy."""
