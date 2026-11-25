@@ -10,6 +10,39 @@ from scipy.optimize import linear_sum_assignment
 from juggletrack.types import Detection
 
 
+def match_centers(
+    predictions: list[tuple[float, float]], targets: list[tuple[float, float]],
+    tolerance_px: float,
+) -> list[tuple[int, int, float]]:
+    """Return deterministic gated (prediction, target, distance) assignments.
+
+    Inputs are pixel coordinates in stable input order. Maximize the number
+    of gated matches before minimizing their total distance. SciPy's stable
+    assignment on this fixed matrix resolves equal-cost choices consistently.
+    """
+    if not predictions or not targets:
+        return []
+    distances = np.linalg.norm(
+        np.asarray(predictions)[:, None] - np.asarray(targets)[None, :], axis=2,
+    )
+    return _match_distances(distances, tolerance_px)
+
+
+def _match_distances(distances: np.ndarray, tolerance_px: float) -> list[tuple[int, int, float]]:
+    """Assign an already calculated matrix, retaining dense scorer costs."""
+    valid = distances <= tolerance_px
+    penalty = (min(distances.shape) + 1) * tolerance_px
+    if math.isfinite(penalty):
+        costs = np.where(valid, distances, penalty)
+    else:
+        # Scale only when the normal penalty would overflow.
+        costs = np.full(distances.shape, min(distances.shape) + 1.0)
+        costs[valid] = distances[valid] / tolerance_px
+    rows, cols = linear_sum_assignment(costs)
+    return [(int(pi), int(gi), float(distances[pi, gi]))
+            for pi, gi in zip(rows, cols) if valid[pi, gi]]
+
+
 def evaluate_ball_centers(
     predictions: list[Detection], targets: list[Detection], *,
     width: int, height: int, frame_count: int, tolerance_px: float = 10.0, stride: int = 1,
@@ -54,16 +87,10 @@ def evaluate_ball_centers(
         duplicates = 0
         if pred and gt:
             distances = np.linalg.norm(np.asarray(pred)[:, None] - np.asarray(gt)[None, :], axis=2)
-            # One invalid assignment must cost more than all valid distances combined.
-            penalty = (min(len(pred), len(gt)) + 1) * tolerance_px
-            rows, cols = linear_sum_assignment(
-                np.where(distances <= tolerance_px, distances, penalty)
-            )
-            for pi, gi in zip(rows, cols):
-                if distances[pi, gi] <= tolerance_px:
-                    matched_p.add(int(pi))
-                    matched_g.add(int(gi))
-                    errors.append(float(distances[pi, gi]))
+            for pi, gi, distance in _match_distances(distances, tolerance_px):
+                matched_p.add(pi)
+                matched_g.add(gi)
+                errors.append(distance)
             duplicates = sum(
                 bool(np.any(distances[pi] <= tolerance_px))
                 for pi in range(len(pred)) if pi not in matched_p

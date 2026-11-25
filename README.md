@@ -56,6 +56,7 @@ All commands (`--help` on each for options):
 | `label` | Arc-verified auto-labeling → COCO dataset (`--detector motion` for cold-start; `--negatives` mines hard negatives) |
 | `coverage` | Per-frame detection-count stats for a video (detector health check) |
 | `detection-eval` | Compare saved detections with Meschke ball centers: precision, recall, duplicate candidates, and localization error |
+| `reviewed-detection-eval` | Score airborne and held ball centers on selected, visually reviewed frames from a practice recording |
 | `train` | Fine-tune YOLO on an assembled dataset |
 | `export` | Export weights to CoreML (blocked by torch/coremltools version skew as of 2026-08; see bench findings) |
 
@@ -99,6 +100,10 @@ without the detector.
   thrown objects won't detect reliably.
 
 ## Development
+
+The [product roadmap](docs/product-roadmap.md) covers recorded review, live practice
+and additional patterns. The [research plan](docs/research-plan.md) connects each
+milestone to the evidence and its acceptance criteria.
 
 ```bash
 uv run pytest -q          # excludes detector tests requiring weights/footage

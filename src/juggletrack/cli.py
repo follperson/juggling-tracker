@@ -504,6 +504,57 @@ def detection_eval(
 
 
 @app.command()
+def reviewed_detection_eval(
+    video: Path = typer.Argument(..., exists=True, dir_okay=False),
+    detections: Path = typer.Argument(..., exists=True, dir_okay=False),
+    labels: Path = typer.Argument(..., exists=True, dir_okay=False),
+    tolerance_px: float = typer.Option(..., min=0.001, help="Match radius in displayed pixels"),
+    out: Path = typer.Option(..., help="Write the reviewed-frame report here"),
+    conf: float = typer.Option(0.0, min=0, max=1, help="Filter saved predictions by confidence"),
+) -> None:
+    """Score saved ball centers on explicitly reviewed frames of a recording."""
+    from juggletrack.eval.benchmark import _implementation_sha256, _sha256
+    from juggletrack.eval.reviewed_centers import (
+        ReviewedCenters,
+        evaluate_reviewed_centers,
+        same_frame_time,
+    )
+    from juggletrack.pipeline.offline import load_detections_jsonl
+    from juggletrack.video.reader import VideoReader
+
+    try:
+        _check_report_output(out, [video, detections, labels])
+        review = ReviewedCenters.model_validate_json(labels.read_bytes())
+        if _sha256(video) != review.source_sha256:
+            raise ValueError("source video SHA-256 differs from the reviewed recording")
+        dets = load_detections_jsonl(detections)
+        remaining = {frame.frame_idx: frame.t for frame in review.frames}
+        with VideoReader(video) as reader:
+            if (reader.info.width, reader.info.height) != (review.width, review.height):
+                raise ValueError("reviewed dimensions differ from the displayed video dimensions")
+            if any(d.frame_idx >= reader.info.frame_count for d in dets):
+                raise ValueError("detection frame index is outside the video")
+            for idx, t, _ in reader.frames():
+                if idx in remaining:
+                    if not same_frame_time(remaining.pop(idx), t):
+                        raise ValueError(f"review timestamp differs from source at frame {idx}")
+                    if not remaining:
+                        break
+        if remaining:
+            raise ValueError(f"video ended before reviewed frame {min(remaining)}")
+        report = evaluate_reviewed_centers(dets, review, tolerance_px=tolerance_px, min_conf=conf)
+        report.update(labels_sha256=_sha256(labels), detections_sha256=_sha256(detections),
+                      implementation_sha256=_implementation_sha256())
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    airborne = report["states"]["airborne"]
+    typer.echo(f"Airborne centers matched {airborne['matched']}/{airborne['n']} "
+               f"on {report['n_reviewed_frames']} reviewed frames -> {out}")
+
+
+@app.command()
 def train(
     data_yaml: Path = typer.Argument(..., exists=True, dir_okay=False),
     model: str = typer.Option("yolo11n.pt", help="Base weights to fine-tune"),

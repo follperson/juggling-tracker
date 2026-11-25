@@ -291,6 +291,41 @@ detections or center annotations.
 The [September 7 diagnostic findings](detection-findings-2026-09-07.md) record
 the first comparison on existing development footage.
 
+## Reviewed frames from practice recordings
+
+Use `reviewed-detection-eval` with a local source video, saved `Detection` rows in JSONL, and a sparse frame review. It works without model weights. Preselect the frames and match radius, then review the raw video with detection overlays hidden. Use the image as displayed after rotation. Coordinates run from zero to one across its width and height. Use zero-based decode indices and seconds on the source frame clock relative to the first frame. Record each visible ball in the frame. Mark uncertain contact or an unresolvable candidate as `ambiguous`. Omit a frame if a full review of that frame is impossible.
+
+```json
+{
+  "schema_version": 1,
+  "review_method": "model_assisted",
+  "source_sha256": "<replace with the SHA-256 of the source video>",
+  "width": 1080,
+  "height": 1920,
+  "frames": [
+    {"frame_idx": 0, "t": 0.0, "centers": [
+      {"x": 0.40, "y": 0.30, "state": "airborne"},
+      {"x": 0.61, "y": 0.66, "state": "held"}
+    ]},
+    {"frame_idx": 8, "t": 0.267, "centers": []}
+  ]
+}
+```
+
+Replace the dimensions, indices, timestamps and centers with your observations. Set `review_method` to `human` for human-reviewed positions, `model_assisted` for model-assisted visual judgments, or `synthetic` for a constructed fixture. The report preserves this declaration. Keep reviewer notes, contact brackets and unresolved alternatives alongside the input. Compute the source digest with `shasum -a 256 practice.mp4` or `sha256sum practice.mp4`.
+
+```bash
+uv run juggletrack reviewed-detection-eval practice.mp4 detections.jsonl centers.json \
+  --tolerance-px 12 --out reports/practice-centers.json
+uv run pytest -q tests/test_reviewed_detection_cli.py
+```
+
+The test builds its own synthetic recording and exercises the command. For a real comparison, set the pixel radius in advance from the displayed ball size and expected labeling uncertainty. Record detector weights, confidence, stride and inference settings with each saved prediction file. Include only frames the experiment intended to process. An explicit empty label list can incur false positives. A reviewed ball without a prediction incurs a miss. Unlisted frames contribute nothing to the scores.
+
+The command checks the source file digest, displayed dimensions and reviewed timestamps against the decoder, including frames containing zero predictions. Detections on a reviewed frame must match its timestamp within one millisecond. It records hashes of the source, labels, detections and scoring implementation. A saved file without an inference manifest still lacks proof of which source and weights generated it.
+
+Matching first maximizes the number of definite ball matches within the radius, then minimizes their total distance. A remaining prediction can match an ambiguous center once and be excluded from judged counts. Both definite airborne and held centers contribute to generic ball precision and recall. The separate airborne recall answers how often the detector located an airborne ball. It does not measure whether the detector can classify flight state. Missing denominators appear as `null`. Each reviewed frame includes counts for inspecting errors back on the recording. [Experiment and decision](research-plan.md#first-controlled-experiment)
+
 ## Detector improvement sequence
 
 1. **Create an independent frame benchmark.** Start with roughly 200–300
