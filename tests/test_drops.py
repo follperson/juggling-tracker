@@ -249,3 +249,16 @@ def test_drop_needs_observed_descent_past_peer_hand_height(past_hand, expected):
     assert [d.arc_id for d in drops] == expected
     if drops:
         assert drops[0].t == pytest.approx(4.1)
+
+
+def test_contemporaneous_throw_is_insufficient_evidence_of_a_stop():
+    # The fall and the next launch cannot be ordered within half a sample.
+    candidate = _make_floor_candidate(0, 0.0)
+    candidate = candidate.model_copy(update={"n_points": 40})
+    _, miss = hand_line_crossings(candidate, 0.65)
+    following = _make_floor_candidate(1, miss - 0.004, duration=1.1)
+    run = Run(start_t=0, end_t=following.t_end, catches=1, throws=2,
+              arc_ids=[0, 1], period_s=0.45)
+
+    drops, _ = detect_drops([candidate, following], [run], hand_line=0.65)
+    assert drops == []
