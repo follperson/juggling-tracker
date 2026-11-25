@@ -51,6 +51,15 @@ def detect_drops(
             b for b in arcs
             if run.start_t - 1.0 <= b.t_start <= run.end_t + bounce_window + 1.0
         ]
+        # A cluster of balls that all hit the floor must not place the
+        # hands at floor height. Rising starts and ordinary landings bound
+        # the observed hand depth independently of the suspected falls.
+        hand_evidence = [a.cy for a in run_arcs if a.vy_at(a.t_start) < 0]
+        hand_evidence.extend(
+            a.y_at(a.t_end) for a in run_arcs
+            if not is_floor_bound(a, hand_line, floor_margin=floor_margin)
+        )
+        deepest_hand = max(hand_evidence, default=hand_line)
         for cand in run_arcs:
             if not is_floor_bound(cand, hand_line, floor_margin=floor_margin):
                 continue  # ended near the hands: caught, not dropped
@@ -59,7 +68,7 @@ def detect_drops(
             # the air. Use its lower endpoint as the hand observation. Exclude
             # the candidate itself, whose last observation may be on the floor.
             heights = [max(a.cy, a.y_at(a.t_end)) for a in run_arcs if a.id != cand.id]
-            miss_line = median(heights) if len(heights) >= 3 else hand_line
+            miss_line = min(median(heights), deepest_hand) if len(heights) >= 3 else hand_line
             # A crossing at the last observation, within the fit error, also
             # describes an ordinary catch. Confirm the descent past this line
             # in the observed arc before putting a missed catch on the clock.

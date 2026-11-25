@@ -21,7 +21,9 @@ estimated hand height upward and put the missed catch too early.
 Extraction now checks each intervening stretch with the same gravity and
 fit checks as a fall after the last flight. For a floor-bound candidate,
 drop timing uses the median of the lower observed endpoint heights of at
-least three other arcs in its run. A candidate must descend past that
+least three other arcs in its run. Rising starts and ordinary landings
+bound the deepest plausible hand height when several balls fall together.
+A candidate must descend past that
 height by more than its vertical fit error. The original crossing time is
 kept when the two estimates differ by at most half a sampling interval.
 
