@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from juggletrack import SCHEMA_VERSION
 from juggletrack.analyze import AnalyzeConfig, analyze_detections
 from juggletrack.eval.labels import VideoLabels
+from juggletrack.eval.catch_timing import evaluate_catch_timing, pool_catch_timing
 from juggletrack.eval.metrics import EvalReport, aggregate_scores, evaluate_session
 from juggletrack.pipeline.offline import load_detections_jsonl
 from juggletrack.pipeline.realtime import RealtimeAnalyzer, RealtimeConfig
@@ -144,6 +145,7 @@ def run_benchmark(
     cfg = config or AnalyzeConfig()
     live_cfg = RealtimeConfig(analyze=cfg) if realtime else None
     reports: list[EvalReport] = []
+    timing_reports: list[dict] = []
     clips: list[dict] = []
     seen_inputs: set[Path] = set()
     for clip in manifest.clips:
@@ -162,6 +164,8 @@ def run_benchmark(
             raise ValueError(f"{clip.video}: labeled run ends after the video")
         if any(not 0 <= t <= duration for t in labels.drops):
             raise ValueError(f"{clip.video}: labeled drop lies outside the video")
+        if any(w.end_t > duration for w in labels.catch_windows or []):
+            raise ValueError(f"{clip.video}: reviewed catch window ends after the video")
         dets = load_detections_jsonl(det_path)
         _validate_detections(dets, clip)
         session = analyze_detections(dets, cfg)
@@ -175,6 +179,10 @@ def run_benchmark(
             "offline_catches": sum(r.catches for r in session.runs),
             "labeled_catches": sum(r.catches for r in labels.runs),
         }
+        if labels.catch_windows:
+            timing = evaluate_catch_timing(session, labels.catch_windows)
+            result["offline"]["catch_timing"] = timing
+            timing_reports.append(timing)
         if live_cfg is not None:
             live = _replay(dets, clip, live_cfg)
             live["catch_error"] = abs(live["catches"] - result["labeled_catches"])
@@ -182,6 +190,10 @@ def run_benchmark(
             result["realtime"] = live
         clips.append(result)
 
+    summary = _summarize(reports)
+    if timing_reports:
+        summary["catch_timing"] = {"reviewed_clips": len(timing_reports),
+                                   **pool_catch_timing(timing_reports)}
     return {
         "schema_version": "1", "session_schema_version": SCHEMA_VERSION,
         "package_version": version("juggletrack"),
@@ -189,5 +201,5 @@ def run_benchmark(
         "manifest_sha256": _sha256(path), "split": manifest.split,
         "analyze_config": cfg.model_dump(mode="json"),
         "realtime_config": live_cfg.model_dump(mode="json") if live_cfg else None,
-        "summary": _summarize(reports), "clips": clips,
+        "summary": summary, "clips": clips,
     }
