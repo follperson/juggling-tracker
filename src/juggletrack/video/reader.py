@@ -42,6 +42,7 @@ class VideoReader:
             frame_count=frame_count,
             duration=frame_count / fps,
         )
+        self._pass_started = False
 
     def frames(self) -> Iterator[tuple[int, float, np.ndarray]]:
         """Yield (frame_idx, timestamp_seconds, BGR frame) from the start.
@@ -80,8 +81,16 @@ class VideoReader:
         ``idx / fps`` for the remainder of the clip -- still far better than
         a non-monotonic jump, which downstream parabola fits can't tolerate
         at all.
+
+        A seek to frame 0 can land past the first GOP on MPEG-TS/M2TS input,
+        so a second pass reopens the file instead of seeking. The reader
+        remembers that a pass began, because not every backend reports its
+        position.
         """
-        self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        if self._pass_started:
+            self._cap.release()
+            self._cap = cv2.VideoCapture(self.info.path)
+        self._pass_started = True
         idx = 0
         pts_ok = True
         first_msec = 0.0

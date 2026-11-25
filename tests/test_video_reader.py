@@ -175,6 +175,72 @@ def test_frame_timestamps_rebase_at_pts_seam_stay_monotonic(video_path, monkeypa
     assert all(d == pytest.approx(1 / 30.0) for d in deltas)
 
 
+@pytest.mark.parametrize("suffix", [".ts", ".m2ts"])
+def test_transport_stream_reads_from_first_frame(tmp_path, suffix):
+    """A seek to frame 0 on a just-opened MPEG transport stream lands past the
+    first frames, so frames() must start from the capture as opened."""
+    import cv2
+
+    path = tmp_path / f"clip{suffix}"
+    n_frames = 90
+    writer = cv2.VideoWriter(
+        str(path), cv2.CAP_FFMPEG, cv2.VideoWriter_fourcc(*"mp2v"), 30.0, (160, 120)
+    )
+    assert writer.isOpened()
+    for i in range(n_frames):
+        writer.write(np.full((120, 160, 3), i * 2, np.uint8))
+    writer.release()
+
+    cap = cv2.VideoCapture(str(path))
+    _, first_decoded = cap.read()
+    cap.release()
+
+    with VideoReader(path) as reader:
+        first_pass = list(reader.frames())
+        second_pass = list(reader.frames())
+
+    for frames in (first_pass, second_pass):
+        assert len(frames) == n_frames
+        idx0, t0, frame0 = frames[0]
+        assert (idx0, t0) == (0, 0.0)
+        assert np.array_equal(frame0, first_decoded)
+
+
+@pytest.mark.parametrize("first_pass_frames", [5, None], ids=["partial", "full"])
+def test_second_pass_starts_over_when_the_backend_reports_no_position(
+    video_path, monkeypatch, first_pass_frames,
+):
+    """Not every OpenCV backend implements CAP_PROP_POS_FRAMES. One that
+    does not reports 0 after any number of reads, so the reader has to know
+    on its own that a pass has begun."""
+    import cv2
+
+    class _NoPositionCap:
+        def __init__(self, real):
+            self._real = real
+
+        def get(self, prop_id):
+            if prop_id == cv2.CAP_PROP_POS_FRAMES:
+                return 0.0
+            return self._real.get(prop_id)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    with VideoReader(video_path) as reader:
+        monkeypatch.setattr(reader, "_cap", _NoPositionCap(reader._cap))
+        first = []
+        for item in reader.frames():
+            first.append(item)
+            if len(first) == first_pass_frames:
+                break
+        second = list(reader.frames())
+
+    assert len(second) == reader.info.frame_count
+    assert (second[0][0], second[0][1]) == (0, 0.0)
+    assert np.array_equal(second[0][2], first[0][2])
+
+
 def test_missing_file_raises():
     with pytest.raises(FileNotFoundError):
         VideoReader("/nonexistent/nope.mp4")
