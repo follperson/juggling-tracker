@@ -26,6 +26,14 @@ from juggletrack.analyze import AnalyzeConfig, _events_from_arcs, analyze_detect
 from juggletrack.events.catches import derive_events
 from juggletrack.types import Arc, Detection
 
+# window_s, window_s - edge_pad, freeze_s and RUN_CLOSE_DEBOUNCE_S are whole
+# numbers of frames at common frame rates, so a time lands exactly on a cut
+# every frame. Comparing with this margin, far below a frame interval and far
+# above float noise in the clock, keeps each tie rule stable: a detection on
+# the cut stays, an arc on the edge is not flagged, an arc ending on the
+# liveness horizon is not recent, and a run is not closed at exactly 0.5 s.
+_CLOCK_EPS_S = 1e-6
+
 
 class RealtimeConfig(BaseModel):
     model_config = {"extra": "forbid", "allow_inf_nan": False}
@@ -196,7 +204,7 @@ class RealtimeAnalyzer:
         # defeats the proxy and defers eviction of everything behind it
         # indefinitely, growing the buffer -- and therefore every window's
         # re-analysis cost -- unboundedly).
-        self._buffer = [d for d in self._buffer if d.t >= cut]
+        self._buffer = [d for d in self._buffer if d.t >= cut - _CLOCK_EPS_S]
         self._frames_since_analysis += 1
         if self._frames_since_analysis >= self.cfg.cadence_frames:
             self._frames_since_analysis = 0
@@ -255,7 +263,10 @@ class RealtimeAnalyzer:
         # meant to fix. Filtering the DERIVED events/drops list is enough:
         # it can only ever remove a confirmation, never fabricate one.
         left_edge = self._now - self.cfg.window_s
-        truncated_ids = {a.id for a in session.arcs if a.t_start < left_edge + self.cfg.edge_pad}
+        truncated_ids = {
+            a.id for a in session.arcs
+            if a.t_start < left_edge + self.cfg.edge_pad - _CLOCK_EPS_S
+        }
 
         # Hand-line EMA (see RealtimeConfig.hand_line_ema_alpha's docstring
         # for the measured jitter this smooths).
@@ -361,12 +372,13 @@ class RealtimeAnalyzer:
         # runs_completed instead of being recognized and immediately
         # force-closed by finalize()'s own explicit close logic below.
         liveness_freeze = self.cfg.freeze_s
-        strict_live = any(r.end_t > self._now - liveness_freeze for r in ema_session.runs)
+        live_horizon = self._now - liveness_freeze + _CLOCK_EPS_S
+        strict_live = any(r.end_t > live_horizon for r in ema_session.runs)
         if self._run_start is None:
             live = strict_live
         else:
             recent_activity = any(
-                a.t_end > self._now - liveness_freeze
+                a.t_end > live_horizon
                 for a in session.arcs if a.id in event_bearing_ids
             )
             live = strict_live or recent_activity
@@ -380,13 +392,13 @@ class RealtimeAnalyzer:
             if self._run_start is None:
                 starts = [
                     r.start_t for r in ema_session.runs
-                    if r.end_t > self._now - liveness_freeze
+                    if r.end_t > live_horizon
                 ]
                 self._run_start = min(starts)
         elif self._run_start is not None:
             if self._pending_close_t is None:
                 self._pending_close_t = self._now
-            elif self._now - self._pending_close_t > self.RUN_CLOSE_DEBOUNCE_S:
+            elif self._now - self._pending_close_t > self.RUN_CLOSE_DEBOUNCE_S + _CLOCK_EPS_S:
                 self._runs_completed += 1
                 self._run_start = None
                 self._pending_close_t = None
@@ -440,7 +452,7 @@ class RealtimeAnalyzer:
         # separate, out-of-scope mechanism this snapshot fix does not reach.
         prior = list(known)
         for et in sorted(times):
-            if et > horizon:
+            if et > horizon + _CLOCK_EPS_S:
                 continue
             if any(abs(et - k) <= self.cfg.event_match_tol for k in prior):
                 continue
