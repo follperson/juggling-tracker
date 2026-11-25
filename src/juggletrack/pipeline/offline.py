@@ -6,6 +6,7 @@ Intermediates are persisted (spec: stages re-runnable independently) —
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -39,7 +40,7 @@ def detect_video(
     return detect_frames(reader, detector, stride)[0]
 
 
-def save_detections_jsonl(dets: list[Detection], path: str | Path) -> None:
+def save_detections_jsonl(dets: Iterable[Detection], path: str | Path) -> None:
     with open(path, "w") as f:
         for d in dets:
             f.write(d.model_dump_json() + "\n")
