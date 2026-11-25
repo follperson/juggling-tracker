@@ -2,8 +2,8 @@ import pytest
 
 from juggletrack.analyze import AnalyzeConfig, analyze_detections
 from juggletrack.arcs.extract import extract_arcs
-from juggletrack.events.catches import derive_events
-from juggletrack.events.drops import is_floor_bound
+from juggletrack.events.catches import derive_events, hand_line_crossings
+from juggletrack.events.drops import detect_drops, is_floor_bound
 from juggletrack.events.handline import estimate_hand_line
 from juggletrack.events.periodicity import periodicity_score
 from juggletrack.events.runs import estimate_period, segment_runs
@@ -57,64 +57,63 @@ def test_two_separated_runs():
 
 def test_drop_run_ends_at_missed_catch():
     r = simulate_cascade(n_throws=20, fps=30.0, drop_at_throw=8, seed=1)
-    _, _, _, _, runs = pipeline(r.detections)
+    arcs, hl, _, _, runs = pipeline(r.detections)
+    _, runs = detect_drops(arcs, runs, hl)
     assert len(runs) == 1
     assert runs[0].end_t == pytest.approx(r.missed_catch_t, abs=0.1)
+    assert runs[0].end_reason == "drop"
     assert runs[0].catches == len(r.catch_times)
 
 
-def test_custom_floor_margin_changes_truncation_behavior():
-    """Task 3 minor (floor_margin passthrough): `segment_runs` hardcoded
-    `is_floor_bound`'s default floor_margin while `detect_drops` already
-    exposed it as a parameter -- the two truncation-relevant predicates
-    could silently diverge if floor_margin were ever tuned in one place and
-    not the other. `segment_runs` now accepts `floor_margin` and threads it
-    into its own `is_floor_bound` call for `first_miss` selection.
+def test_drop_floor_margin_decides_where_a_low_last_throw_ends_the_run():
+    """floor_margin is a detect_drops keyword, and through it alone decides
+    whether an uncaught last throw is a drop that ends its run. This used to
+    be a segment_runs keyword as well, because segment_runs cut runs at
+    floor-bound misses itself and the two margins had to be kept in step;
+    now only detect_drops ends a run, so there is one margin to tune.
 
     Constructed directly at the Arc/event level (no sim) so the exact
-    threshold crossing is unambiguous: four arcs at hand_line=0.6, each
-    ay=by=0 so `y_at(t_end) == cy` and `arc_end(a) == a.t_end` (`ay <= 0`
-    short-circuits `hand_line_crossings` to None). Three are caught
-    (cy=0.6, at the hand line); the third-in-time arc is uncaught with
-    cy=0.68 -- above `hand_line + 0.05` (0.65) but below
-    `hand_line + FLOOR_MARGIN` (0.10 -> 0.70). So at the default
-    floor_margin it is NOT floor-bound (no truncation: end_t falls back to
-    the group max, the last arc's own t_end=1.9); at floor_margin=0.05 it
-    IS floor-bound and becomes `first_miss`, truncating end_t to its own
-    t_end=1.4.
+    threshold crossing is unambiguous: four arcs at hand_line=0.6 with
+    ay=0, so `hand_line_crossings` returns None and each arc ends at its
+    own t_end. Three are caught at the hand line. The last-thrown arc is
+    uncaught and still descending (by=0.2) when it ends at y=0.68 -- below
+    `hand_line + 0.05` (0.65) but above `hand_line + FLOOR_MARGIN` (0.70) --
+    and no throw follows it. Arc 2 was thrown before it and lands after it.
+    At the default margin the arc is not a drop candidate, so the run ends
+    where its last arc lands (1.9). At floor_margin=0.05 it is a drop
+    (floor_descent and periodicity_collapse), and the run ends there (1.4).
     """
     from juggletrack.types import CatchEvent, ThrowEvent
 
     hand_line = 0.6
 
-    def mk(id, t_start, t_end, cy):
-        return Arc(id=id, t_start=t_start, t_end=t_end, ay=0.0, by=0.0, cy=cy,
-                    bx=0.0, cx=0.5, n_points=10, rmse=0.005)
+    def mk(id, t_start, t_end, cy, by=0.0):
+        return Arc(id=id, t_start=t_start, t_end=t_end, ay=0.0, by=by, cy=cy,
+                   bx=0.0, cx=0.5, n_points=10, rmse=0.005)
 
     arcs = [
         mk(0, 0.0, 0.4, 0.60),
         mk(1, 0.5, 0.9, 0.60),
-        mk(2, 1.0, 1.4, 0.68),  # the candidate miss: uncaught
-        mk(3, 1.5, 1.9, 0.60),
+        mk(2, 0.9, 1.9, 0.60),  # in flight across the miss, caught after it
+        mk(3, 1.0, 1.4, 0.60, by=0.2),  # the candidate miss: uncaught, last throw
     ]
     throws = [ThrowEvent(t=a.t_start, x=0.5, arc_id=a.id) for a in arcs]
     catches = [
-        CatchEvent(t=a.t_end, x=0.5, arc_id=a.id) for a in arcs if a.id != 2
+        CatchEvent(t=a.t_end, x=0.5, arc_id=a.id) for a in arcs if a.id != 3
     ]
+    runs = segment_runs(arcs, throws, catches, hand_line)
 
-    default_runs = segment_runs(arcs, throws, catches, hand_line)
+    drops, default_runs = detect_drops(arcs, runs, hand_line)
+    assert drops == []
     assert len(default_runs) == 1
-    assert default_runs[0].end_t == pytest.approx(1.9), (
-        "default floor_margin: the mid-run miss is not floor-bound, so "
-        "end_t must fall back to the group's own max arc_end"
-    )
+    assert default_runs[0].end_t == pytest.approx(1.9)
+    assert default_runs[0].end_reason == "stop"
 
-    tight_runs = segment_runs(arcs, throws, catches, hand_line, floor_margin=0.05)
+    drops, tight_runs = detect_drops(arcs, runs, hand_line, floor_margin=0.05)
+    assert [d.arc_id for d in drops] == [3]
     assert len(tight_runs) == 1
-    assert tight_runs[0].end_t == pytest.approx(1.4), (
-        "floor_margin=0.05: the same arc now IS floor-bound and must "
-        "truncate end_t to its own crossing/t_end"
-    )
+    assert tight_runs[0].end_t == pytest.approx(1.4)
+    assert tight_runs[0].end_reason == "drop"
 
 
 def test_unwitnessed_miss_does_not_truncate_run_span():
@@ -190,28 +189,19 @@ def test_min_arcs_filters_stray_tosses():
 
 
 def test_quality_scored_over_arc_span_not_truncated_end_t():
-    """A genuine floor-bound miss truncates the reported end_t to that
-    miss's crossing time, but the group's arcs can keep going well past it
-    if the pattern actually continued -- lane 1 measured a real case (af1
-    run 2) scoring 0.004 on [start_t, end_t] vs 0.351 on the arcs' own span.
-    Reproduce the mechanism directly: take a full, cleanly periodic 16-throw
-    run and turn one mid-run arc into a floor-bound miss by extending its
-    fitted t_end 0.09s further along its own parabola (past hand_line +
-    FLOOR_MARGIN, still descending) and stripping its catch -- WITHOUT
-    touching any other arc. end_t truncates hard; quality must still
-    reflect the real periodic structure across the whole arc span.
-
-    Plan-5 task 3 update: originally this fixture merely stripped a catch
-    EVENT from an otherwise normally-landing arc (an extraction miss, not a
-    floor-bound one) to trigger truncation. Task 3 changed segment_runs so
-    only a floor-bound uncaught arc (`is_floor_bound`) may truncate end_t --
-    an unwitnessed/extraction miss no longer does (see
-    test_unwitnessed_miss_does_not_truncate_run_span). The old fixture's
-    truncation premise is exactly the bug that fix removes, so this test now
-    builds a genuinely floor-bound miss (measured: extending t_end by 0.09s
-    lands y_at(t_end) ~= 0.736, comfortably past hand_line + FLOOR_MARGIN
-    ~= 0.732, with positive terminal velocity) to keep exercising the
-    quality-over-own-span mechanism this test is actually about.
+    """A run that ends at a drop can still hold arcs past it: when the
+    juggler picks the pattern back up inside the run gap, those throws stay
+    in the run's group but fall after end_t. Lane 1 measured a real case
+    (af1 run 2) scoring 0.004 on [start_t, end_t] vs 0.351 on the arcs' own
+    span. Reproduce the mechanism through segment_runs and detect_drops, the
+    path analyze uses: take a full, cleanly periodic 16-throw run, turn one
+    mid-run arc into a floor drop by extending its fitted t_end 0.09s along
+    its own parabola (measured: y_at(t_end) ~= 0.736, past hand_line +
+    FLOOR_MARGIN ~= 0.732, still descending) and stripping its catch, then
+    remove the throws of the next two beats so detect_drops sees the pattern
+    collapse. The run ends at that drop, yet its quality must match the twin
+    run in which that arc was caught, because quality is scored over the
+    arcs' own span.
     """
     r = simulate_cascade(n_throws=16, fps=30.0, seed=1)
     arcs = extract_arcs(r.detections)
@@ -222,37 +212,65 @@ def test_quality_scored_over_arc_span_not_truncated_end_t():
     target = arcs_sorted[3]
     mutated = target.model_copy(update={"t_end": target.t_end + 0.09})
     assert is_floor_bound(mutated, hl), "fixture must genuinely be floor-bound"
-    arcs = [mutated if a.id == target.id else a for a in arcs]
-    catches = [c for c in catches if c.arc_id != target.id]
+    _, miss_t = hand_line_crossings(mutated, hl)
+    paused = {a.id for a in arcs if miss_t < a.t_start <= miss_t + 2 * r.params.period_s}
+    assert paused, "fixture must pause the pattern after the miss"
+    arcs = [a for a in arcs if a.id not in paused]
+    throws = [e for e in throws if e.arc_id not in paused]
+    catches = [c for c in catches if c.arc_id not in paused]
 
-    runs = segment_runs(arcs, throws, catches, hl)
-    assert len(runs) == 1
+    twin = segment_runs(arcs, throws, catches, hl)
+    dropped = [mutated if a.id == target.id else a for a in arcs]
+    runs = segment_runs(dropped, throws, [c for c in catches if c.arc_id != target.id], hl)
+    drops, runs = detect_drops(dropped, runs, hl)
+    assert [d.arc_id for d in drops] == [target.id]
+    assert len(runs) == 1 and len(twin) == 1
     run = runs[0]
-    # end_t truncated to (approximately) the floor-bound arc's own
-    # hand-line crossing -- far short of the group's real arc span (16
-    # throws over ~7s).
+    assert run.arc_ids == twin[0].arc_ids
+    assert run.end_reason == "drop"
+    # end_t is the drop's own hand-line crossing -- far short of the group's
+    # real arc span (16 throws over ~7s).
+    assert run.end_t == pytest.approx(miss_t)
     assert run.end_t < arcs_sorted[-1].t_end - 2.0
     assert run.quality > 0.3
+    assert run.quality == pytest.approx(twin[0].quality, abs=0.03)
 
 
 def test_adaptive_lag_band_scores_meschke_style_slow_period():
     """The in-repo default lag band (0.2, 1.2) can miss a run's true period
     entirely on differently-framed footage (Meschke ground truth: period
-    1.19-2.89s, wholly outside (0.2, 1.2)). segment_runs must search around
-    the run's OWN estimated period -- [max(0.1, 0.5p), 1.5p] -- not a fixed
-    band tuned to one framing. Reproduce with a slow-period simulated
-    cascade whose true period sits outside the fixed default band.
+    1.19-2.89s, wholly outside (0.2, 1.2)). There it does not score low: it
+    peaks at its 0.2s edge, which measures near-zero-lag smoothness rather
+    than periodicity, and on this fixture scores higher than the true period
+    does (measured 0.719 vs 0.570), so a bare quality floor cannot catch it.
+    segment_runs must search around the run's OWN estimated period --
+    [max(0.1, 0.5p), 1.5p] -- so quality is the score at the true period.
+    Reproduce with a slow-period simulated cascade whose true period sits
+    outside the fixed default band.
     """
     slow = CascadeParams(period_s=1.5, dwell_s=0.9, g=0.25)
     r = simulate_cascade(n_throws=12, fps=30.0, seed=1, params=slow)
-    _, _, _, _, runs = pipeline(r.detections)
+    arcs, hl, _, _, runs = pipeline(r.detections)
     assert len(runs) == 1
     run = runs[0]
-    assert run.period_s == pytest.approx(1.5, abs=0.05)
+    p = run.period_s
+    assert p == pytest.approx(1.5, abs=0.05)
     # Confirm this period truly sits outside the fixed default band -- the
     # regression this test pins would be invisible if it didn't.
-    assert not (0.2 <= run.period_s <= 1.2)
+    assert not (0.2 <= p <= 1.2)
     assert run.quality > 0.3
+
+    def arc_end(a: Arc) -> float:
+        crossings = hand_line_crossings(a, hl)
+        return crossings[1] if crossings else a.t_end
+
+    group = [a for a in arcs if a.id in run.arc_ids]
+    span = (min(a.t_start for a in group), max(arc_end(a) for a in group))
+    own, lag = periodicity_score(group, *span, lag_range=(0.5 * p, 1.5 * p))
+    fixed, _ = periodicity_score(group, *span, lag_range=(0.2, 1.2))
+    assert lag == pytest.approx(1.5, abs=0.1)
+    assert abs(fixed - own) > 0.1, "fixture must tell the two bands apart"
+    assert run.quality == pytest.approx(own, abs=0.05)
 
 
 def test_unjudgeable_quality_stores_zero():
